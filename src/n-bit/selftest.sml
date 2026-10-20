@@ -694,4 +694,42 @@ val _ = convtest
    computeLib.CBV_CONV wordsLib.words_compset,
    “ALL_DISTINCT [NONE : num option]”, “T”)
 
+(* byteTheory: EVAL computes word_of_bytes via num_of_bytes at any width
+   that is a multiple of 8, not only where set_byte computes *)
+local
+  open byteTheory
+  fun hexw s ty = wordsSyntax.mk_n2w (numSyntax.mk_numeral
+                                        (Arbnum.fromHexString s), ty)
+in
+val _ = List.app convtest [
+      ("EVAL word_of_bytes T 0w at 256 bits", EVAL,
+       “word_of_bytes T 0w
+          [1w; 2w; 3w; 4w; 5w; 6w; 7w; 8w; 9w; 10w; 11w; 12w; 13w; 14w;
+           15w; 16w; 17w; 18w; 19w; 20w; 21w; 22w; 23w; 24w; 25w; 26w;
+           27w; 28w; 29w; 30w; 31w; 32w] : 256 word”,
+       hexw ("0102030405060708090A0B0C0D0E0F10" ^
+             "1112131415161718191A1B1C1D1E1F20") “:256”),
+      ("EVAL word_of_bytes F 0w at 160 bits", EVAL,
+       “word_of_bytes F 0w
+          [0xA0w; 0xA1w; 0xA2w; 0xA3w; 0xA4w; 0xA5w; 0xA6w; 0xA7w; 0xA8w;
+           0xA9w; 0xAAw; 0xABw; 0xACw; 0xADw; 0xAEw; 0xAFw; 0xB0w; 0xB1w;
+           0xB2w; 0xB3w] : 160 word”,
+       hexw "B3B2B1B0AFAEADACABAAA9A8A7A6A5A4A3A2A1A0" “:160”),
+      ("EVAL word_of_bytes F 0w at 32 bits", EVAL,
+       “word_of_bytes F 0w [9w; 3w; 11w] : word32”, “0xB0309w : word32”),
+      ("EVAL word_of_bytes T 0w at 32 bits", EVAL,
+       “word_of_bytes T 0w [9w; 3w; 11w] : word32”, “0x9030B00w : word32”),
+      ("EVAL word_of_bytes_be at 256 bits", EVAL,
+       “word_of_bytes_be [9w; 3w; 11w] : 256 word”,
+       hexw ("09030B00000000000000000000000000" ^
+             "00000000000000000000000000000000") “:256”),
+      ("EVAL word_of_bytes T 0w under w2n at 256 bits", EVAL,
+       “w2n (word_of_bytes T 0w [1w; 2w] : 256 word)”,
+       numSyntax.mk_numeral (Arbnum.fromHexString
+         ("0102000000000000000000000000000000000000000000000000000000000000"))),
+      ("EVAL word_of_bytes T 0w under w2n at 32 bits", EVAL,
+       “w2n (word_of_bytes T 0w [1w; 2w] : word32)”, “16908288”)
+    ]
+end
+
 val _ = OS.Process.exit OS.Process.success
