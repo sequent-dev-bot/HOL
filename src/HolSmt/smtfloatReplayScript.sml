@@ -1,4 +1,4 @@
-open HolKernel Parse boolLib bossLib;
+open HolKernel Parse boolLib bossLib wordsLib;
 open arithmeticTheory logrootTheory smtfloatTheory;
 
 val _ = new_theory "smtfloatReplay";

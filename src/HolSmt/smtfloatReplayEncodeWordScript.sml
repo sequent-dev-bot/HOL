@@ -1,4 +1,4 @@
-open HolKernel Parse boolLib bossLib;
+open HolKernel Parse boolLib bossLib wordsLib;
 open arithmeticTheory bitTheory wordsTheory;
 open smtfloatTheory smtfloatReplayTheory smtfloatReplayWordTheory;
 
