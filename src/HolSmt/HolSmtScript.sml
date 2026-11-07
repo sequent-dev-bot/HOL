@@ -4,6 +4,7 @@
 Theory HolSmt
 Ancestors[qualified]
   bool realax real intreal integer combin words rich_list
+Libs realLib
 
   val op >> = Tactical.>>
 
