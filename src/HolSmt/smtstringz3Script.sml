@@ -4,6 +4,7 @@
 Theory smtstringz3
 Ancestors[qualified]
   smtstring bit words
+Libs wordsLib
 
 (* Official SMT strings use num code points.  Proof parsing gives Z3's
    internal Char sort a bounded 18-bit representation and converts at
