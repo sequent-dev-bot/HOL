@@ -1491,9 +1491,9 @@ struct
      Parsing expands those lets, so compact the Boolean recurrence
      top-down before bit-blasting to keep the checked term linear. *)
   val compact_char_compare =
-    tautLib.TAUT_PROVE
-      ``((~d /\ c) \/ (~d /\ r) \/ (c /\ r)) =
-        ((c /\ ~d) \/ ((c = d) /\ r))``
+    Drule.SPEC_ALL (tautLib.TAUT_PROVE
+      ``!c d r:bool. ((~d /\ c) \/ (~d /\ r) \/ (c /\ r)) =
+        ((c /\ ~d) \/ ((c = d) /\ r))``)
 
   val char_word_expansion_theorems =
     [smtstringz3Theory.char_bit_word18,
