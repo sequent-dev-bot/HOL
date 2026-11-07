@@ -209,14 +209,14 @@ fun asWritten (spec : spec) =
       (* The construction chose its own answer type, avoiding the names
          it was working with rather than the ones the specification
          wrote: `('a,'b,'c) ty` gets an axiom over 'b, and renaming the
-         parameters back would then say 'b for two different things. *)
+         parameters back would then say 'b for two different things.
+         The names run 'a, 'b, ... 'z, 'a0, ..., so a type with more
+         arguments than there are letters is still answered in a name
+         someone can read rather than in a generated variable. *)
       fun freshFor avoid =
-          let fun go [] = Type.gen_tyvar()
-                | go (c::cs) = let val v = mk_vartype c
-                               in if Lib.mem v avoid then go cs else v end
-          in
-            go ["'a", "'b", "'c", "'d", "'e", "'f", "'g", "'h"]
-          end
+          mk_vartype
+            (Lexis.gen_variant Lexis.tyvar_vary
+               (List.mapPartial (Lib.total dest_vartype) avoid) "'a")
       fun rename th =
           let
             val vs = Term.type_vars_in_term (concl th)
@@ -235,7 +235,7 @@ fun asWritten (spec : spec) =
       if null theta then Lib.I else rename
     end
 
-(* The older construction quantifies a clause's arguments outside the
+(* The shape HOL expects quantifies a clause's arguments outside the
    hypothesis, and `munge_ind_thm` pushes back in the ones the
    hypothesis does not mention — one at a time, innermost first, which
    turns their order around.  A clause built with them already inside
@@ -279,7 +279,7 @@ fun oneType db (spec : spec) =
          argument's quantifiers past the hypothesis, and the bound
          variables named for their types *)
       val induction =
-          ind_types.munge_ind_thm
+          legacyInduction.munge_ind_thm
             (asOldQuantified
                (wr (case #induction cs of
                         SOME th => th
@@ -302,7 +302,9 @@ fun oneType db (spec : spec) =
               end
             | SOME c =>
               (* nothing recurses, so the functor is the type's own,
-                 conjugated by the bijection.  A type with no arguments
+                 conjugated by the bijection; restated at the copy's
+                 _CONS, as a family's copy members' are, it gives the
+                 equations at the constructors.  A type with no arguments
                  at all is not a functor and needs no entry. *)
               if null params then []
               else
@@ -310,9 +312,10 @@ fun oneType db (spec : spec) =
                     val res = transportBNF nms {abs = #abs c, rep = #rep c,
                                                 absrep = #absrep c,
                                                 repabs = #repabs c} fbnf
+                    val e = constructorEqns cs (copyMemberBNF c res)
                 in
                   registerBNF {tyname = tyname} (#key res, #info res)
-                ; []
+                ; List.map wr ([#map_eqns e] @ #set_eqns e)
                 end
       val tyinfos =
           typeBaseInfo {axiom = axiom, induction = induction,
@@ -494,7 +497,7 @@ fun manyTypes db (spec : spec) =
       val wr = asWritten spec
       val axiom = wr (familyAxiomOf cdefs (familyExistence (#principle coll)))
       val induction =
-          ind_types.munge_ind_thm
+          legacyInduction.munge_ind_thm
             (asOldQuantified
                (wr (familyInductionOf cdefs
                       (familySetInductionOf fam (#types coll, #cons coll)
