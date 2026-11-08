@@ -682,8 +682,9 @@ fun get_decls (Decls {byconcl, ...}) th =
       NONE => []
     | SOME ds => ds
 
-fun decl_name_member (Decls {byname, ...}) name =
-  Option.isSome (Symtab.lookup byname name)
+fun find_decl (Decls {byname, ...}) name = Symtab.lookup byname name
+
+fun decl_name_member decls name = Option.isSome (find_decl decls name)
 
 fun dest_decls (Decls {byconcl, ...}) =
   Listsort.sort decl_order

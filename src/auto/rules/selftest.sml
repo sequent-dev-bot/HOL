@@ -13,6 +13,16 @@ val _ = Theory.new_theory "clasetHookSelftest"
 val _ = Datatype.Datatype
   `claset_hook_before_demand = ClasetHookA | ClasetHookB num`
 
+(* One constructor above the distinctness cutoff, with a payload so that
+   Datatype rather than EnumType defines it and proves its distinctness
+   theorem. *)
+val _ = Datatype.Datatype
+  `claset_hook_wide =
+     ClasetWide0 | ClasetWide1 | ClasetWide2 | ClasetWide3 | ClasetWide4
+   | ClasetWide5 | ClasetWide6 | ClasetWide7 | ClasetWide8 | ClasetWide9
+   | ClasetWide10 | ClasetWide11 | ClasetWide12 | ClasetWide13
+   | ClasetWide14 | ClasetWide15 num`
+
 fun same_seed_spec
   ({kind = kind1, safe = safe1, prio = prio1} : rulespec)
   ({kind = kind2, safe = safe2, prio = prio2} : rulespec) =
@@ -2418,13 +2428,14 @@ fun derived_iff_dest th =
       [(_, (_, dest))] => dest
     | _ => raise Fail "missing derived iff dest rule"
 
-fun typebase_hook_tyinfo () =
+fun typebase_tyinfo tyop =
   case List.filter
-    (fn tyi => #2 (TypeBasePure.ty_name_of tyi) =
-               "claset_hook_before_demand")
+    (fn tyi => #2 (TypeBasePure.ty_name_of tyi) = tyop)
     (TypeBase.elts ()) of
       [tyi] => tyi
-    | _ => raise Fail "missing TypeBase selftest datatype"
+    | _ => raise Fail ("missing TypeBase selftest datatype " ^ tyop)
+
+fun typebase_hook_tyinfo () = typebase_tyinfo "claset_hook_before_demand"
 
 fun has_typebase_rule spec th =
   List.exists
@@ -2490,6 +2501,34 @@ val _ =
                 (Drule.CONJUNCTS injective))
        in
          List.all (has_typebase_rule typebase_selim_spec) distinct_rules
+           andalso
+         List.all
+           (fn (spec, (_, theorem)) =>
+             has_typebase_rule spec theorem)
+           injective_rules
+       end)
+
+val _ =
+  test
+    ("claset skips pairwise distinctness above the constructor cutoff",
+     fn () =>
+       let
+         val tyi = typebase_tyinfo "claset_hook_wide"
+         val distinct = Option.valOf (TypeBasePure.distinct_of tyi)
+         val injective = Option.valOf (TypeBasePure.one_one_of tyi)
+         val distinct_rules =
+           List.concat
+             (map (fn th => [typebase_distinct_elim th,
+                             typebase_distinct_elim (Conv.GSYM th)])
+                  (Drule.CONJUNCTS distinct))
+         val injective_rules =
+           List.concat
+             (map (iff_rules "claset-selftest-injectivity")
+                (Drule.CONJUNCTS injective))
+       in
+         length (TypeBasePure.constructors_of tyi) = 16 andalso
+         not (List.exists (has_typebase_rule typebase_selim_spec)
+                distinct_rules)
            andalso
          List.all
            (fn (spec, (_, theorem)) =>

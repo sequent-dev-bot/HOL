@@ -457,11 +457,9 @@ type cstate = claset * owned_tyinfo_rule list * readiness
 val state0 : cstate = (empty_cs, [], Pending [])
 
 fun decl_is_live (CS {decls, ...}) (wanted : decl) =
-  List.exists
-    (fn (current : decl) =>
-      #name current = #name wanted andalso
-      #index (#tag current) = #index (#tag wanted))
-    (dest_decls decls)
+  case find_decl decls (#name wanted) of
+      SOME current => #index (#tag current) = #index (#tag wanted)
+    | NONE => false
 
 fun live_owned cs owned =
   List.filter (fn {decl, ...} => decl_is_live cs decl) owned
@@ -882,20 +880,31 @@ fun tyinfo_stem tyi =
 fun number_contribution make_rule ths =
   List.concat (Lib.mapi make_rule ths)
 
+(* EnumType proves no distinctness theorem for a type of more than 15
+   constructors; the claset applies the same cutoff to every datatype,
+   since the pairwise elimination rules grow quadratically (84
+   constructors give 6,972) and installing them costs minutes, while
+   the simplifier's TypeBase rewrites decide constructor inequality for
+   the clasimp tactics regardless. *)
+val distinctness_limit = 15
+
 fun distinctness_contribution tyi =
   case Lib.total TypeBasePure.distinct_of tyi of
       SOME (SOME th) =>
-        let
-          val stem = tyinfo_stem tyi ^ "_distinct_"
-          fun make_rule index conjunct =
-            [(selim_spec,
-              (stem ^ Int.toString index, distinct_elim_rule conjunct)),
-             (selim_spec,
-              (stem ^ "sym_" ^ Int.toString index,
-               distinct_elim_rule (GSYM conjunct)))]
-        in
-          number_contribution make_rule (CONJUNCTS th)
-        end
+        if length (TypeBasePure.constructors_of tyi) > distinctness_limit
+        then []
+        else
+          let
+            val stem = tyinfo_stem tyi ^ "_distinct_"
+            fun make_rule index conjunct =
+              [(selim_spec,
+                (stem ^ Int.toString index, distinct_elim_rule conjunct)),
+               (selim_spec,
+                (stem ^ "sym_" ^ Int.toString index,
+                 distinct_elim_rule (GSYM conjunct)))]
+          in
+            number_contribution make_rule (CONJUNCTS th)
+          end
     | _ => []
 
 fun injectivity_contribution tyi =
