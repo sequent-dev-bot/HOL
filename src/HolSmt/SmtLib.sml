@@ -3358,6 +3358,9 @@ local
       Lib.list_compare (Lib.pair_compare (Term.compare, String.compare))))
   val current_translation_failures = ref no_translation_failures
 
+  (* Partial applications whose eta expansions enclose the current term. *)
+  val current_eta_expansions : Term.term list ref = ref []
+
   (* returns an updated accumulator, a (possibly empty) list of
      SMT-LIB (type and term) declarations, and the SMT-LIB
      representation of the given term *)
@@ -4272,9 +4275,26 @@ local
         val vars = List.map Term.genvar missing_doms
         val expanded = Term.list_mk_abs
           (vars, Term.list_mk_comb (applied, vars))
+        val enclosing = !current_eta_expansions
       in
-        translate_term regime apply_operator (acc, (bounds, expanded))
-        handle e as Feedback.HOL_ERR _ => raise NestedTranslation e
+        (* When the expanded body fails every rung before curried application,
+           that rung translates 'applied' again, and expanding it again would
+           repeat the body with a fresh variable forever.  Report the failing
+           operand instead, or else the repetition. *)
+        if List.exists (fn t => Term.identical t applied) enclosing then
+          (List.app (fn operand =>
+             ignore (translate_term regime apply_operator
+               (acc, (bounds, operand))))
+             (Lib.snd (boolSyntax.strip_comb applied));
+           raise ERR "translate_term"
+             "eta expansion of a partial application repeats")
+        else
+          (current_eta_expansions := applied :: enclosing;
+           Portable.finally (fn () => current_eta_expansions := enclosing)
+             (fn () =>
+               translate_term regime apply_operator (acc, (bounds, expanded))
+               handle e as Feedback.HOL_ERR _ => raise NestedTranslation e)
+             ())
       end
     fun constructor_info_for tydict ty constructor =
       let

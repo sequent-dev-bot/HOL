@@ -9638,6 +9638,27 @@ in
         Feedback.message_of holerr)
 end
 
+fun smtlib_failing_conjunct_eta_expansion_terminates () =
+let
+  (* With the failing operand first, curried application translated the
+     partial conjunction, whose eta expansion repeated the conjunction with a
+     fresh variable forever.  The lambda selects the higher-order regime. *)
+  val goal = ``(smtfp_unordered (x : (4,3) smtfp) y /\ p) /\
+    h = (\n:num. n + 1)``
+in
+  (Timeout.apply (Time.fromSeconds 10) (fn () =>
+     ignore (SmtLib.goal_to_SmtLib_translation_with_dialect SmtLib.Standard27
+       NONE ([], goal))) ();
+   die "FAIL: non-whitelisted smtfloat conjunct was emitted")
+  handle Timeout.TIMEOUT _ =>
+      die "FAIL: eta expansion of a failing conjunction did not terminate"
+    | Feedback.HOL_ERR holerr =>
+      assert (contains SmtLib.unsupported_smtfloat_constant_diagnostic
+          (Feedback.message_of holerr),
+        "failing conjunct lost its diagnostic: " ^
+        Feedback.message_of holerr)
+end
+
 fun smtlib_unsupported_smtfloat_constant_diagnostic () =
 let
   val x = ``x : (4,3) smtfp``
@@ -28579,6 +28600,8 @@ let
       smtlib_unsupported_smtfloat_constant_diagnostic),
     ("smtlib_failing_operand_translated_once",
       smtlib_failing_operand_translated_once),
+    ("smtlib_failing_conjunct_eta_expansion_terminates",
+      smtlib_failing_conjunct_eta_expansion_terminates),
     ("smtlib_translation_shape_matrix_success",
       smtlib_translation_shape_matrix_success),
     ("smtlib_term_translation_branch_matrix_success",
