@@ -769,7 +769,7 @@ fun query_skeleton_measured checkpoint formula =
          end)
 
     fun unknown track expected term =
-      case term of
+      case #1 (strip term) of
           Var variable =>
             if not track then genvar expected
             else

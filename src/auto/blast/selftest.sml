@@ -4363,7 +4363,9 @@ val _ =
          null residues andalso Term.aconv (concl (validation [])) target
        end)
        [``?x:blast_clash_wide. BlastClashW0 = x ==> p``,
-        ``?x y:blast_clash_wide. x = y ==> p``])
+        ``?x y:blast_clash_wide. x = y ==> p``,
+        ``?f:num -> blast_clash_wide. BlastClashW0 = f 0 ==> p``,
+        ``?f:num -> blast_clash_wide. f 0 = BlastClashW0 ==> p``])
 
 val _ =
   test

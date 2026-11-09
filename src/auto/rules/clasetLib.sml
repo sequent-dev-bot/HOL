@@ -225,7 +225,8 @@ fun make_rule_decl spec (name, th) =
                info = info, orig = th}
   end
 
-fun add_rule_by extend spec named_th (cs as CS {decls, wrappers, index, distinct}) =
+fun add_rule_by extend spec named_th
+      (cs as CS {decls, wrappers, index, distinct}) =
   case extend (make_rule_decl spec named_th) decls of
       (NONE, _) => cs
     | (SOME new_decl, decls') =>
