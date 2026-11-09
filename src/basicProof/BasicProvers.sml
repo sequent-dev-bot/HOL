@@ -1144,9 +1144,20 @@ datatype srw_update = ADD_SSFRAG of simpLib.ssfrag | REMOVE_RWT of string
    asked for, which measured at about 40% of theory-load time.
 
    The table is complete for the derivers registered when the state was
-   built.  An uninitialised state has none, and neither has a value
-   cached before a later registration; readers of those derive from
-   `srw_ss_of` themselves, which is the same answer, just not shared. *)
+   built.  An uninitialised state has none, nor has one with pending
+   updates (below), and neither has a value cached before a later
+   registration; readers of those derive from `srw_ss_of` themselves,
+   which is the same answer, just not shared.
+
+   `upds` holds updates not yet applied to `sset`, newest first.  In an
+   uninitialised state they wait for initialisation.  An initialised
+   state has them only when they arrived while theory-load hooks ran
+   (Theory.in_load_hooks): loading a theory adds its simp theorems and
+   datatype rewrites to the global simpset, which nothing reads during
+   the load, so those additions are queued and `flush` applies them, in
+   order, on the first read.  Every function that works on `sset` of an
+   initialised state flushes first, so it sees the simpset eager
+   application would have built. *)
 type srw_state = {sset : simpset, initp : bool, upds : srw_update list,
                   derived : UniversalType.t Susp.susp Symtab.table}
 
@@ -1164,21 +1175,28 @@ fun ssf1 nth = simpLib.empty_ssfrag |> simpLib.add_named_rwt nth
 fun mkstate (sset, initp, upds) : srw_state =
     {sset = sset, initp = initp, upds = upds,
      derived =
-       if initp then
+       if initp andalso null upds then
          List.foldl
            (fn ((nm,f),t) => Symtab.update (nm, Susp.delay (fn () => f sset)) t)
            Symtab.empty (Sref.value derivers)
        else Symtab.empty}
 
 val state0 : srw_state = mkstate (initial_simpset, false, [])
-fun apply_delta d ({sset,...} : srw_state) : srw_state =
+fun apply_srw_update (ADD_SSFRAG ssf, ss) = ss ++ ssf
+  | apply_srw_update (REMOVE_RWT n, ss) = ss -* [n]
+
+fun flush (st as {sset,initp,upds,...} : srw_state) =
+    if initp andalso not (null upds) then
+      mkstate (List.foldl apply_srw_update sset (List.rev upds), true, [])
+    else st
+fun defer () = Theory.in_load_hooks ()
+fun apply_delta d (st : srw_state) : srw_state =
+    let val {sset,...} = flush st in
     case d of
         ThmSetData.ADD nth =>
         mkstate (sset ++ ssf1 nth, true, [])
       | ThmSetData.REMOVE s => mkstate (sset -* [s], true, [])
-
-fun apply_srw_update (ADD_SSFRAG ssf, ss) = ss ++ ssf
-  | apply_srw_update (REMOVE_RWT n, ss) = ss -* [n]
+    end
 
 (* `derivers` grows as libraries load, and AncestryData caches a value
    per theory, so a value built before a registration has no entry for
@@ -1194,13 +1212,15 @@ fun renorm ({sset,initp,upds,...}:srw_state) = mkstate (sset, initp, upds)
    it to the live cell, which the context-taking read has nowhere to do
    -- under a pin, not writing is the whole point -- and the fold is
    ~3ms.  Without this every `srw_ss_of' call redoes it: `listTheory'
-   paid two seconds of them, and said so 651 times. *)
+   paid two seconds of them, and said so 651 times.  Flushing the
+   updates queued during theory loads is memoised the same way, since a
+   context-taking read cannot write its answer back either. *)
 val init_memo :
     (srw_state * TypeBasePure.typeBase * srw_state) option Sref.t =
     Sref.new NONE
 
 fun init_state_of ctxt (st as {sset,initp,upds,...} : srw_state) =
-    if initp then st
+    if initp andalso null upds then st
     else
       let
         val tyb = TypeBase.theTypeBase_of ctxt
@@ -1215,8 +1235,10 @@ fun init_state_of ctxt (st as {sset,initp,upds,...} : srw_state) =
         fun derive () =
             let
               val st' =
-                  HOL_PROGRESS_MESG ("Initialising SRW simpset ... ", "done")
-                                    init ()
+                  if initp then flush st
+                  else
+                    HOL_PROGRESS_MESG ("Initialising SRW simpset ... ", "done")
+                                      init ()
             in
               Sref.update init_memo (fn _ => SOME (st, tyb, st')); st'
             end
@@ -1256,9 +1278,14 @@ fun apply_to_global d (st as {sset,initp,upds,...}:srw_state) : srw_state =
             mkstate (sset, initp, upds')
           end
         | ThmSetData.REMOVE s => mkstate (sset, initp, REMOVE_RWT s :: upds)
+    else if defer () then
+      (* the same update apply_delta would make, queued *)
+      case d of
+          ThmSetData.ADD nth => mkstate (sset, true, ADD_SSFRAG (ssf1 nth) :: upds)
+        | ThmSetData.REMOVE s => mkstate (sset, true, REMOVE_RWT s :: upds)
     else apply_delta d st
 
-fun finaliser {thyname} deltas ({sset,initp,upds,...} : srw_state) =
+fun finaliser {thyname} deltas (st as {sset,initp,upds,...} : srw_state) =
     let
       fun toNamedAdd (ThmSetData.ADD p) = SOME p | toNamedAdd _ = NONE
       fun toRM (ThmSetData.REMOVE s) = SOME s | toRM _ = NONE
@@ -1269,9 +1296,10 @@ fun finaliser {thyname} deltas ({sset,initp,upds,...} : srw_state) =
            overall rewrite system is not confluent *)
       val new_upds = ADD_SSFRAG ssfrag :: map REMOVE_RWT rms
     in
-      if initp then
-        mkstate (List.foldl apply_srw_update sset new_upds, true, [])
-      else mkstate (sset, false, List.revAppend(new_upds, upds))
+      if initp andalso not (defer ()) then
+        mkstate (List.foldl apply_srw_update (#sset (flush st)) new_upds,
+                 true, [])
+      else mkstate (sset, initp, List.revAppend(new_upds, upds))
     end
 
 val adresult as {DB,get_global_value,get_global_value_of,record_delta,
@@ -1291,11 +1319,13 @@ fun merge_simpsets ps =
         NONE => simpLib.empty_ss
       | SOME sset => sset
 
-fun augment_srw_ss0 ssdl ({sset, initp, upds, ...}:srw_state):srw_state =
-    if initp then
-      mkstate (foldl (fn (ssd,ss) => ss ++ ssd) sset ssdl, true, [])
+fun augment_srw_ss0 ssdl (st as {sset, initp, upds, ...}:srw_state)
+    : srw_state =
+    if initp andalso not (defer ()) then
+      mkstate (foldl (fn (ssd,ss) => ss ++ ssd) (#sset (flush st)) ssdl,
+               true, [])
     else
-      mkstate (sset, false, List.revAppend(map ADD_SSFRAG ssdl, upds))
+      mkstate (sset, initp, List.revAppend(map ADD_SSFRAG ssdl, upds))
 
 val augment_srw_ss = update_global_value o augment_srw_ss0
 
@@ -1306,8 +1336,8 @@ fun diminish_srw_ss0 names st0 =
     end
 val diminish_srw_ss = update_global_value o diminish_srw_ss0
 
-fun temp_delsimps0 names ({sset, initp, upds, ...}:srw_state) =
-    if initp then mkstate (sset -* names, true, [])
+fun temp_delsimps0 names (st as {sset, initp, upds, ...}:srw_state) =
+    if initp then mkstate (#sset (flush st) -* names, true, [])
     else
       mkstate (sset, false, List.revAppend (map REMOVE_RWT names, upds))
 val temp_delsimps = update_global_value o temp_delsimps0;
@@ -1338,7 +1368,7 @@ val () = TypeBase.register_update_fn (fn tyi => (update_fn tyi; tyi))
 fun srw_ss_of ctxt = #sset (init_state_of ctxt (get_global_value_of ctxt))
 fun srw_ss () =
     case get_global_value() of
-        {sset, initp = true, ...} => sset
+        {sset, initp = true, upds = [], ...} => sset
       | _ => if Context.is_pinned () then srw_ss_of (Context.snapshot())
              else (update_global_value init_state;
                    #sset (get_global_value()))
@@ -1394,7 +1424,9 @@ in
       Context.Data.get update_log_slot (Context.snapshot())
   val upd_update_log = Context.Data.modify update_log_slot
 end
-fun ap_sset f ({sset,initp,upds,...}:srw_state) = mkstate (f sset, initp, upds)
+fun ap_sset f st =
+    let val {sset,initp,upds,...} = flush st
+    in mkstate (f sset, initp, upds) end
 fun logged_update {thyname} f =
     (update_global_value (ap_sset f);
      upd_update_log (Symtab.cons_list (thyname,f)))
@@ -1483,7 +1515,7 @@ fun set_simpset_ancestry sl =
 
 fun temp_setsimpset ss = update_global_value (K (mkstate (ss, true, [])))
 fun simpset_state () =
-    let val {sset,initp,upds,...} = get_global_value()
+    let val {sset,initp,upds,...} = flush (get_global_value())
     in (sset,initp,upds) end
 fun recreate_sset_at_parentage ps =
     ps |> merge_simpsets

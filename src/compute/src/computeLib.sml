@@ -317,17 +317,45 @@ val bool_compset =
      branches before the guard is fully true or false *)
   seal (set_skip (from_list bool_redns) boolSyntax.conditional NONE);
 
+(* Loading a theory compiles its compute theorems and datatypes into the
+   global compset, which nothing reads until something evaluates.  While
+   load hooks run (Theory.in_load_hooks), updates are queued instead, as
+   a chain of cells each holding the previous cell and the update; the
+   first read applies the whole chain in order, so the compset it gets is
+   the one eager application would have built.  The forcing lock keeps two
+   threads from applying the same update twice: updates mutate the
+   per-constant refs of the compset they are given. *)
 local
-  val compset_slot : compset Context.Data.slot =
+  datatype cell = Done of compset | Todo of cell ref * (compset -> compset)
+  val force_lock = Lock.new "computeLib.force"
+  fun force r =
+      case !r of
+          Done cs => cs
+        | Todo (prev, f) => let val cs = f (force prev) in r := Done cs; cs end
+  fun force_locked r =
+      case !r of
+          Done cs => cs
+        | Todo _ => Lock.synchronized force_lock (fn () => force r)
+  (* A load hook's failure is a warning that leaves the value as it was;
+     a deferred update's failure is reported the same way. *)
+  fun guard f cs =
+      f cs handle e as HOL_ERR _ =>
+        (HOL_WARNING "computeLib" "deferred load update"
+                     (Feedback.exn_to_string e);
+         cs)
+  val compset_slot : cell ref Context.Data.slot =
       Context.Data.new
         {name = "computeLib.compset",
-         empty = copy bool_compset,
+         empty = ref (Done (copy bool_compset)),
          pp = fn _ => "<compset>"}
 in
-  fun the_compset_of ctxt = Context.Data.get compset_slot ctxt
+  fun the_compset_of ctxt = force_locked (Context.Data.get compset_slot ctxt)
   fun the_compset () = the_compset_of (Context.snapshot())
-  val put_compset = Context.Data.write compset_slot
-  val upd_compset = Context.Data.modify compset_slot
+  fun put_compset cs = Context.Data.write compset_slot (ref (Done cs))
+  fun upd_compset f =
+      Context.Data.modify compset_slot
+        (fn r => if Theory.in_load_hooks () then ref (Todo (r, guard f))
+                 else ref (Done (f (force_locked r))))
 end
 
 fun add_funs thms = upd_compset (add_thms thms)

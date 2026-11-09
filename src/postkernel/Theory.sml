@@ -1202,9 +1202,12 @@ end;
     "on load" stuff
    ---------------------------------------------------------------------- *)
 
+val load_hooks_running = ref false
+fun in_load_hooks () = !load_hooks_running
 fun load_complete thyname =
     (Thm.mark_sealed thyname;
-     call_hooks (TheoryDelta.TheoryLoaded thyname))
+     Portable.with_flag (load_hooks_running, true)
+       call_hooks (TheoryDelta.TheoryLoaded thyname))
 
 
 (* ----------------------------------------------------------------------
