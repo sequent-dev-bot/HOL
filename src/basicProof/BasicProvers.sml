@@ -1542,11 +1542,16 @@ fun make_simpset_derived_value name (deriver : simpset -> 'a -> 'a) init =
          renorm is what puts this deriver into the state that is current;
          without it every read would fall through to deriving afresh. *)
       val () = update_global_value (renorm o init_state)
+      (* through init_state_of, so a state with queued updates is read
+         flushed, with the derived table its (memoised) flush carries *)
       fun get_of ctxt =
-          case Option.mapPartial (unwrap o Susp.force)
-                 (Symtab.lookup (#derived (get_global_value_of ctxt)) name)
-           of SOME v => v
-            | NONE => derive (srw_ss_of ctxt)
+          let val st = init_state_of ctxt (get_global_value_of ctxt)
+          in
+            case Option.mapPartial (unwrap o Susp.force)
+                   (Symtab.lookup (#derived st) name)
+             of SOME v => v
+              | NONE => derive (#sset st)
+          end
       fun get () = get_of (Context.snapshot())
     in
       {get = get, get_of = get_of}

@@ -328,10 +328,15 @@ val bool_compset =
 local
   datatype cell = Done of compset | Todo of cell ref * (compset -> compset)
   val force_lock = Lock.new "computeLib.force"
+  (* An update that is interrupted has mutated what it got so far; it is
+     marked done rather than left to run again on the same refs. *)
   fun force r =
       case !r of
           Done cs => cs
-        | Todo (prev, f) => let val cs = f (force prev) in r := Done cs; cs end
+        | Todo (prev, f) =>
+          let val cs0 = force prev
+              val cs = f cs0 handle e => (r := Done cs0; raise e)
+          in r := Done cs; cs end
   fun force_locked r =
       case !r of
           Done cs => cs
@@ -339,10 +344,10 @@ local
   (* A load hook's failure is a warning that leaves the value as it was;
      a deferred update's failure is reported the same way. *)
   fun guard f cs =
-      f cs handle e as HOL_ERR _ =>
-        (HOL_WARNING "computeLib" "deferred load update"
-                     (Feedback.exn_to_string e);
-         cs)
+      f cs handle Interrupt => raise Interrupt
+                | e => (HOL_WARNING "computeLib" "deferred load update"
+                                    (Feedback.exn_to_string e);
+                        cs)
   val compset_slot : cell ref Context.Data.slot =
       Context.Data.new
         {name = "computeLib.compset",
@@ -355,7 +360,8 @@ in
   fun upd_compset f =
       Context.Data.modify compset_slot
         (fn r => if Theory.in_load_hooks () then ref (Todo (r, guard f))
-                 else ref (Done (f (force_locked r))))
+                 else Lock.synchronized force_lock
+                        (fn () => ref (Done (f (force r)))))
 end
 
 fun add_funs thms = upd_compset (add_thms thms)

@@ -1202,12 +1202,17 @@ end;
     "on load" stuff
    ---------------------------------------------------------------------- *)
 
-val load_hooks_running = ref false
-fun in_load_hooks () = !load_hooks_running
+(* per thread, so a thread that is not loading never defers *)
+val load_hooks_running : bool ThreadLocal.t = ThreadLocal.new ()
+fun in_load_hooks () = getOpt (ThreadLocal.get load_hooks_running, false)
 fun load_complete thyname =
-    (Thm.mark_sealed thyname;
-     Portable.with_flag (load_hooks_running, true)
-       call_hooks (TheoryDelta.TheoryLoaded thyname))
+    let val old = in_load_hooks ()
+    in
+      Thm.mark_sealed thyname;
+      ThreadLocal.set (load_hooks_running, true);
+      Portable.finally (fn () => ThreadLocal.set (load_hooks_running, old))
+        call_hooks (TheoryDelta.TheoryLoaded thyname)
+    end
 
 
 (* ----------------------------------------------------------------------
