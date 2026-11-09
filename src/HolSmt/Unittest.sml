@@ -9616,6 +9616,28 @@ in
     quantified_native_text)
 end
 
+fun smtlib_failing_operand_translated_once () =
+let
+  (* Each enclosing conjunction used to translate the failing operand once
+     as a builtin and again as an invented function, doubling the work per
+     level, so 40 levels would not finish. *)
+  fun nest 0 = ``smtfp_unordered (x : (4,3) smtfp) y``
+    | nest n = boolSyntax.mk_conj
+        (Term.mk_var ("p" ^ Int.toString n, Type.bool), nest (n - 1))
+  val goal = nest 40
+in
+  (Timeout.apply (Time.fromSeconds 10) (fn () =>
+     ignore (SmtLib.goal_to_SmtLib_translation NONE ([], goal))) ();
+   die "FAIL: nested non-whitelisted smtfloat operand was emitted")
+  handle Timeout.TIMEOUT _ =>
+      die "FAIL: nested failing operand was translated exponentially often"
+    | Feedback.HOL_ERR holerr =>
+      assert (contains SmtLib.unsupported_smtfloat_constant_diagnostic
+          (Feedback.message_of holerr),
+        "nested failing operand lost its diagnostic: " ^
+        Feedback.message_of holerr)
+end
+
 fun smtlib_unsupported_smtfloat_constant_diagnostic () =
 let
   val x = ``x : (4,3) smtfp``
@@ -28555,6 +28577,8 @@ let
       smtlib_fp_outbound_translation_success),
     ("smtlib_unsupported_smtfloat_constant_diagnostic",
       smtlib_unsupported_smtfloat_constant_diagnostic),
+    ("smtlib_failing_operand_translated_once",
+      smtlib_failing_operand_translated_once),
     ("smtlib_translation_shape_matrix_success",
       smtlib_translation_shape_matrix_success),
     ("smtlib_term_translation_branch_matrix_success",

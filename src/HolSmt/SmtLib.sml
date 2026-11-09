@@ -3345,10 +3345,46 @@ local
      nested Array/select.  Both dialects eta-expand partially applied ranked
      constants when omission would lose their built-in semantics. *)
 
+  (* Translation failures of the current goal, keyed by subterm and lexical
+     bounds.  When an operand fails, every later rung that admits its
+     parent's shape (a builtin operator, then an invented function, ...)
+     translates the same operand again, so a failure D levels down was
+     rebuilt 2^D times.  The accumulator only gains the parent's own symbol
+     and sorts between retries, which cannot make the operand translate, so
+     a retry raises the first failure again. *)
+  val no_translation_failures : (Term.term * (Term.term * string) list,
+      Term.term * exn) Redblackmap.dict =
+    Redblackmap.mkDict (Lib.pair_compare (Term.compare,
+      Lib.list_compare (Lib.pair_compare (Term.compare, String.compare))))
+  val current_translation_failures = ref no_translation_failures
+
   (* returns an updated accumulator, a (possibly empty) list of
      SMT-LIB (type and term) declarations, and the SMT-LIB
      representation of the given term *)
-  fun translate_term regime apply_operator
+  fun translate_term regime apply_operator (input as (_, (bounds, tm))) =
+  let
+    fun key () = (tm, Redblackmap.listItems bounds)
+    val failures = !current_translation_failures
+    (* Term.compare is alpha-equivalence, but a let's function binders are
+       stripped by name, so only an identical subterm reuses a failure. *)
+    val _ =
+      if Redblackmap.numItems failures = 0 then ()
+      else
+        case Redblackmap.peek (failures, key ()) of
+          SOME (failed, e) =>
+            if Term.identical failed tm then raise e else ()
+        | NONE => ()
+    fun remember e =
+      (current_translation_failures :=
+         Redblackmap.insert (!current_translation_failures, key (), (tm, e));
+       raise e)
+  in
+    translate_term_once regime apply_operator input
+    handle e as Feedback.HOL_ERR _ => remember e
+         | e as NestedTranslation _ => remember e
+  end
+
+  and translate_term_once regime apply_operator
       (acc as (tydict, tmdict), (bounds, tm)) =
   let
     fun sexpr x [] = x
@@ -5311,6 +5347,7 @@ local
     val bounds = Redblackmap.mkDict Term.compare
     val terms = ts @ [boolSyntax.mk_neg t]
     val _ = reject_uninterpreted_native_destructors terms
+    val _ = current_translation_failures := no_translation_failures
     val (acc, smtlibs) = Lib.foldl_map
       (fn (acc, tm) =>
         translate_term regime apply_operator (acc, (bounds, tm)))
@@ -5413,7 +5450,8 @@ local
       save_cell current_bag_backend,
       save_cell current_bag_terms,
       save_cell current_bag_helpers,
-      save_cell current_collection_function_arguments
+      save_cell current_collection_function_arguments,
+      save_cell current_translation_failures
     ]
     fun work () =
       goal_to_SmtLib_aux_inner request apply_operator policy target
