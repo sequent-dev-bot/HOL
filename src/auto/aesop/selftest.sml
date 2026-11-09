@@ -111,6 +111,32 @@ val _ = Datatype.Datatype
 
 val _ =
   check
+    ("AESOP stops cold schematic clash retrieval at its candidate budget",
+     fn () =>
+       let
+         fun stopped limit =
+           let
+             val claset = Option.valOf
+               (clasetLib.claset_of_theory {thyname = "min"})
+             val budget = searchBudget.create
+               {candidates = SOME limit, applications = NONE,
+                normalization = NONE}
+             val x = ``x:aesop_clash_wide``
+             val y = ``y:aesop_clash_wide``
+           in
+             (ignore (aesopRule.claset_rules_with (SOME budget)
+                {claset = claset, mode = clasetUnify.Unify,
+                 conclusion = ``p:bool``,
+                 assumptions = [boolSyntax.mk_eq (x, y)],
+                 qvars = HOLset.fromList Term.compare [x, y],
+                 simpset = simpLib.empty_ss, simp_controls = []}); false)
+             handle searchBudget.LimitReached
+               (searchBudget.Candidate, usage) => #candidates usage = limit
+           end
+       in List.all stopped [0, 50] end)
+
+val _ =
+  check
     ("AESOP finds constructor witnesses through schematic clashes",
      fn () => List.all (fn target =>
        let

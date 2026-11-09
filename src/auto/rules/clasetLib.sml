@@ -641,11 +641,13 @@ fun aesop_rules select (CS {index = {aesop_index, ...}, ...}) query =
       (clasetNet.unify query (select aesop_index)))
 
 val aesop_target_rules = aesop_rules #target
-fun aesop_hyp_rules
+fun aesop_hyp_rules_measured checkpoint
       (CS {distinct, index = {aesop_index, ...}, ...}) query =
     map #rule (Listsort.sort compare_aentry
       (clasetNet.unify query (#hyp aesop_index) @
-       distinct_candidates listUtil.no_checkpoint distinct query))
+       distinct_candidates checkpoint distinct query))
+
+val aesop_hyp_rules = aesop_hyp_rules_measured listUtil.no_checkpoint
 
 type tyinfo_contribution =
   string * (TypeBasePure.tyinfo -> (rulespec * (string * thm)) list)

@@ -400,13 +400,18 @@ fun unique_declarations declarations =
    SWAP_INTRO_RULE.  The claset derived them once when the rule was
    declared and hands them back with the candidate, so no goal expansion
    derives them again. *)
-fun candidate_declarations claset conclusion assumptions qvars =
+fun candidate_declarations budget claset conclusion assumptions qvars =
   let
+    val checkpoint =
+      case budget of
+          NONE => listUtil.no_checkpoint
+        | SOME meter =>
+            fn () => searchBudget.charge meter searchBudget.Candidate
     val target =
       clasetLib.aesop_target_rules claset
         {q = conclusion, qvars = qvars}
     fun hypothesis assumption =
-      clasetLib.aesop_hyp_rules claset
+      clasetLib.aesop_hyp_rules_measured checkpoint claset
         {q = assumption, qvars = qvars}
   in
     unique_declarations
@@ -483,7 +488,7 @@ fun claset_rules_core
       {claset, mode, conclusion, assumptions, qvars, simp, budget} =
   let
     val candidates =
-      candidate_declarations claset conclusion assumptions qvars
+      candidate_declarations budget claset conclusion assumptions qvars
     val safe0 =
       map (declaration_rule budget mode)
         (List.filter (safe_class clasetRules.Safe0) candidates)

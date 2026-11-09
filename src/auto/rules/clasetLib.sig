@@ -116,6 +116,10 @@ sig
     claset -> {q : term, qvars : term HOLset.set} -> aesop_rule list
   val aesop_hyp_rules :
     claset -> {q : term, qvars : term HOLset.set} -> aesop_rule list
+  (* Charge lazy constructor-pair enumeration and derivation before work. *)
+  val aesop_hyp_rules_measured :
+    (unit -> unit) -> claset ->
+    {q : term, qvars : term HOLset.set} -> aesop_rule list
 
   val SIntro : thm -> thm
   val Intro : thm -> thm
