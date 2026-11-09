@@ -2187,6 +2187,8 @@ the surrounding text (as done by ‘hol-do-goal’ and
 ;; meta is already the convention for a second claim on a letter here
 ;; -- compare `\M-C' and `\M-P'.
 (define-key hol-map "\M-M" 'hol-lsp-search)
+;; `M-E', not `M-e': `hol-find-eval-next-tactic' had that key first.
+(define-key hol-map "\M-E" 'hol-lsp-eval-region)
 (define-key hol-map "2"    'hol-vertical)
 (define-key hol-map "3"    'hol-horizontal)
 (define-key hol-map "4"    'hol-display)
@@ -2867,22 +2869,62 @@ that reason."
         (hol-lsp--merge-proof-states (hol-lsp--proof-states-table) states)
         (force-mode-line-update)))))
 
-(defun hol-lsp--prune-stale-proofs (uri)
+(defun hol-lsp--census-applies-p (version)
+  "Is a census read from text VERSION still about this buffer?
+The user can type between the server reading the buffer and the
+notification arriving, and a census naming the declarations of an
+older text would then forget a proof the newer one has.  That edit
+starts a pass of its own, which sends a census that does apply, so
+skipping is the whole of the fix.
+
+VERSION nil means the server did not say, and we take the census as
+given.  So does an eglot without `eglot--versioned-identifier', where
+there is nothing to compare against."
+  (or (null version)
+      (not (boundp 'eglot--versioned-identifier))
+      (equal version (symbol-value 'eglot--versioned-identifier))))
+
+(defun hol-lsp--prune-stale-proofs (uri &optional census version)
   "Drop entries for proofs no longer in the buffer visiting URI.
-A proof still `cheated' when a compile finishes was not re-enqueued by
-that pass -- which happens both when its theorem has been deleted and
-when the server did not get round to it.  Those look identical from
-here, and dropping them silently is the worse mistake: it counts an
-unchecked proof as though it had been checked.  So only entries past
-the end of the buffer go."
+
+CENSUS is the server's list of what the buffer still declares, under
+the names a proof there would be given, read from text VERSION.
+Anything the tally holds that the census does not mention has had its
+declaration deleted or renamed, and goes.  The list names more than
+proofs -- every `val' and `fun' is in it too -- which costs nothing:
+the only question asked of it is whether a name we hold is still
+there.
+
+This is the one thing a client cannot work out for itself.  A proof
+still `cheated' when a compile finishes was not re-enqueued by that
+pass, which happens both when its theorem has been deleted and when
+the server did not get round to it -- and those are indistinguishable
+from here, while dropping both would count an unchecked proof as
+though it had been checked.  The server can tell them apart, because
+it holds the buffer's outline, so it says.
+
+A census of nil is the server declining to say -- it is not checking
+proofs, or it predates the field -- and must not be read as a buffer
+that declares nothing; the positional rule below is then the only one
+that applies.  That rule stays because it needs no census at all: an entry past the
+end of the buffer cannot be anything but stale."
   (let* ((path (ignore-errors (hol-lsp--uri-to-path uri)))
          (buf (and path (find-buffer-visiting path))))
     (when (buffer-live-p buf)
       (with-current-buffer buf
         (when hol-lsp--proof-states
-          (let ((last (line-number-at-pos (point-max))) stale)
+          ;; `have' rather than a non-empty `names': eglot hands a
+          ;; JSON array over as a vector, and an empty one is not nil
+          ;; -- it is the server saying this buffer declares nothing
+          ;; at all, which is exactly when every entry should go.
+          (let* ((have (and census (hol-lsp--census-applies-p version)))
+                 (names (and have (append census nil)))
+                 (last (line-number-at-pos (point-max)))
+                 stale)
             (maphash (lambda (k v)
-                       (when (>= (or (nth 1 v) 0) last) (push k stale)))
+                       (when (or (>= (or (nth 1 v) 0) last)
+                                 (and have (not (member k names))))
+                         (push k stale)))
                      hol-lsp--proof-states)
             (dolist (k stale) (remhash k hol-lsp--proof-states))
             (when stale (force-mode-line-update))))))))
@@ -3018,11 +3060,19 @@ from 30 to 12 reads as what it is."
     (hol-lsp--set-blocked uri message))
 
   (cl-defmethod eglot-handle-notification
-    (_server (_method (eql $/compileCompleted)) &key uri
+    (_server (_method (eql $/compileCompleted)) &key uri declared version
              &allow-other-keys)
-    "Note that URI compiled, which is to say it is no longer blocked."
+    "Note that URI compiled, which is to say it is no longer blocked.
+DECLARED is the census of the names the buffer still declares, as of
+text VERSION; both are absent from a server that is not checking
+proofs.  eglot hands a JSON array over as a vector."
     (hol-lsp--set-blocked uri nil)
-    (hol-lsp--prune-stale-proofs uri))
+    (hol-lsp--prune-stale-proofs uri declared version))
+
+  (cl-defmethod eglot-handle-notification
+    (_server (_method (eql $/eval/1)) &key out &allow-other-keys)
+    "Append one streamed `$/eval' report to the transcript."
+    (hol-lsp--eval-note-report out))
 
   (cl-defmethod eglot-handle-notification
     (_server (_method (eql $/hol/desync)) &key uri message
@@ -3225,6 +3275,111 @@ so a slow server never freezes emacs on a keystroke."
                            (hol-lsp--goalstate-params)
                            :cancel-on-input cancel-on-input)
         (error nil)))))
+
+(defcustom hol-lsp-eval-buffer-name "*HOL LSP Eval*"
+  "Buffer that `hol-lsp-eval-region' appends the server's output to."
+  :type 'string
+  :group 'hol)
+
+(defcustom hol-lsp-eval-display t
+  "Whether evaluating shows the transcript buffer.
+nil leaves that to `hol-lsp-show-eval-output'; the buffer is written
+either way."
+  :type 'boolean
+  :group 'hol)
+
+(defun hol-lsp--eval-buffer ()
+  "The eval transcript buffer, created if it is not there yet."
+  (or (get-buffer hol-lsp-eval-buffer-name)
+      (get-buffer-create hol-lsp-eval-buffer-name)))
+
+(defun hol-lsp--eval-append (text)
+  "Append TEXT to the eval transcript, keeping its windows at the end."
+  (when (and (stringp text) (not (string-empty-p text)))
+    (with-current-buffer (hol-lsp--eval-buffer)
+      (let ((inhibit-read-only t))
+        (save-excursion
+          (goto-char (point-max))
+          (insert text)
+          (unless (bolp) (insert "\n"))))
+      (dolist (w (get-buffer-window-list (current-buffer) nil t))
+        (set-window-point w (point-max))))))
+
+(defun hol-lsp--eval-note-report (report)
+  "Append REPORT, one result of an `$/eval' request, to the transcript.
+`toplevelOut' is what the chunk printed -- the `val it = ...' that
+makes this a REPL -- and `compilerOut' the compiler's own chatter.  An
+`error' report carries `msg' rather than `body'; the server sends one
+of those when a compile holds the state, which is an ordinary thing to
+see, so it is shown rather than signalled."
+  (let ((kind (plist-get report :kind))
+        (body (or (plist-get report :body) (plist-get report :msg))))
+    (cond
+     ((equal kind "interrupted") (hol-lsp--eval-append "*** interrupted"))
+     ((member kind '("compileCompleted" "compileProgress")) nil)
+     ((null body) nil)
+     ((equal kind "error") (hol-lsp--eval-append (concat "*** " body)))
+     (t (hol-lsp--eval-append body)))))
+
+(defun hol-lsp--eval-bounds ()
+  "What `hol-lsp-eval-region' evaluates: the region, or the block at point.
+With no region, the blank-line-delimited block around point, which for
+a top-level SML phrase is usually the phrase."
+  (if (region-active-p)
+      (cons (region-beginning) (region-end))
+    (save-excursion
+      (let* ((end (progn (forward-paragraph) (point)))
+             (beg (progn (backward-paragraph) (point))))
+        (cons beg end)))))
+
+(defun hol-lsp-show-eval-output ()
+  "Show the buffer `hol-lsp-eval-region' writes to."
+  (interactive)
+  (display-buffer (hol-lsp--eval-buffer)))
+
+(defun hol-lsp-eval-region (start end)
+  "Evaluate the region, or the block at point, in this buffer's server.
+
+The chunk runs in the server's own session, at START.  A file's
+declarations run in order, so what is in scope is what the compile had
+reached by there: a name bound further down the file is not available.
+That is the context that hovering a `val' typed into blank space reads
+-- this is the same thing without editing the buffer.
+
+What a chunk binds is available to the next one evaluated at the same
+place, so `val x = ...' is worth typing.  Output is appended to
+`hol-lsp-eval-buffer-name'.  A compile may be holding the state, in
+which case the server says so and the request can simply be repeated."
+  (interactive (let ((b (hol-lsp--eval-bounds))) (list (car b) (cdr b))))
+  (let ((server (hol-lsp--server))
+        (code (buffer-substring-no-properties start end)))
+    (unless server (user-error "No LSP server for this buffer"))
+    (when (string-empty-p (string-trim code))
+      (user-error "Nothing to evaluate"))
+    ;; The server has to be looking at the text this position is in,
+    ;; and eglot batches `didChange' on an idle timer; same flush as
+    ;; `hol-lsp--query' does, for the same reason.
+    (when (fboundp 'eglot--signal-textDocument/didChange)
+      (ignore-errors (eglot--signal-textDocument/didChange)))
+    (hol-lsp--eval-append (concat "> " (string-trim code)))
+    (when hol-lsp-eval-display (hol-lsp-show-eval-output))
+    (jsonrpc-async-request
+     server :$/eval
+     (list :uri (hol-lsp--path-to-uri buffer-file-name)
+           :code code
+           ;; Streamed, so a long evaluation shows its output as it
+           ;; happens rather than as silence and then everything.
+           :incr 2
+           :holdep 1
+           :position (save-excursion
+                       (goto-char start)
+                       (list :line (1- (line-number-at-pos))
+                             :character (hol-lsp--point-byte-in-line))))
+     :success-fn #'ignore
+     :error-fn (lambda (err)
+                 (hol-lsp--eval-append
+                  (format "*** %s"
+                          (or (plist-get err :message) err)))))))
 
 (defcustom hol-lsp-search-limit 100
   "How many theorems `hol-lsp-search' asks the server for at once."

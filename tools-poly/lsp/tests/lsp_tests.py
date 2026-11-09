@@ -268,6 +268,11 @@ def _did_open(c, uri, text, version=1):
                                         "version":version,"text":text}}})
 
 
+def _did_close(c, uri):
+    c.send({"jsonrpc":"2.0","method":"textDocument/didClose",
+            "params":{"textDocument":{"uri":uri}}})
+
+
 def _did_change_full(c, uri, text, version):
     c.send({"jsonrpc":"2.0","method":"textDocument/didChange",
             "params":{"textDocument":{"uri":uri,"version":version},
@@ -2332,6 +2337,29 @@ def _proof_states(c, uri, since=0):
     return seen
 
 
+def _census(c, uri, since=0):
+    """The census of the latest $/compileCompleted for `uri`, as
+    (version, names), or None when the notification carried none.
+
+    The names are everything the buffer declares, under the names a
+    proof there would be given -- a superset of the proof sites, since
+    the only question asked of it is whether a name a client holds is
+    still declared.
+
+    Absent is not the same as empty: a server not checking proofs sends
+    neither field, and a client must then leave its tally alone."""
+    msgs, _ = c.messages_since(since)
+    got = None
+    for m in msgs:
+        if m.get("method") != "$/compileCompleted":
+            continue
+        p = m["params"]
+        if p["uri"] != uri:
+            continue
+        got = ((p["version"], p["declared"]) if "declared" in p else None)
+    return got
+
+
 def _proof_transitions(c, uri, since=0):
     """Every announced (name, status) for `uri`, in order."""
     msgs, _ = c.messages_since(since)
@@ -2932,6 +2960,67 @@ def test_full_replace_resumes_from_the_common_prefix():
                     "compileCompleted after the revert")
         after = _send_goalstate(c, 791, uri, 3940, 8).get("result")
         assert_true(after is not None, "goal state after the revert")
+        assert_eq(after.get("error"), None,
+                  f"no tactic reported as failing ({after!r})")
+        assert_eq(after.get("goals"), base.get("goals"),
+                  f"same state as before the round trip ({after!r})")
+    finally:
+        c.close()
+
+
+@requires("integer")
+def test_close_and_reopen_keeps_ancestors_loaded():
+    """The same revert as the test above, by the other route.
+
+    A version-control revert kills and re-reads the buffer, which
+    restarts the major mode, so eglot leaves `eglot--managed-mode` and
+    re-enters it: the server sees `didClose` followed at once by
+    `didOpen`, not a `didChange`.  Dropping the file's record on the
+    close left the reopen with no `declSnapshots`, which is what sends
+    `startCompile` back to the boot state — `Meta.loadedMods` rewound,
+    the preload re-reading ancestors that `Theory.load_complete` has
+    already sealed in `KernelSig.sealed_ref`, `TheoryReader` refusing
+    every one of them, and the rest of the file drawing a diagnostic
+    per declaration for the remaining life of the process.
+
+    Needs a real `Ancestors` the running heap does not already hold —
+    a theory only gets sealed by being loaded — which is why this is an
+    `integer` test rather than one over a scratch file in /tmp."""
+    src = f"{REPO}/src/integer/integerScript.sml"
+    c = Client(os.path.dirname(src))
+    try:
+        _init(c, REPO)
+        uri = f"file://{src}"
+        with open(src, encoding="utf8") as f: text = f.read()
+        _did_open(c, uri, text)
+        assert_true(c.wait_for_method("$/compileCompleted", 60),
+                    "first compileCompleted")
+        assert_eq(len(_diag_count(c, uri)), 0, "clean before the close")
+        base = _send_goalstate(c, 792, uri, 3940, 8).get("result")
+        assert_true(base is not None, "baseline goal state")
+
+        idx = c.total_msgs()
+        _did_close(c, uri)
+        # Version 0 is what eglot sends: its numbering starts over with
+        # the buffer, so the reopen is not merely a later edit.
+        _did_open(c, uri, text, version=0)
+        assert_true(c.wait_for_method("$/compileCompleted", 60, idx),
+                    "compileCompleted after the reopen")
+
+        d = _diag_count(c, uri)
+        first = d[0].get("message", "")[:160] if d else ""
+        assert_eq(len(d), 0,
+                  f"no diagnostics after close+reopen ({len(d)}; {first!r})")
+        # Named, so a failure says which wreckage it is and not only how
+        # much of it there was.  Both only ever reach stderr.
+        blob = c.stderr_text()
+        assert_true("is sealed" not in blob,
+                    "no sealed-theory refusal on stderr")
+        assert_true("not in ancestry" not in blob,
+                    "no 'not in ancestry' on stderr")
+
+        after = _send_goalstate(c, 793, uri, 3940, 8).get("result")
+        assert_true(after is not None, "goal state after the reopen")
         assert_eq(after.get("error"), None,
                   f"no tactic reported as failing ({after!r})")
         assert_eq(after.get("goals"), base.get("goals"),
@@ -5692,6 +5781,79 @@ def test_deps_body_reference_does_not_block():
 
 
 # ------------------------------------------------------------------
+# A header name that is a substructure of something opened before it
+# ------------------------------------------------------------------
+# `Unicode' is not a module: it is `Parse.Unicode'
+# (src/parse/Parse.sig), so nothing can load it and it is in no
+# namespace under that bare name until the header's `open Parse' has
+# run.  Scripts write it on its own line below the header for exactly
+# that reason -- a `Libs' run is merged into one `open', and SML
+# resolves every strid of an `open' against the environment before the
+# declaration.  src/bool/boolScript.sml and
+# src/pred_set/src/pred_setScript.sml both do this.
+#
+# `UChar.emptyset' is the positive control: `UChar' arrives only via
+# `open Unicode', so the test cannot pass against an empty namespace
+# layer.
+_SUBSTRUCT_SRC = ("Theory substruct_open[bare]\n"
+                  "Libs\n"
+                  "  HolKernel Parse boolLib\n"
+                  "\n"
+                  "open Unicode\n"
+                  "\n"
+                  "val a = UChar.emptyset\n")
+
+
+def test_open_substructure_not_blocked():
+    """`open Unicode' names a substructure of an already-opened `Parse',
+    not a module.  It must not block the file."""
+    uri = "file:///tmp/substruct_open.sml"
+    c = Client("/tmp")
+    try:
+        _init(c, "/tmp")
+        _did_open(c, uri, _SUBSTRUCT_SRC)
+        assert_true(c.wait_for_method("$/compileCompleted", 60),
+                    "compileCompleted arrived")
+        assert_true(c.wait_for_method("$/compileBlocked", 1) is None,
+                    "a substructure `open' does not block the file")
+        d = _diag_count(c, uri)
+        assert_eq(len(d), 0,
+                  f"no diagnostics ({[x['message'][:60] for x in d]})")
+    finally:
+        c.close()
+
+
+def test_open_missing_module_still_blocks():
+    """The substructure search must not make the check vacuous: an
+    `open' of something that is neither a module nor in scope still
+    stops the file, reported on the `open'."""
+    uri = "file:///tmp/substruct_bad.sml"
+    c = Client("/tmp")
+    try:
+        _init(c, "/tmp")
+        _did_open(c, uri, "Theory substruct_bad[bare]\n"
+                          "Libs\n"
+                          "  HolKernel Parse boolLib\n"
+                          "\n"
+                          "open nosuchsubstructure\n"
+                          "\n"
+                          "val a = 3\n")
+        m = c.wait_for_method("$/compileBlocked", 30)
+        assert_true(m is not None, "compileBlocked arrived")
+        assert_true("nosuchsubstructure" in m["params"]["modules"],
+                    f"modules lists it ({m['params']['modules']})")
+        d = _diag_count(c, uri)
+        assert_eq(len(d), 1,
+                  f"one diagnostic ({[x['message'][:60] for x in d]})")
+        assert_contains(d[0]["message"], "cannot load nosuchsubstructure",
+                        "diagnostic text")
+        assert_eq(d[0]["range"]["start"]["line"], 4,
+                  "reported against the `open'")
+    finally:
+        c.close()
+
+
+# ------------------------------------------------------------------
 # Position encoding negotiated from the client's capabilities
 # ------------------------------------------------------------------
 # `xyzzy` sits after three ∀ (3 bytes each in UTF-8, one utf-16 code
@@ -5977,7 +6139,7 @@ _SYM_SRC = ("Theory idesym\nAncestors arithmetic\n\n"
 def test_documentSymbol_lists_the_declarations():
     """The outline covers HOL declarations and SML ones alike, and the
     Datatype's type name is scraped from its quotation -- the parser
-    hands that block to bossLib.Datatype unread, so there is no
+    hands that block to Datatype.Datatype unread, so there is no
     identifier in the tree to take."""
     uri = "file:///tmp/idesymScript.sml"
     c = Client("/tmp")
@@ -7354,6 +7516,162 @@ def test_a_rebound_name_gets_its_own_entry():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_a_deleted_proof_leaves_the_tally():
+    """Write a failing proof and it is correctly reported as one to
+    look at.  Delete the whole `Theorem ... QED' and it must stop being
+    reported -- the count, the name in the tooltip, and the squiggle.
+
+    A client cannot work this out.  The pool announces the entry it
+    drops as `cheated', which is what it also announces when an edit
+    merely reached a proof, and a client that forgot every `cheated'
+    would under-count the proofs still waiting to be re-checked.  So
+    the server says which names the buffer still declares, and the
+    client keeps exactly those."""
+    d = tempfile.mkdtemp(prefix="lsp_delproof_")
+    try:
+        head = ("Theory delproof\n"
+                "Ancestors arithmetic\n"
+                "\n"
+                "Theorem keep_me:\n"
+                "  1 + 1 = 2\n"
+                "Proof\n"
+                "  DECIDE_TAC\n"
+                "QED\n"
+                "\n")
+        doomed = ("Theorem not_worth_it:\n"
+                  "  1 = 2\n"
+                  "Proof\n"
+                  "  DECIDE_TAC\n"
+                  "QED\n"
+                  "\n")
+        tail = ("Theorem keep_me_too:\n"
+                "  2 + 2 = 4\n"
+                "Proof\n"
+                "  DECIDE_TAC\n"
+                "QED\n")
+        src = head + doomed + tail
+        c = Client(d, args=["--lsp-check-proofs"])
+        try:
+            _init(c, d, timeout=30)
+            uri = f"file://{d}/delproofScript.sml"
+            _did_open(c, uri, src)
+            assert_true(c.wait_for_method("$/compileCompleted", 60),
+                        "compileCompleted")
+
+            # The positive control: without it a census that named
+            # nothing would read exactly like one that worked.
+            def failed(cl):
+                st = _proof_states(cl, uri)
+                return st if st.get("not_worth_it", (None,))[0] == "failed" \
+                    else None
+
+            assert_true(c.wait_until(failed, 60) is not None,
+                        f"the bad proof is reported failed first "
+                        f"({_proof_states(c, uri)!r})")
+            before = _census(c, uri)
+            assert_true(before is not None, "the census is sent at all")
+            assert_true("not_worth_it" in before[1],
+                        f"and names the proof while it exists ({before!r})")
+
+            mark = c.total_msgs()
+            at = len(head.encode("utf-8"))
+            _did_change_incr(c, uri, src, at,
+                             at + len(doomed.encode("utf-8")), "", 2)
+            assert_true(c.wait_for_method("$/compileCompleted", 60,
+                                          since=mark),
+                        "compileCompleted after the deletion")
+
+            def gone(cl):
+                got = _census(cl, uri, since=mark)
+                return got if got is not None \
+                    and "not_worth_it" not in got[1] else None
+
+            after = c.wait_until(gone, 60)
+            assert_true(after is not None,
+                        f"the deleted proof leaves the census "
+                        f"({_census(c, uri, since=mark)!r})")
+            assert_true(all(n in after[1] for n in ("keep_me", "keep_me_too")),
+                        f"and the surviving two stay in it ({after!r})")
+            assert_eq(after[0], 2, "stamped with the text it was read from")
+
+            # The other half of the same complaint: the squiggle.
+            def unsquiggled(cl):
+                ds = [x for x in _diag_count(cl, uri)
+                      if "not_worth_it" in x.get("message", "")
+                      or "proof failed" in x.get("message", "")]
+                return True if not ds else None
+
+            assert_true(c.wait_until(unsquiggled, 60) is not None,
+                        f"and its diagnostic goes with it "
+                        f"({_diag_count(c, uri)!r})")
+        finally:
+            c.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_the_census_names_proofs_not_verdicts():
+    """The census says which proofs the buffer *has*, not what the pool
+    makes of them -- so an unchecked proof is still named, and a client
+    pruning against it reports the proof rather than hiding it.
+
+    That is also what makes the list safe to send.  A snapshot of the
+    pool's verdicts could not be: it would have to be sampled and only
+    then put on the wire, so a worker settling in between would lose
+    its newer verdict to the older sample.  Nothing a worker does adds
+    or removes a declaration, so this list has no such race.
+
+    The occurrence numbers are the pool's own, which is why a rebound
+    name appears as `foo#2' here exactly as it does on
+    `$/proofStates'."""
+    d = tempfile.mkdtemp(prefix="lsp_census_")
+    try:
+        src = ("Theory census\n"
+               "Ancestors arithmetic\n"
+               "\n"
+               "Theorem foo:\n"
+               "  1 + 1 = 2\n"
+               "Proof\n"
+               "  DECIDE_TAC\n"
+               "QED\n"
+               "\n"
+               "Theorem foo[allow_rebind]:\n"
+               "  2 + 2 = 4\n"
+               "Proof\n"
+               "  DECIDE_TAC\n"
+               "QED\n")
+        c = Client(d, args=["--lsp-check-proofs"])
+        try:
+            _init(c, d, timeout=30)
+            uri = f"file://{d}/censusScript.sml"
+            _did_open(c, uri, src)
+            assert_true(c.wait_for_method("$/compileCompleted", 60),
+                        "compileCompleted")
+            got = _census(c, uri)
+            assert_true(got is not None, "a census is sent")
+            assert_true(all(n in got[1] for n in ("foo", "foo#2")),
+                        f"both occurrences, under the names the pool uses "
+                        f"({got!r})")
+
+            # Said without waiting for a verdict, which is the point:
+            # the names are there whether or not the pool has settled.
+            def settled(cl):
+                st = _proof_states(cl, uri)
+                return st if len(st) >= 2 and all(
+                    v[0] != "checking" for v in st.values()) else None
+
+            st = c.wait_until(settled, 60)
+            assert_true(st is not None, f"the proofs do settle ({st!r})")
+            assert_true(all(n in got[1] for n in st),
+                        f"and every name the pool used is one the census "
+                        f"names, which is what makes pruning against it "
+                        f"safe ({sorted(st)!r} vs {got[1]!r})")
+        finally:
+            c.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_an_edit_above_a_proof_keeps_one_entry():
     """An edit above every proof re-elaborates the file, so each proof
     is dropped and forked again somewhere else.  It must come back
@@ -8202,6 +8520,50 @@ def test_check_proofs_enabled_during_a_compile():
             err = c.stderr_text()
             assert_true("is sealed" not in err,
                         f"and nothing re-read a sealed theory "
+                        f"({err[-400:]!r})")
+        finally:
+            c.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+@requires("sorting")
+def test_a_module_the_file_defines_is_not_preloaded():
+    """A `[bare]' script can supply a structure the bare heap lacks --
+
+        structure bossLib = struct val Datatype = Datatype.Datatype end
+
+    is how `listScript.sml' reaches the `Datatype:' block -- and the
+    holdep preload must not go and load the real module on the
+    strength of that mention.  Here the file defines `sortingTheory';
+    loading the real one calls `Theory.load_complete', which seals
+    `sorting' in `KernelSig', and `new_theory "sorting"' then cannot
+    enter its own theory.  Every declaration below the header fails
+    with "no current theory" -- nearly three thousand diagnostics in
+    the case this came from.
+
+    The name has to be one the server can actually find, or there is
+    nothing to load and the test cannot fail; `sortingTheory' is the
+    one this suite already arranges to be reachable."""
+    d = tempfile.mkdtemp(prefix="lsp_selfmod_")
+    try:
+        _point_at_sorting(d)
+        src = ("Theory sorting[bare]\n"
+               "Libs HolKernel\n\n"
+               "structure sortingTheory = struct val SORTED_DEF = 1 end\n"
+               "val x = sortingTheory.SORTED_DEF\n")
+        uri = f"file://{d}/sortingScript.sml"
+        c = Client(d)
+        try:
+            _init(c, d, timeout=30)
+            _did_open(c, uri, src)
+            assert_true(c.wait_for_method("$/compileCompleted", 120),
+                        "compileCompleted")
+            msgs = [x.get("message", "") for x in _diag_count(c, uri)]
+            assert_eq(msgs, [], "no diagnostics")
+            err = c.stderr_text()
+            assert_true("sealed" not in err,
+                        f"and nothing sealed the theory being built "
                         f"({err[-400:]!r})")
         finally:
             c.close()
@@ -9454,6 +9816,331 @@ def test_a_theorem_without_proof_keeps_the_file_compiling():
             c.close()
 
 
+def test_theory_rename_and_back():
+    """Renaming a script's theory and then renaming it back must leave
+    the session compiling.  `new_theory` used to export the segment it
+    abandoned whenever the name changed: that wrote the theory to disk,
+    added it to the theory graph, and sealed its name in
+    `KernelSig.sealed_ref` -- process-global and deliberately outside
+    `Context`, so no snapshot restore could take it back.  The second
+    `Theory foo` then raised `theory: "foo" already exists.` on every
+    pass for the rest of the session's life.
+
+    `export_theory` already keys off `Globals.interactive`, which is
+    true under `hol lsp`; the implicit export inside `new_theory` did
+    not.  The header recompiles per keystroke, so this fired while
+    simply *typing* a name too -- `Theory f` then `Theory fo` exported
+    and sealed each prefix in turn."""
+    d = tempfile.mkdtemp(prefix="lsp_thyrename_")
+    try:
+        body = "\nval x = 1\n"
+        uri = f"file://{d}/fooScript.sml"
+        c = Client(d, args=["--dbg"])
+        try:
+            _init(c, d, timeout=30)
+            _did_open(c, uri, "Theory foo" + body)
+            assert_true(c.wait_for_method("$/compileCompleted", 60),
+                        "first compileCompleted")
+            v1 = _diag_count(c, uri)
+            assert_eq(len(v1), 0, f"a clean file compiles clean ({v1!r})")
+
+            # Away (which is also a file-name mismatch, so this pass is
+            # expected to carry exactly that one diagnostic) ...
+            idx = c.total_msgs()
+            _did_change_full(c, uri, "Theory bar" + body, 2)
+            assert_true(c.wait_for_method("$/compileCompleted", 60, idx),
+                        "compileCompleted after renaming away")
+
+            # ... and back.
+            idx = c.total_msgs()
+            _did_change_full(c, uri, "Theory foo" + body, 3)
+            assert_true(c.wait_for_method("$/compileCompleted", 60, idx),
+                        "compileCompleted after renaming back")
+            v3 = _diag_count(c, uri, ver=3)
+            assert_eq(len(v3), 0,
+                      f"the original name compiles clean again ({v3!r})")
+
+            # Nothing may have been written: an editing session is not a
+            # build.  `.hol/objs/` is where HFS_NameMunge puts these.
+            written = sorted(f for _, _, fs in os.walk(d) for f in fs
+                             if f.startswith(("fooTheory", "barTheory")))
+            assert_eq(written, [], "no theory products written")
+        finally:
+            c.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_theory_name_must_match_file_name():
+    """A script's file name is the authority on its theory name:
+    Holmake derives the products it demands from the file, so
+    `fooScript.sml` must yield `fooTheory.*` whatever the header says.
+    Before this was checked at parse time the only symptom was a build
+    failing later with `Couldn't find required output file`, and the
+    editor said nothing at all.
+
+    Warning, not Error: the header recompiles on every keystroke, so a
+    name part-way through being typed disagrees at each one."""
+    d = tempfile.mkdtemp(prefix="lsp_thyname_")
+    try:
+        uri = f"file://{d}/fooScript.sml"
+        c = Client(d, args=["--dbg"])
+        try:
+            _init(c, d, timeout=30)
+            _did_open(c, uri, "Theory bar\nval x = 1\n")
+            assert_true(c.wait_for_method("$/compileCompleted", 60),
+                        "compileCompleted")
+            diags = _diag_count(c, uri)
+            hits = [dg for dg in diags
+                    if "does not match file" in dg.get("message", "")]
+            assert_eq(len(hits), 1, f"one mismatch diagnostic ({diags!r})")
+            assert_eq(len(diags), 1, f"and nothing else ({diags!r})")
+            assert_eq(hits[0].get("severity"), 2, "reported as a Warning")
+            assert_eq(hits[0]["range"]["start"]["line"], 0,
+                      "anchored to the header line")
+            assert_contains(hits[0]["message"], "fooScript.sml",
+                            "the message names the file")
+            assert_contains(hits[0]["message"], "bar",
+                            "the message names the theory")
+        finally:
+            c.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+# ------------------------------------------------------------------
+# $/eval
+# ------------------------------------------------------------------
+
+# Three declarations with a snapshot boundary between each, so a
+# cursor in the middle has one of them behind it and one ahead.
+_EVAL_CTX_SRC = ("Theory evalctx[bare]\n"      # line 0
+                 "Ancestors bool\n"            # line 1
+                 "Libs HolKernel boolLib Parse\n"
+                 "\n"
+                 "val above = 42;\n"           # line 4
+                 "\n"
+                 "val middle = 1;\n"           # line 6
+                 "\n"
+                 "val below = 99;\n")          # line 8
+
+# Between `above' and `middle': the first is behind the cursor, the
+# other two are ahead of it.
+_EVAL_CURSOR = (6, 0)
+
+
+def _eval(c, rid, uri, code, pos=None, timeout=30):
+    """`$/eval' in its simplest mode: batch reports, no holdep preload
+    (the snippets here have no `open' to resolve, and a preload would
+    be one more thing between the request and what it is testing)."""
+    params = {"uri": uri, "code": code, "incr": 0, "holdep": 0}
+    if pos is not None:
+        params["position"] = {"line": pos[0], "character": pos[1]}
+    return _request(c, rid, "$/eval", params, timeout)
+
+
+def _eval_text(reply):
+    """Every report body and message in an `$/eval' reply, run
+    together.  The tests below ask what the evaluation said, not which
+    report kind it arrived in."""
+    out = []
+    for r in ((reply or {}).get("result") or []):
+        for k in ("body", "msg"):
+            if k in r:
+                out.append(r[k])
+    return "".join(out)
+
+
+def _eval_stream(c, rid, uri, code, pos=None, timeout=30):
+    """`$/eval' in streaming mode, gathering the `$/eval/1' reports it
+    sends.  The reply itself is `null' and arrives at once, so what
+    there is to wait for is the `compileCompleted' report that ends
+    the run."""
+    since = c.total_msgs()
+    params = {"uri": uri, "code": code, "incr": 2, "holdep": 0}
+    if pos is not None:
+        params["position"] = {"line": pos[0], "character": pos[1]}
+    _send_request(c, rid, "$/eval", params)
+
+    def done(cl):
+        msgs, _ = cl.messages_since(since)
+        out = [(m.get("params") or {}).get("out") or {} for m in msgs
+               if m.get("method") == "$/eval/1"
+               and (m.get("params") or {}).get("id") == rid]
+        if any(r.get("kind") == "compileCompleted" for r in out):
+            return out
+        return None
+    return c.wait_until(done, timeout) or []
+
+
+def test_eval_streams_whole_lines():
+    """A streamed `$/eval' reports whole lines.
+
+    Poly's pretty printer calls the output function once per item --
+    "val", " ", "it", " ", "=", ... -- and the stream used to forward
+    each of those as its own report.  Both shipped clients append a
+    line per report, so `val it = 39: int' reached their transcripts
+    as ten lines, two of them a lone space.  The batch modes never had
+    this: `mergeInto' coalesces their reports already, and the stream
+    was the one place with nothing to coalesce into."""
+    d = tempfile.mkdtemp(prefix="lsp_evalline_")
+    try:
+        with open(os.path.join(d, "Holmakefile"), "w") as f:
+            f.write(f"HOLHEAP = {HOL_STATE0}\n")
+        uri = f"file://{d}/evalctxScript.sml"
+        c = Client(d)
+        try:
+            _init(c, d, timeout=60)
+            _did_open(c, uri, _EVAL_CTX_SRC, 1)
+            assert_true(c.wait_for_method("$/compileCompleted", 60),
+                        "compileCompleted")
+
+            out = _eval_stream(c, 730, uri, "3 * 13;", _EVAL_CURSOR)
+            bodies = [r.get("body") or "" for r in out
+                      if r.get("kind") == "toplevelOut"]
+            assert_true(bodies, f"the eval said something ({out!r})")
+
+            # The value and its type on one line, not a line each.
+            joined = "".join(bodies)
+            said = [l for l in joined.split("\n") if "39" in l]
+            assert_eq(len(said), 1, f"the value is on one line ({joined!r})")
+            assert_true("val it" in said[0] and "int" in said[0],
+                        f"with its name and its type ({said[0]!r})")
+
+            # Not merely few enough to look right: a report that is a
+            # break on its own is the shape the clients cannot render,
+            # whatever else arrives with it.
+            assert_true(all(b.strip() for b in bodies),
+                        f"no report is a bare break ({bodies!r})")
+            assert_true(all(b.endswith("\n") for b in bodies[:-1]),
+                        f"every report but the last ends its line "
+                        f"({bodies!r})")
+        finally:
+            c.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_eval_runs_in_the_context_at_the_cursor():
+    """`$/eval' evaluates where the cursor is, not where the compile
+    stopped.
+
+    A file's declarations run in order, so a name is in scope from the
+    point the pass reached it.  With the cursor between `above' and
+    `middle', the first must be visible and the other two must not --
+    and the negative half is the half that matters: evaluating at the
+    end of the file would answer `above' correctly too, and silently
+    put every later declaration in scope with it."""
+    d = tempfile.mkdtemp(prefix="lsp_evalctx_")
+    try:
+        with open(os.path.join(d, "Holmakefile"), "w") as f:
+            f.write(f"HOLHEAP = {HOL_STATE0}\n")
+        uri = f"file://{d}/evalctxScript.sml"
+        c = Client(d)
+        try:
+            _init(c, d, timeout=60)
+            _did_open(c, uri, _EVAL_CTX_SRC, 1)
+            assert_true(c.wait_for_method("$/compileCompleted", 60),
+                        "compileCompleted")
+            assert_eq(len(_diag_count(c, uri)), 0, "the file itself is fine")
+
+            got = _eval_text(_eval(c, 700, uri, "above;", _EVAL_CURSOR))
+            assert_true("42" in got,
+                        f"a declaration above the cursor is in scope ({got!r})")
+
+            got = _eval_text(_eval(c, 701, uri, "below;", _EVAL_CURSOR))
+            assert_true("99" not in got,
+                        f"a declaration below the cursor is not ({got!r})")
+            assert_true("below" in got,
+                        f"and saying so names it ({got!r})")
+
+            # The end of the file is the other answer, and asking for it
+            # is how a client with no cursor asks.
+            got = _eval_text(_eval(c, 702, uri, "below;"))
+            assert_true("99" in got,
+                        f"no position means after the last dec ({got!r})")
+        finally:
+            c.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_eval_bindings_outlive_the_request():
+    """What one `$/eval' binds, the next one can use.  A REPL whose
+    `val x = ...' is gone by the next request is not a REPL.
+
+    The bindings are kept against the snapshot they were made over,
+    and dropped anywhere else: a value built against one `Context'
+    must not be installed over another, a `thm' whose theory a rewind
+    has taken back being the case that argument is about.  So the
+    second half of this asks at a different position and expects the
+    binding to be gone rather than wrong."""
+    d = tempfile.mkdtemp(prefix="lsp_evalkeep_")
+    try:
+        with open(os.path.join(d, "Holmakefile"), "w") as f:
+            f.write(f"HOLHEAP = {HOL_STATE0}\n")
+        uri = f"file://{d}/evalctxScript.sml"
+        c = Client(d)
+        try:
+            _init(c, d, timeout=60)
+            _did_open(c, uri, _EVAL_CTX_SRC, 1)
+            assert_true(c.wait_for_method("$/compileCompleted", 60),
+                        "compileCompleted")
+
+            _eval(c, 710, uri, "val stashed = above + 1;", _EVAL_CURSOR)
+            got = _eval_text(_eval(c, 711, uri, "stashed;", _EVAL_CURSOR))
+            assert_true("43" in got,
+                        f"the previous eval's binding is still there "
+                        f"({got!r})")
+
+            got = _eval_text(_eval(c, 712, uri, "stashed;"))
+            assert_true("43" not in got,
+                        f"but not over a different snapshot ({got!r})")
+        finally:
+            c.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_eval_does_not_disturb_the_next_compile():
+    """`$/eval' used to run in the shared process state with no
+    snapshot bracket, which `Manual/Developers/lsp-server.md' recorded
+    as a caveat: it could perturb the file's compiles.  It now takes
+    the state the way a walk does and puts back what it found, so an
+    eval between two passes leaves the second one's diagnostics
+    exactly as they would have been without it.
+
+    The eval below is one that would be noticed if it leaked: it binds
+    a name the file also binds, at a different type."""
+    d = tempfile.mkdtemp(prefix="lsp_evalclean_")
+    try:
+        with open(os.path.join(d, "Holmakefile"), "w") as f:
+            f.write(f"HOLHEAP = {HOL_STATE0}\n")
+        uri = f"file://{d}/evalctxScript.sml"
+        c = Client(d)
+        try:
+            _init(c, d, timeout=60)
+            _did_open(c, uri, _EVAL_CTX_SRC, 1)
+            assert_true(c.wait_for_method("$/compileCompleted", 60),
+                        "compileCompleted")
+            assert_eq(len(_diag_count(c, uri)), 0, "clean to start with")
+
+            _eval(c, 720, uri, 'val above = "not an int";', _EVAL_CURSOR)
+
+            since = c.total_msgs()
+            edited = _EVAL_CTX_SRC + "\nval after = above + 1;\n"
+            _did_change_full(c, uri, edited, 2)
+            assert_true(c.wait_for_method("$/compileCompleted", 60, since),
+                        "recompiled")
+            assert_eq(len(_diag_count(c, uri)), 0,
+                      "the eval's shadowing binding did not reach the "
+                      "compile")
+        finally:
+            c.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 TESTS = [
     ("interrupted_passes_do_not_leave_stale_proofs",
                           test_interrupted_passes_do_not_leave_stale_proofs),
@@ -9461,6 +10148,8 @@ TESTS = [
                             test_walk_and_compile_do_not_share_the_context),
     ("undo_to_compiled_text_keeps_the_tail",
                                  test_undo_to_compiled_text_keeps_the_tail),
+    ("theory_rename_and_back",       test_theory_rename_and_back),
+    ("theory_name_must_match_file",  test_theory_name_must_match_file_name),
     ("smoke_handshake",              test_smoke_handshake),
     ("edit_across_multibyte",        test_edit_across_multibyte_char),
     ("small_clean_file",             test_small_clean_file),
@@ -9474,6 +10163,10 @@ TESTS = [
                                      test_deps_blocked_clears_on_header_edit),
     ("deps_body_reference_does_not_block",
                                      test_deps_body_reference_does_not_block),
+    ("open_substructure_not_blocked",
+                                     test_open_substructure_not_blocked),
+    ("open_missing_module_still_blocks",
+                                     test_open_missing_module_still_blocks),
     ("position_encoding_utf8_when_offered",
                                      test_position_encoding_utf8_when_offered),
     ("position_encoding_utf16_when_utf8_not_offered",
@@ -9503,6 +10196,8 @@ TESTS = [
     ("integer_first_compile",        test_integer_first_compile),
     ("full_replace_resumes_from_the_common_prefix",
                                      test_full_replace_resumes_from_the_common_prefix),
+    ("close_and_reopen_keeps_ancestors_loaded",
+                                 test_close_and_reopen_keeps_ancestors_loaded),
     ("integer_recompile_blank",      test_integer_recompile_blank_lines),
     ("integer_recompile_type_error", test_integer_recompile_with_type_error),
     ("integer_didChange_interrupts",
@@ -9739,6 +10434,10 @@ TESTS = [
      test_a_name_that_occurs_once_never_gets_an_ordinal),
     ("a_rebound_name_gets_its_own_entry",
      test_a_rebound_name_gets_its_own_entry),
+    ("a_deleted_proof_leaves_the_tally",
+     test_a_deleted_proof_leaves_the_tally),
+    ("the_census_names_proofs_not_verdicts",
+     test_the_census_names_proofs_not_verdicts),
     ("an_edit_above_a_proof_keeps_one_entry",
      test_an_edit_above_a_proof_keeps_one_entry),
     ("a_reused_proof_reports_where_it_moved_to",
@@ -9769,6 +10468,8 @@ TESTS = [
      test_a_script_level_simp_reads_the_pinned_simpset),
     ("check_proofs_enabled_during_a_compile",
      test_check_proofs_enabled_during_a_compile),
+    ("a_module_the_file_defines_is_not_preloaded",
+     test_a_module_the_file_defines_is_not_preloaded),
     ("goalState_select_then_completes",
      test_goalState_select_then_completes),
     ("a_typo_in_a_tactic_leaves_the_next_edit_on_the_fast_path",
@@ -9809,6 +10510,13 @@ TESTS = [
      test_an_edit_during_a_commit_is_not_lost),
     ("a_theorem_without_proof_keeps_the_file_compiling",
      test_a_theorem_without_proof_keeps_the_file_compiling),
+    ("eval_streams_whole_lines", test_eval_streams_whole_lines),
+    ("eval_runs_in_the_context_at_the_cursor",
+     test_eval_runs_in_the_context_at_the_cursor),
+    ("eval_bindings_outlive_the_request",
+     test_eval_bindings_outlive_the_request),
+    ("eval_does_not_disturb_the_next_compile",
+     test_eval_does_not_disturb_the_next_compile),
 ]
 
 

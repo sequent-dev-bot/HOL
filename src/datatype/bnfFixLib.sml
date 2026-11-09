@@ -38,12 +38,9 @@ fun asBuilt (nms : names) =
    list -> 'b list` — which is the first names its own arguments leave
    free, in the order the arguments come. *)
 fun conventional avoid =
-    let fun go [] = Type.gen_tyvar ()
-          | go (c::cs) = let val v = mk_vartype c
-                         in if Lib.mem v avoid then go cs else v end
-    in
-      go ["'a", "'b", "'c", "'d", "'e", "'f", "'g", "'h"]
-    end
+    mk_vartype
+      (Lexis.gen_variant Lexis.tyvar_vary
+         (List.mapPartial (Lib.total dest_vartype) avoid) "'a")
 fun renameTyvars (nms : names) tyvars =
     let
       val wrote = asSpecWrote nms
@@ -1277,16 +1274,19 @@ fun defineConstructors (nms : names) cspecs bnf (fix:fixpoint) : constructors =
                                  RAND_CONV (renameConj cs)
         (* The answer type is a type variable of the construction's
            choosing, and what reads the axiom expects the one a datatype
-           axiom conventionally has: the first of 'b, 'c, ... the type's
+           axiom conventionally has: the first of 'a, 'b, ... the type's
            own arguments leave free.  ACCEPT_TAC and the like match up to
-           the names of type variables, so this is not cosmetic. *)
+           the names of type variables, so this is not cosmetic.  A type
+           with no arguments leaves 'a free and so is answered in 'a, as
+           num and the enumerations are; a type over 'a is answered in
+           'b, as before. *)
         val answerTy =
             let val avoid = Type.type_vars (functorAt bnf newty)
                 fun go [] = cty
                   | go (c::rest) = let val v = mk_vartype c
                                    in if Lib.mem v avoid then go rest else v end
             in
-              go ["'b", "'c", "'d", "'e", "'f", "'g"]
+              go ["'a", "'b", "'c", "'d", "'e", "'f", "'g"]
             end
         val named = if answerTy = cty then Lib.I
                     else INST_TYPE [cty |-> answerTy]
@@ -2218,10 +2218,17 @@ fun constructorEqns (cs : constructors) (res : fixpoint_bnf) =
           REWRITE_RULE (folds @ tgtfolds)
             (unfold boolSimps.bool_ss shapeRWs
                     (SPECL (fvars @ [injOf def]) (#map_thm res)))
+      (* a copy whose functor is a bare parameter has (=) for its set
+         function, so its equation's whole right-hand side is `(=) a`,
+         which is {a}; only that side, and only at its top, since `(=) a`
+         is also the head of any equation *)
+      val tidy =
+          CONV_RULE
+            (RAND_CONV (TRY_CONV (REWR_CONV bnfFixBNFTheory.EQUAL_SING)))
       fun setEqn i def =
           REWRITE_RULE folds
-            (unfold (set_ss()) setRWs
-                    (SPEC (injOf def) (List.nth (#set_thms res, i))))
+            (tidy (unfold (set_ss()) setRWs
+                          (SPEC (injOf def) (List.nth (#set_thms res, i)))))
     in
       {map_eqns = LIST_CONJ (List.map mapEqn defs),
        set_eqns = List.tabulate
@@ -4170,9 +4177,17 @@ fun defineSize {tyname, sizes = sizenames, mapIDs} axiom =
           end
       val clauses =
           list_mk_conj (List.map (clauseOf 0) (strip_conj body))
+      (* The equation the recursion gives is a step on the way to the
+         tidied one saved below, which is what the entry holds, what
+         the auto-termination prover is used to, and what anyone
+         citing a type's size means.  Nothing wants the raw form, so
+         its binding is temporary: it does not reach the exported
+         theory, and -- a temporary binding being passed over by
+         new_specification's attribute handling -- it does not claim
+         the size constant's userdef either. *)
       val {definition = def, unique = uq} =
-          defineRecursion {name = tyname ^ "_size_def", axiom = ax,
-                           def = clauses}
+          defineRecursion {name = Theory.temp_binding (tyname ^ "_size_def"),
+                           axiom = ax, def = clauses}
       (* what the entry keeps is the constant the definition made, not
          the variable the clauses were written with *)
       val consts =
@@ -4226,6 +4241,17 @@ fun defineSize {tyname, sizes = sizenames, mapIDs} axiom =
           in
             LIST_CONJ (List.map reshape (CONJUNCTS specd))
           end
+      (* What the entry holds, what the theory binds, and what the
+         userdef query answers with are now all the same equation. *)
+      val _ = save_thm (tyname ^ "_size_def[userdef]", perClause)
+      (* The equation still defines the size constant, so it stays one
+         of the segment's definitions, as the one the recursion gave
+         was: `definition "<ty>_size_def"` is how a development asks
+         for it, and saving a theorem would have made that ask fail. *)
+      val _ = Theory.upd_binding (tyname ^ "_size_def")
+                (fn {private, loc, ...} =>
+                    {private = private, loc = loc,
+                     class = DB_dtype.Def})
     in
       SOME {sizes = List.map constFor sizes, definition = perClause,
             unique = uq}
@@ -4242,22 +4268,26 @@ fun defineSize {tyname, sizes = sizenames, mapIDs} axiom =
     have to be connected, and as a *termination* simplification: TFL's
     prover keeps its own set and does not read the ambient one.
 
-    No induction is needed.  `\x. T_size (\x. x) (TMAP f x)` satisfies
-    the very clauses the size was defined by — the constructor case by
-    the map equation, the size equation and the component's own
-    composition law — so the axiom's uniqueness says it *is* the size at
-    those functions.
+    It is proved by the type's own induction principle: at each
+    constructor both sides reduce to the same normal form once the map
+    equation, the size equation and the component's own composition law
+    have said what they do there, with the induction hypothesis standing
+    for the recursive arguments.
    ---------------------------------------------------------------------- *)
 
-fun sizeMapLemma {unique, sizedef, mapeqn, sizes} =
+fun sizeMapLemma {induction, sizedef, mapeqn, sizes} =
     let
-      val (uvars, ubody) = strip_forall (concl unique)
-      val (params, hvar) =
-          (List.take (uvars, length uvars - 1), List.last uvars)
       (* the map, at the numbers the sizes give *)
       val mapapp = lhs (#2 (strip_forall (hd (strip_conj (concl mapeqn)))))
       val (mtm, margs) = strip_comb mapapp
       val mfs = List.take (margs, length margs - 1)
+      (* one measure per argument the map moves, which is what the
+         identity instance reads the size of the map at *)
+      val params =
+          Lib.mapi (fn i => fn f =>
+                       mk_var ("f" ^ Int.toString i,
+                               #1 (dom_rng (type_of f)) --> numSyntax.num))
+                   mfs
       val theta = List.map (fn f => #2 (dom_rng (type_of f)) |->
                                     numSyntax.num)
                            mfs
@@ -4282,25 +4312,19 @@ fun sizeMapLemma {unique, sizedef, mapeqn, sizes} =
           in
             Term.inst (match_type (type_of sizetm) wanted) sizetm
           end
-      val S = mk_abs (x, list_mk_comb (sizeAtNum,
-                                       idfns @ [mk_comb (mapAt, x)]))
-      (* what it has to satisfy is the clause set the size was defined
-         by, and both sides of each clause reach the same normal form *)
-      val spec = SPECL (gs @ [S]) unique
-      val (ant, _) = dest_imp (concl spec)
-      val rws = [mapeqn, SPEC_ALL sizedef, combinTheory.o_DEF,
-                 combinTheory.I_THM]
-      fun proveClause cl =
-          let val (vs, eq) = strip_forall cl
-          in
-            GENL vs (normEqWith rws (lhs eq, rhs eq))
-          end
-      val clauses = LIST_CONJ (List.map proveClause (strip_conj ant))
-      val isSize = MP spec clauses
-      val y = mk_var ("y", type_of x)
+      (* the measures stay free while the induction runs, and are
+         quantified once it has *)
+      val goal =
+          mk_forall
+            (x, mk_eq (list_mk_comb (sizeAtNum, idfns @ [mk_comb (mapAt, x)]),
+                       mk_comb (list_mk_comb (sizetm, gs), x)))
+      val rws = normRWs @ [mapeqn, SPEC_ALL sizedef, combinTheory.o_DEF,
+                           combinTheory.I_THM]
     in
-      GENL (gs @ [y])
-           (CONV_RULE (LAND_CONV BETA_CONV) (AP_THM isSize y))
+      GENL gs (TAC_PROOF (([], goal),
+                          HO_MATCH_MP_TAC induction THEN
+                          REPEAT CONJ_TAC THEN
+                          simpLib.ASM_SIMP_TAC (set_ss()) rws))
     end
 
 
@@ -4324,8 +4348,8 @@ fun sizeMapLemma {unique, sizedef, mapeqn, sizes} =
 fun typeBaseInfo {axiom, induction, case_defs, rewrites, names, mapIDs} =
     let
       val names : names list = names
-      (* TypeBase reads the existence half; the size's own lemma wants
-         the uniqueness, so an axiom that carries it is welcome here *)
+      (* TypeBase reads the existence half, so an axiom that carries
+         its uniqueness as well is welcome here *)
       val (fvars, body) = strip_forall (concl axiom)
       val existence = if is_exists1 body then
                         GENL fvars (EXISTENCE (SPECL fvars axiom))
@@ -4348,14 +4372,13 @@ fun typeBaseInfo {axiom, induction, case_defs, rewrites, names, mapIDs} =
                                mapIDs = mapIDs}
                               axiom of
                   NONE => NONE
-                | SOME {sizes, definition, unique} =>
-                  SOME (sizes, definition, unique,
-                        TypeBasePure.ty_name_of ti)
+                | SOME {sizes, definition, ...} =>
+                  SOME (sizes, definition, TypeBasePure.ty_name_of ti)
       (* and what a termination proof over this type needs to know
          about its size, proved and exported where the size is made *)
       val _ =
           case sized of
-              SOME (szs, def, SOME uq, (_, tyname)) =>
+              SOME (szs, def, (_, tyname)) =>
               let
                 fun aboutTy th =
                     let val l = lhs (#2 (strip_forall
@@ -4368,18 +4391,25 @@ fun typeBaseInfo {axiom, induction, case_defs, rewrites, names, mapIDs} =
                     NONE => ()
                   | SOME mapeqn =>
                     let val nm = tyname ^ "_size_MAP"
-                        val lem = sizeMapLemma {unique = uq, sizedef = def,
-                                                mapeqn = mapeqn, sizes = szs}
                     in
-                      ignore (save_thm (nm, lem))
-                    ; TotalDefn.export_termsimp nm
+                      (* a type the law cannot be proved of keeps its
+                         entry; what it loses is the law *)
+                      case Lib.total
+                             (fn () =>
+                                 sizeMapLemma {induction = induction,
+                                               sizedef = def,
+                                               mapeqn = mapeqn,
+                                               sizes = szs}) () of
+                          NONE => ()
+                        | SOME lem => (ignore (save_thm (nm, lem))
+                                     ; TotalDefn.export_termsimp nm)
                     end
               end
             | _ => ()
       fun withSize (i, tyi) =
           case sized of
               NONE => tyi
-            | SOME (szs, def, _, orig) =>
+            | SOME (szs, def, orig) =>
               let val {convs, rewrs} = TypeBasePure.simpls_of tyi
               in
                 (* put_size adds the equation to the entry's
