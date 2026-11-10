@@ -118,6 +118,11 @@ CPC higher-order `(_ f x)` applications are accepted recursively in proof
 conclusions and arguments, including congruence sources. Indexed sort markers,
 literals and operator heads retain their SMT-LIB interpretation.
 
+CPC `quant-dt-split` rewrites a universal datatype quantifier into a
+conjunction of constructor cases. Replay proves the certificate's equality
+using the datatype's TypeBase exhaustiveness theorem and universal
+specialization, preserving the remaining binders and constructor fields.
+
 CPC `@const` sort operands use the sort dictionary, including source datatypes
 and proof-local declared sorts. Purification equalities involving these fresh
 constants remain exact proof obligations across scope pops. Replay instantiates

@@ -1795,6 +1795,7 @@ struct
     mk_rule ProofRule ("ite_elim1", "ite_elim1"),
     mk_rule ProofRule ("ite_elim2", "ite_elim2"),
     mk_rule ProofRule ("quant-unused-vars", "quant_unused_vars"),
+    mk_rule ProofRule ("quant-dt-split", "quant_dt_split"),
     mk_rule ProofRule ("quant-miniscope-and", "quant_rewrite"),
     mk_rule ProofRule ("quant-miniscope-or", "quant_rewrite"),
     mk_rule ProofRule ("quant-var-elim-eq", "quant_rewrite"),

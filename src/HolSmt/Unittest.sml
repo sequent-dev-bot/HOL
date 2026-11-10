@@ -11599,6 +11599,58 @@ in
   check_oracle_tags "nested CPC datatype tester replay" theorem
 end
 
+fun cpc_quant_dt_split_replay_success () =
+let
+  val option_target =
+    ``(!x:int option. P x) = (P NONE /\ !y. P (SOME y))``
+  val option_prefix =
+    "(define @x () (@var \"x\" Option_Int)) \
+    \(define @y () (@var \"y\" Int)) \
+    \(define @q () (forall (@list @x) (select v0 @x))) "
+  val option_right =
+    "(and (select v0 ctor_Option_Int_NONE) \
+    \(forall (@list @y) (select v0 (ctor_Option_Int_SOME @y))))"
+  fun replay goal prefix right =
+    let
+      val (translation, _) =
+        SmtLib.goal_to_SmtLib_translation NONE ([], goal)
+      val proof = CPC_ProofParser.parse_stream_with_version
+        (SmtLib.parser_dicts_for_translation translation) "1.3.4"
+        (TextIO.openString ("(" ^ prefix ^
+          "(define @r () " ^ right ^ ") \
+          \(step @p :rule quant-dt-split :args ((= @q @r))))"))
+    in
+      CPC_ProofReplay.replay_root_for_test proof
+    end
+  fun check goal prefix right =
+    let val theorem = replay goal prefix right in
+      assert (Thm.concl theorem ~~ goal,
+        "quantified datatype split changed the certificate equality");
+      assert (List.null (Thm.hyp theorem),
+        "quantified datatype split retained hypotheses");
+      check_oracle_tags "quantified datatype split" theorem
+    end
+in
+  check option_target option_prefix option_right;
+  check
+    ``(!x:bool+int. !z:int. P x z) =
+      ((!z b. P (INL b) z) /\ (!z i. P (INR i) z))``
+    ("(define @x () (@var \"x\" Sum_Bool_Int)) \
+     \(define @z () (@var \"z\" Int)) \
+     \(define @b () (@var \"b\" Bool)) \
+     \(define @i () (@var \"i\" Int)) \
+     \(define @q () (forall (@list @x @z) \
+     \(select (select v0 @x) @z))) ")
+    ("(and (forall (@list @z @b) \
+     \(select (select v0 (ctor_Sum_Bool_Int_INL @b)) @z)) \
+     \(forall (@list @z @i) \
+     \(select (select v0 (ctor_Sum_Bool_Int_INR @i)) @z)))");
+  assert ((ignore (replay option_target option_prefix
+      "(select v0 ctor_Option_Int_NONE)"); false)
+    handle Feedback.HOL_ERR _ => true,
+    "quantified datatype split accepted a missing constructor branch")
+end
+
 fun cpc_proof_parser_define_and_optional_conclusion_success () =
 let
   val proof = parse_cpc_proof_string
@@ -28925,6 +28977,8 @@ let
       cpc_proof_parser_parameterized_datatype_tester_success),
     ("cpc_proof_replay_nested_datatype_tester_success",
       cpc_proof_replay_nested_datatype_tester_success),
+    ("cpc_quant_dt_split_replay_success",
+      cpc_quant_dt_split_replay_success),
     ("cpc_proof_parser_ascribed_seq_empty_success",
       cpc_proof_parser_ascribed_seq_empty_success),
     ("cpc_proof_parser_ascribed_bag_empty_success",
