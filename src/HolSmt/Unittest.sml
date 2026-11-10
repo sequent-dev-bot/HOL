@@ -7468,6 +7468,47 @@ in
      ("shared result", shared_result)]
 end
 
+fun smtlib_marked_update_translation_success () =
+let
+  val marked =
+    ([], ``f (s:bool set) /\ T IN s /\ f (\x:bool. x) ==>
+       f ((T =+ T) s)``)
+  val congruence =
+    ([], ``(s:bool set) = t /\ f s /\ f (\x:bool. x) /\
+       f ((T =+ T) s) ==> f ((T =+ T) t)``)
+  val function =
+    ([], ``(i:int) = j /\ f (\x:int. x) /\
+       g ((i =+ (e:int)) a) ==> g ((j =+ e) a)``)
+  fun check mode array goal =
+    let
+      val goal = case mode of
+          NONE => goal
+        | SOME checked => Lib.fst
+            (SolverSpec.simplify (SmtLib.CVC_SIMP_TAC checked) goal)
+      val (_, strings) = CVC.goal_to_SmtLib_translation goal
+      val text = String.concat strings
+    in
+      assert (if array then
+          contains "(Array Bool Bool)" text andalso
+          contains "(store " text andalso
+          not (contains "(-> Bool Bool)" text)
+        else
+          contains "(-> Int Int)" text andalso
+          contains "(lambda " text andalso contains "(ite " text andalso
+          not (contains "(store " text),
+        "UPDATE lost its selected Array or function carrier:\n" ^ text);
+      ignore (SmtLib_Parser.typecheck_script_string_with_options
+        {dict_logic = NONE, solver = SOME "cvc5",
+         elaborate_datatypes = false} text)
+    end
+in
+  List.app (fn mode => check mode true marked) [NONE, SOME false];
+  List.app (fn mode => check mode true congruence)
+    [NONE, SOME false, SOME true];
+  List.app (fn mode => check mode false function)
+    [NONE, SOME false, SOME true]
+end
+
 fun smtlib_native_set_translation_success () =
 let
   fun text_of result = String.concat (Lib.snd result)
@@ -28621,6 +28662,8 @@ let
       smtlib_native_set_translation_success),
     ("smtlib_cvc5_array_set_sorts_success",
       smtlib_cvc5_array_set_sorts_success),
+    ("smtlib_marked_update_translation_success",
+      smtlib_marked_update_translation_success),
     ("smtlib_translation_context_isolation_success",
       smtlib_translation_context_isolation_success),
     ("smtlib_native_bag_translation_success",

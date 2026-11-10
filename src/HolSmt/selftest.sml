@@ -355,6 +355,13 @@ in
        (P : (int -> bool) -> bool) (if p then q.smt_set else {})``,
       [thm_CVC, thm_CVCp_ho]),
 
+    (* Shared set arguments mark UPDATE as an Array.  Set equality keeps
+       that marker in checked mode; membership is expanded there. *)
+    (``f (s:bool set) /\ T IN s /\ f (\x:bool. x) ==>
+       f ((T =+ T) s)``, [thm_CVC]),
+    (``(s:bool set) = t /\ f s /\ f (\x:bool. x) /\
+       f ((T =+ T) s) ==> f ((T =+ T) t)``, [thm_CVC, thm_CVCp_ho]),
+
     (``F``, [sat_CVC, sat_YO, sat_Z3, sat_Z3p, sat_CVCp]),
     (``p = (p:bool)``, [thm_AUTO, thm_CVC, thm_YO, thm_Z3, thm_Z3p, thm_CVCp]),
     (``p ==> p``, [thm_AUTO, thm_CVC, thm_YO, thm_Z3, thm_Z3p, thm_CVCp]),
