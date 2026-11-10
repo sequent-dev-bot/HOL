@@ -66,6 +66,9 @@ sig
  (* accessing and manipulating theory information for types *)
  val prim_new_type : {Thy:string, Tyop:string} -> int -> unit
  val prim_delete_type : {Thy:string, Tyop:string} -> unit
+ (* prim_new_type for a theory read from disk (KernelSig.insert_sealed_type);
+    returns whether the type operator got the canonical epoch *)
+ val prim_load_type : {Thy:string, Tyop:string} -> int -> bool
  val thy_types : string -> (string * int) list
  val del_segment : string -> unit
  val uptodate_type : hol_type -> bool
