@@ -228,6 +228,39 @@ val empty_varset = HOLset.empty var_compare
 
 fun fast_term_eq (t1:term) (t2:term) = Portable.pointer_eq (t1,t2)
 
+(* beta_conv and subst share work through a per-call Memo table, so a term
+   that is a DAG (a node reachable along several paths) costs one visit
+   per node rather than one per path, and they return a node as it is
+   when nothing below it changed.  A Clos is identified by its
+   environment and body, since the shell push_clos makes from it is fresh
+   on each call; like the stock functions, they always expand a Clos, so
+   no Clos is left in a result. *)
+local
+  open Memo
+  fun hash d tm =
+      case tm of
+        Fv(s, _) => string_hash s
+      | Bv i => Word.fromInt i
+      | Const(id, _) => id_hash id
+      | Comb(f, x) =>
+          if d = 0 then 0w1 else mix (mix (0w2, hash (d-1) f), hash (d-1) x)
+      | Abs(_, b) => if d = 0 then 0w3 else mix (0w4, hash (d-1) b)
+      | Clos(_, b) => hash d b
+  fun same (Clos(e1, b1), Clos(e2, b2)) =
+        Portable.pointer_eq (e1, e2) andalso Portable.pointer_eq (b1, b2)
+    | same (t1, t2) = Portable.pointer_eq (t1, t2)
+in
+fun term_table () = new (hash 3) same
+fun term_depth_table () =
+    new (fn (tm, i) => mix (hash 3 tm, Word.fromInt i))
+        (fn ((t1, i1), (t2, i2)) => i1 = i2 andalso same (t1, t2))
+end
+
+fun interior (Comb _) = true
+  | interior (Abs _) = true
+  | interior (Clos _) = true
+  | interior _ = false
+
 fun compare (t1,t2) =
     if fast_term_eq t1 t2 then EQUAL else
     case (t1,t2) of
@@ -552,15 +585,44 @@ end;
  *        Beta-reduction. Non-renaming.                                      *
  *---------------------------------------------------------------------------*)
 
+fun rebuild_comb (tm, f0, x0) (f, x) =
+    if fast_term_eq f f0 andalso fast_term_eq x x0 then tm else Comb(f, x)
+fun rebuild_abs (tm, b0) (v, b) = if fast_term_eq b b0 then tm else Abs(v, b)
+
+(* Apply sub to the children of a Comb, Abs or Clos *)
+fun descend sub (tm as Comb(f, x)) = rebuild_comb (tm, f, x) (sub f, sub x)
+  | descend sub (tm as Abs(v, b)) = rebuild_abs (tm, b) (v, sub b)
+  | descend sub (tm as Clos _) = descend sub (push_clos tm)
+  | descend _ tm = tm
+
+(* beta_conv, subst and inst first walk a term plainly, counting interior
+   nodes, and walk it again memoised once the count passes Memo.budget_size
+   (see Memo in Type_dtype). *)
+fun memo_beta (Body, Rand) =
+     let val table = term_depth_table ()
+         fun subs (tm as Bv j, i) = if i=j then Rand else tm
+           | subs (key as (tm, _)) =
+               if interior tm then Memo.memo table key (fn () => down key)
+               else tm
+         and down (tm as Abs(v,Body), i) =
+               rebuild_abs (tm, Body) (v, subs(Body,i+1))
+           | down (tm as Clos _, i) = down (push_clos tm, i)
+           | down (tm, i) = descend (fn t => subs(t,i)) tm
+     in
+       subs (Body,0)
+     end
+
 fun beta_conv (Comb(Abs(_,Body), Bv 0)) = Body
   | beta_conv (Comb(Abs(_,Body), Rand)) =
-     let fun subs((tm as Bv j),i)     = if i=j then Rand else tm
-           | subs(Comb(Rator,Rand),i) = Comb(subs(Rator,i),subs(Rand,i))
-           | subs(Abs(v,Body),i)      = Abs(v,subs(Body,i+1))
+     let val left = Memo.budget ()
+         fun subs((tm as Bv j),i)     = if i=j then Rand else tm
+           | subs(Comb(Rator,Rand),i) =
+               (Memo.tick left; Comb(subs(Rator,i),subs(Rand,i)))
+           | subs(Abs(v,Body),i)      = (Memo.tick left; Abs(v,subs(Body,i+1)))
            | subs (tm as Clos _,i)    = subs(push_clos tm,i)
            | subs (tm,_) = tm
      in
-       subs (Body,0)
+       subs (Body,0) handle Memo.OverBudget => memo_beta (Body, Rand)
      end
   | beta_conv (Comb(x as Clos _, Rand)) = beta_conv (Comb(push_clos x, Rand))
   | beta_conv (x as Clos _) = beta_conv (push_clos x)
@@ -633,20 +695,47 @@ fun subst [] = I
         (* the map is keyed modulo alpha, so it is smaller than the
            theta-list exactly when a redex is repeated *)
         val _ = numItems fmap = length theta orelse raise dupERR theta
-        fun vsubs (v as Fv _) = (case peek(fmap,v) of NONE => v | SOME y => y)
-          | vsubs (Comb(Rator,Rand)) = Comb(vsubs Rator, vsubs Rand)
-          | vsubs (Abs(Bvar,Body)) = Abs(Bvar,vsubs Body)
-          | vsubs (c as Clos _) = vsubs (push_clos c)
-          | vsubs tm = tm
+        fun memo_vsubs tm =
+          let val table = term_table ()
+              fun sub (v as Fv _) =
+                    (case peek(fmap,v) of NONE => v | SOME y => y)
+                | sub tm =
+                    if interior tm
+                    then Memo.memo table tm (fn () => descend sub tm)
+                    else tm
+          in sub tm end
+        fun memo_subs tm =
+          let val table = term_table ()
+              fun lookup tm =
+                  case peek(fmap,tm) of SOME residue => residue
+                                      | NONE => descend sub tm
+              and sub tm =
+                    if interior tm then Memo.memo table tm (fn () => lookup tm)
+                    else lookup tm
+          in sub tm end
+        fun vsubs tm =
+          let val left = Memo.budget ()
+              fun sub (v as Fv _) =
+                    (case peek(fmap,v) of NONE => v | SOME y => y)
+                | sub (Comb(Rator,Rand)) =
+                    (Memo.tick left; Comb(sub Rator, sub Rand))
+                | sub (Abs(Bvar,Body)) = (Memo.tick left; Abs(Bvar,sub Body))
+                | sub (c as Clos _) = sub (push_clos c)
+                | sub tm = tm
+          in sub tm handle Memo.OverBudget => memo_vsubs tm end
         fun subs tm =
-          case peek(fmap,tm)
-           of SOME residue => residue
-            | NONE =>
-              (case tm
-                of Comb(Rator,Rand) => Comb(subs Rator, subs Rand)
-                 | Abs(Bvar,Body) => Abs(Bvar,subs Body)
-                 | Clos _        => subs(push_clos tm)
-                 |   _         => tm)
+          let val left = Memo.budget ()
+              fun sub tm =
+                case peek(fmap,tm)
+                 of SOME residue => residue
+                  | NONE =>
+                    (case tm
+                      of Comb(Rator,Rand) =>
+                           (Memo.tick left; Comb(sub Rator, sub Rand))
+                       | Abs(Bvar,Body) => (Memo.tick left; Abs(Bvar,sub Body))
+                       | Clos _        => sub(push_clos tm)
+                       |   _         => tm)
+          in sub tm handle Memo.OverBudget => memo_subs tm end
     in
       (if b then vsubs else subs)
     end
