@@ -3104,14 +3104,15 @@ local
               ([index], [arg]) =>
                 let
                   val index_matches_constructor =
-                    Term.same_const index constructor
+                    Term.aconv index constructor
                     handle Feedback.HOL_ERR _ => false
                   val index_name =
                     Lib.fst (Term.dest_var index)
                     handle Feedback.HOL_ERR _ =>
                       #Name (Term.dest_thy_const index)
                 in
-                  if index_name = cname orelse index_matches_constructor then
+                  if same_type (Term.type_of arg, ty) andalso
+                     (index_name = cname orelse index_matches_constructor) then
                     datatype_tester_term ty constructor arg
                   else
                     SmtLib_Theories.decline

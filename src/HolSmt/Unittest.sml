@@ -10916,6 +10916,83 @@ in
     (SmtLib.parser_dicts_for_translation translation) "1.3.4" instream
 end
 
+fun smtlib_datatype_tester_instantiations_success () =
+let
+  fun check goal cases =
+    let
+      val (translation, _) =
+        SmtLib.goal_to_SmtLib_translation NONE ([], goal)
+      val (tydict, tmdict) =
+        SmtLib.parser_dicts_for_translation translation
+      val (_, emitted) = SmtLib.translation_dicts translation
+      val reversed = Redblackmap.insert
+        (tmdict, "is", List.rev (Redblackmap.find (tmdict, "is")))
+      fun tester constructor variable =
+        "((_ is " ^ constructor ^ ") " ^
+        Redblackmap.find (emitted, (variable, 0)) ^ ")"
+      fun check_dict tmdict =
+        let
+          val dicts = (tydict, tmdict)
+          fun accepted (constructor, variable, expected) =
+            let
+              val text = tester constructor variable
+              val parsed = parse_roundtrip_term
+                "monomorphic datatype tester" text dicts
+              val cpc = CPC_ProofParser.parse_stream_with_version
+                dicts "1.3.4" (TextIO.openString
+                  ("((step @r :rule refl :args (" ^ text ^ ")))"))
+              val z3 = parse_z3_proof_string_with_dicts dicts "4.15.3"
+                ("((proof (refl (= " ^ text ^ " " ^ text ^ "))))")
+              val theorems =
+                [CPC_ProofReplay.replay_root_for_test cpc,
+                 Z3_ProofReplay.replay_root_for_test z3]
+              fun checked theorem =
+                (assert_no_hyps ("monomorphic datatype tester", theorem);
+                 assert_concl_alpha ("monomorphic datatype tester", theorem,
+                   boolSyntax.mk_eq (expected, expected));
+                 check_oracle_tags "monomorphic datatype tester" theorem)
+            in
+              assert (Term.aconv parsed expected,
+                "datatype tester selected another type instantiation");
+              List.app checked theorems
+            end
+          fun rejected (constructor, _, _) =
+            let val (_, wrong_variable, _) = hd cases in
+              expect_hol_error_contains "mismatched datatype tester"
+                "tester constructor mismatch"
+                (fn () => ignore (SmtLib_Parser.parse_term
+                  (Library.get_token
+                    (string_get_char (tester constructor wrong_variable)))
+                  dicts))
+            end
+        in
+          List.app accepted cases;
+          List.app rejected (List.drop (cases, 2))
+        end
+    in
+      List.app check_dict [tmdict, reversed]
+    end
+in
+  check ``(x:int option) = z /\ (y:bool option) = w``
+    [("ctor_Option_Int_NONE", ``x:int option``,
+      ``case (x:int option) of NONE => T | SOME a => F``),
+     ("ctor_Option_Int_SOME", ``x:int option``,
+      ``case (x:int option) of NONE => F | SOME a => T``),
+     ("ctor_Option_Bool_NONE", ``y:bool option``,
+      ``case (y:bool option) of NONE => T | SOME a => F``),
+     ("ctor_Option_Bool_SOME", ``y:bool option``,
+      ``case (y:bool option) of NONE => F | SOME a => T``)];
+  check ``(xs:int list) = ys /\ (bs:bool list) = cs``
+    [("ctor_List_Int_NIL", ``xs:int list``,
+      ``case (xs:int list) of [] => T | h::t => F``),
+     ("ctor_List_Int_CONS", ``xs:int list``,
+      ``case (xs:int list) of [] => F | h::t => T``),
+     ("ctor_List_Bool_NIL", ``bs:bool list``,
+      ``case (bs:bool list) of [] => T | h::t => F``),
+     ("ctor_List_Bool_CONS", ``bs:bool list``,
+      ``case (bs:bool list) of [] => F | h::t => T``)]
+end
+
 fun cpc_quoted_declaration_identity_success () =
 let
   val names = ["quoted_user"]
@@ -28824,6 +28901,8 @@ let
       smtlib_native_datatype_uf_success),
     ("smtlib_native_datatype_equality_builtin_success",
       smtlib_native_datatype_equality_builtin_success),
+    ("smtlib_datatype_tester_instantiations_success",
+      smtlib_datatype_tester_instantiations_success),
     ("smtlib_datatype_parser_dict_success",
       smtlib_datatype_parser_dict_success),
     ("smtlib_preprocessing_and_gap_diagnostics",
