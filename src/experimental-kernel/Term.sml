@@ -850,16 +850,16 @@ end (* local *)
 local
   exception NeedToRename of term
   structure Map = struct open Redblackmap end
-  fun inst1 theta ctxt t =
+  fun inst1 (fns as (ty_sub, polymorphic)) ctxt t =
       case t of
         (c as Const(_, GRND _)) => raise Unchanged
       | (c as Const(r, POLY ty)) =>
-          (case ty_sub theta ty of
+          (case ty_sub ty of
               SAME => raise Unchanged
             | DIFF ty' =>
-              Const(r, if Type.polymorphic ty' then POLY ty' else GRND ty'))
+              Const(r, if polymorphic ty' then POLY ty' else GRND ty'))
       | (v as Var(name,ty0)) => let
-          val (changed, nv) = case ty_sub theta ty0 of
+          val (changed, nv) = case ty_sub ty0 of
                                   SAME => (false, v)
                                 | DIFF ty => (true, Var(name, ty))
         in
@@ -870,15 +870,15 @@ local
           if changed then nv
           else raise Unchanged
         end
-      | App p => qcomb App (inst1 theta ctxt) p
+      | App p => qcomb App (inst1 fns ctxt) p
       | Abs (v as Var(n, ty), body) => let
         in
           let
-            val (changed, v') = case ty_sub theta ty of
+            val (changed, v') = case ty_sub ty of
                                   SAME => (false, v)
                                 | DIFF ty' => (true, Var(n, ty'))
           in let
-               val body' = SOME (inst1 theta (Map.insert(ctxt,v',ty)) body)
+               val body' = SOME (inst1 fns (Map.insert(ctxt,v',ty)) body)
                            handle Unchanged => NONE
              in
                case (body', changed) of
@@ -891,7 +891,7 @@ local
                          val new_name = set_name_variant free_names n
                          val newv = Var(new_name, ty)
                        in
-                         inst1 theta ctxt (Abs(newv, subst [v |-> newv] body))
+                         inst1 fns ctxt (Abs(newv, subst [v |-> newv] body))
                        end
                      else raise e
           end
@@ -899,8 +899,47 @@ local
       | Abs _ => raise Fail "inst1: catastrophic invariant failure!"
 in
 
-fun inst [] tm = tm
-  | inst theta tm = inst1 theta (Map.mkDict compare) tm handle Unchanged => tm
+(* [mk_inst theta] is inst theta.  Above the first binder it walks each
+   term plainly first, and one past Memo's budget again with one memo, for
+   types and for the terms there, made then and kept for the terms it is
+   applied to after, as INST_TYPE does across a theorem's hypotheses and
+   conclusion.  Below a binder a variable's renaming depends on the
+   binders in scope, so inst1 works there as before. *)
+fun mk_inst [] = I
+  | mk_inst theta =
+    let val empty = Map.mkDict compare
+        fun memo_top () =
+            let val fns = (mk_ty_sub theta, mk_polymorphic ())
+                val table = Memo.new (term_hash 3) Portable.pointer_eq
+                fun top tm =
+                    case tm of
+                      App p =>
+                        (case Memo.memo table tm
+                                (fn () => SOME (qcomb App top p)
+                                          handle Unchanged => NONE) of
+                             SOME t => t
+                           | NONE => raise Unchanged)
+                    | _ => inst1 fns empty tm
+            in
+              top
+            end
+        val memo = ref NONE
+        fun memoised tm =
+            case !memo of
+              SOME f => f tm
+            | NONE => let val f = memo_top () in memo := SOME f; f tm end
+        val fns = (ty_sub theta, Type.polymorphic)
+        fun plain tm =
+            let val left = Memo.budget ()
+                fun top (App p) = (Memo.tick left; qcomb App top p)
+                  | top tm = inst1 fns empty tm
+            in top tm end
+    in
+      fn tm => (plain tm handle Memo.OverBudget => memoised tm)
+               handle Unchanged => tm
+    end
+
+fun inst theta tm = mk_inst theta tm
 end
 
 val inst : (hol_type, hol_type) Lib.subst -> term -> term = inst

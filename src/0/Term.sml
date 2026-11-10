@@ -745,23 +745,71 @@ end
  *     Instantiate type variables in a term                                  *
  *---------------------------------------------------------------------------*)
 
-fun inst [] tm = tm
-  | inst theta tm =
-    let fun
+(* [memo_inst theta] instantiates with one memo, for types and for terms,
+   shared by every term it is applied to.  With bound variables as Bv
+   indices, a node's instance does not depend on where it occurs. *)
+fun memo_inst theta =
+    let val ty_sub = mk_ty_sub theta
+        val polymorphic = mk_polymorphic ()
+        val table = term_table ()
+        fun
        inst1 (bv as Bv _) = bv
      | inst1 (c as Const(_, GRND _)) = c
      | inst1 (c as Const(r, POLY Ty)) =
-       (case Type.ty_sub theta Ty
+       (case ty_sub Ty
          of SAME => c
-          | DIFF ty => Const(r,(if Type.polymorphic ty then POLY else GRND)ty))
+          | DIFF ty => Const(r,(if polymorphic ty then POLY else GRND)ty))
      | inst1 (v as Fv(Name,Ty)) =
-         (case Type.ty_sub theta Ty of SAME => v | DIFF ty => Fv(Name, ty))
-     | inst1 (Comb(Rator,Rand)) = Comb(inst1 Rator, inst1 Rand)
-     | inst1 (Abs(Bvar,Body))   = Abs(inst1 Bvar, inst1 Body)
-     | inst1 (t as Clos _)      = inst1(push_clos t)
+         (case ty_sub Ty of SAME => v | DIFF ty => Fv(Name, ty))
+     | inst1 tm = Memo.memo table tm (fn () => node tm)
+     and node (tm as Comb(Rator,Rand)) =
+         rebuild_comb (tm, Rator, Rand) (inst1 Rator, inst1 Rand)
+     | node (tm as Abs(Bvar,Body)) =
+         let val v = inst1 Bvar and b = inst1 Body
+         in if fast_term_eq v Bvar andalso fast_term_eq b Body then tm
+            else Abs(v, b)
+         end
+     | node t = node (push_clos t)
     in
-      inst1 tm
+      inst1
+    end
+
+(* [mk_inst theta] is inst theta.  It walks each term plainly first, and
+   one past Memo's budget again with memo_inst theta, made then and kept
+   for the terms it is applied to after, as INST_TYPE does across a
+   theorem's hypotheses and conclusion. *)
+fun mk_inst [] = I
+  | mk_inst theta =
+    let val memo = ref NONE
+        fun memoised tm =
+            case !memo of
+              SOME f => f tm
+            | NONE => let val f = memo_inst theta in memo := SOME f; f tm end
+        fun plain tm =
+          let val left = Memo.budget ()
+              fun
+             inst1 (bv as Bv _) = bv
+           | inst1 (c as Const(_, GRND _)) = c
+           | inst1 (c as Const(r, POLY Ty)) =
+             (case Type.ty_sub theta Ty
+               of SAME => c
+                | DIFF ty =>
+                    Const(r,(if Type.polymorphic ty then POLY else GRND)ty))
+           | inst1 (v as Fv(Name,Ty)) =
+               (case Type.ty_sub theta Ty
+                 of SAME => v
+                  | DIFF ty => Fv(Name, ty))
+           | inst1 (Comb(Rator,Rand)) =
+               (Memo.tick left; Comb(inst1 Rator, inst1 Rand))
+           | inst1 (Abs(Bvar,Body)) =
+               (Memo.tick left; Abs(inst1 Bvar, inst1 Body))
+           | inst1 (t as Clos _)      = inst1(push_clos t)
+          in inst1 tm end
+    in
+      fn tm => plain tm handle Memo.OverBudget => memoised tm
     end;
+
+fun inst theta tm = mk_inst theta tm;
 
 fun dest_comb (Comb r) = r
   | dest_comb (t as Clos _) = dest_comb (push_clos t)
