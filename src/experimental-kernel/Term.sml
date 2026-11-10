@@ -339,6 +339,18 @@ end
 
 fun safe_delete(s, i) = HOLset.delete(s, i) handle HOLset.NotFound => s
 
+(* A sample of a term's top levels, for Memo buckets *)
+fun term_hash d tm =
+    case tm of
+      Var(s, _) => Memo.string_hash s
+    | Const(id, _) => Memo.id_hash id
+    | App(f, x) =>
+        if d = 0 then 0w1
+        else Memo.mix (Memo.mix (0w2, term_hash (d-1) f), term_hash (d-1) x)
+    | Abs(v, b) =>
+        if d = 0 then 0w3
+        else Memo.mix (Memo.mix (0w4, term_hash (d-1) v), term_hash (d-1) b)
+
 datatype FVaction = FVTM of term | DELvar of term
 
 fun FVL0 tlist acc =
@@ -356,7 +368,22 @@ fun FVL0 tlist acc =
       end
     | DELvar v :: ts => FVL0 ts (safe_delete(acc, v))
 
-fun FVL tlist = FVL0 (map FVTM tlist)
+(* Above the first binder, every variable met is free, so a node met
+   again along another path adds nothing and the walk visits each node
+   there once; below it, FVL0 tracks the binders as before. *)
+fun FVL tlist A =
+    let
+      val table = Memo.new (term_hash 3) Portable.pointer_eq
+      val acc = ref A
+      fun walk tm =
+          case tm of
+            Var _ => acc := HOLset.add(!acc, tm)
+          | Const _ => ()
+          | App(f, x) => Memo.memo table tm (fn () => (walk f; walk x))
+          | Abs _ => acc := FVL0 [FVTM tm] (!acc)
+    in
+      List.app walk tlist; !acc
+    end
 
 
 local
@@ -493,39 +520,15 @@ val emptysubst = Map.mkDict compare
 
 val empty_stringset = HOLset.empty String.compare
 
-(* A sample of a term's top levels, for Memo buckets *)
-fun term_hash d tm =
-    case tm of
-      Var(s, _) => Memo.string_hash s
-    | Const(id, _) => Memo.id_hash id
-    | App(f, x) =>
-        if d = 0 then 0w1
-        else Memo.mix (Memo.mix (0w2, term_hash (d-1) f), term_hash (d-1) x)
-    | Abs(v, b) =>
-        if d = 0 then 0w3
-        else Memo.mix (Memo.mix (0w4, term_hash (d-1) v), term_hash (d-1) b)
-
 (* it's hard to calculate free names simply by traversing a term because
    of the situation where \x:ty1. body has x:ty1 and x:ty2 as free variables
    in body.  So, though it may be slightly less efficient, my solution here
    is to just calculate the free variables and then calculate the image of
-   this set under name extraction.  Above the first binder, though,
-   every variable is free, and a node met again along another path adds
-   nothing, so the walk visits each node there once (substitution asks
-   this of residues, which may share subterms). *)
-fun free_names t = let
+   this set under name extraction *)
+val free_names = let
   fun fold_name (v, acc) = HOLset.add(acc, #1 (dest_var v))
-  val names = ref empty_stringset
-  val table = Memo.new (term_hash 3) Portable.pointer_eq
-  fun walk tm =
-      case tm of
-        Var(n, _) => names := HOLset.add(!names, n)
-      | Const _ => ()
-      | App(f, x) => Memo.memo table tm (fn () => (walk f; walk x))
-      | Abs _ =>
-          names := HOLset.foldl fold_name (!names) (FVL [tm] empty_varset)
 in
-  walk t; !names
+  (fn t => HOLset.foldl fold_name empty_stringset (FVL [t] empty_varset))
 end
 
 (* jrh's caml light HOL Light code
