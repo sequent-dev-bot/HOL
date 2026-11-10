@@ -493,15 +493,39 @@ val emptysubst = Map.mkDict compare
 
 val empty_stringset = HOLset.empty String.compare
 
+(* A sample of a term's top levels, for Memo buckets *)
+fun term_hash d tm =
+    case tm of
+      Var(s, _) => Memo.string_hash s
+    | Const(id, _) => Memo.id_hash id
+    | App(f, x) =>
+        if d = 0 then 0w1
+        else Memo.mix (Memo.mix (0w2, term_hash (d-1) f), term_hash (d-1) x)
+    | Abs(v, b) =>
+        if d = 0 then 0w3
+        else Memo.mix (Memo.mix (0w4, term_hash (d-1) v), term_hash (d-1) b)
+
 (* it's hard to calculate free names simply by traversing a term because
    of the situation where \x:ty1. body has x:ty1 and x:ty2 as free variables
    in body.  So, though it may be slightly less efficient, my solution here
    is to just calculate the free variables and then calculate the image of
-   this set under name extraction *)
-val free_names = let
+   this set under name extraction.  Above the first binder, though,
+   every variable is free, and a node met again along another path adds
+   nothing, so the walk visits each node there once (substitution asks
+   this of residues, which may share subterms). *)
+fun free_names t = let
   fun fold_name (v, acc) = HOLset.add(acc, #1 (dest_var v))
+  val names = ref empty_stringset
+  val table = Memo.new (term_hash 3) Portable.pointer_eq
+  fun walk tm =
+      case tm of
+        Var(n, _) => names := HOLset.add(!names, n)
+      | Const _ => ()
+      | App(f, x) => Memo.memo table tm (fn () => (walk f; walk x))
+      | Abs _ =>
+          names := HOLset.foldl fold_name (!names) (FVL [tm] empty_varset)
 in
-  (fn t => HOLset.foldl fold_name empty_stringset (FVL [t] empty_varset))
+  walk t; !names
 end
 
 (* jrh's caml light HOL Light code
@@ -683,19 +707,34 @@ local
             Abs (v, augvsubst theta' body_fvi body)
         end
 
+  (* Nodes above the first binder are memoised for the call, so a shared
+     node is substituted once; NONE records that it was Unchanged.  Below
+     a binder, augvsubst may rename, and is left as it was. *)
   fun vsubst theta tm =
-      case tm of
-        Var _ => (case peek(theta, tm) of NONE => raise Unchanged
-                                        | SOME (_, t) => t)
-      | Const _ => raise Unchanged
-      | App p  => qcomb App (vsubst theta) p
-      | Abs _ => let
-          val fvi = calculate_fvinfo (SOME theta) tm
-          val theta' = filtertheta theta (current fvi)
-        in
-          if numItems theta' = 0 then raise Unchanged
-          else augvsubst theta' fvi tm
-        end
+      let
+        val table = Memo.new (term_hash 3) Portable.pointer_eq
+        fun sub tm =
+            case tm of
+              Var _ => (case peek(theta, tm) of NONE => raise Unchanged
+                                              | SOME (_, t) => t)
+            | Const _ => raise Unchanged
+            | _ => (case Memo.memo table tm
+                           (fn () => SOME (node tm) handle Unchanged => NONE) of
+                        SOME t => t
+                      | NONE => raise Unchanged)
+        and node tm =
+            case tm of
+              App p => qcomb App sub p
+            | _ => let
+                val fvi = calculate_fvinfo (SOME theta) tm
+                val theta' = filtertheta theta (current fvi)
+              in
+                if numItems theta' = 0 then raise Unchanged
+                else augvsubst theta' fvi tm
+              end
+      in
+        sub tm
+      end
 
   fun ssubst theta t =
       (* only used to substitute in fresh variables (genvars), so no
