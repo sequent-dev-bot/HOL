@@ -8,6 +8,9 @@ local
 
   val ERR = Feedback.mk_HOL_ERR "CPC_ProofReplay"
 
+  val reglan_ty =
+    Type.mk_thy_type {Thy = "smtstring", Tyop = "reglan", Args = []}
+
   val rare_seq_contains_refl = Library.prove
     (``!(x:'a list). IS_SUBLIST x x``,
      Tactical.THEN
@@ -1001,7 +1004,7 @@ local
     | NONE =>
         let val argument = expect_one_arg "refl" args in
           if Type.compare
-              (Term.type_of argument, Term.type_of ``reglan_none``) = EQUAL
+              (Term.type_of argument, reglan_ty) = EQUAL
           then replay_reglan_refl argument
           else Thm.REFL argument
         end
@@ -3630,44 +3633,59 @@ local
                   (SmtResource.check_resource_goal "Set" "cardinality"
                      target;
                    Tactical.TAC_PROOF ((context, target), tactic))) ()
-            fun card_bound () =
-              case (name, args) of
-                ("sets-card-union", [left, right]) =>
-                  let
-                    val bound = numSyntax.mk_leq
-                      (pred_setSyntax.mk_card
-                         (pred_setSyntax.mk_inter (left, right)),
-                       numSyntax.mk_plus
-                         (pred_setSyntax.mk_card left,
-                          pred_setSyntax.mk_card right))
-                  in
-                    prove_tac context bound
-                      (bossLib.METIS_TAC
-                        [pred_setTheory.CARD_INTER_LESS_EQ,
-                         arithmeticTheory.LESS_EQ_ADD,
-                         arithmeticTheory.LESS_EQ_TRANS])
-                  end
-              | ("sets-card-minus", [left, right]) =>
-                  let
-                    val bound = numSyntax.mk_leq
-                      (pred_setSyntax.mk_card
-                         (pred_setSyntax.mk_inter (left, right)),
-                       pred_setSyntax.mk_card left)
-                  in
-                    prove_tac context bound
-                      (bossLib.ASM_SIMP_TAC (bossLib.srw_ss ())
-                        [pred_setTheory.CARD_INTER_LESS_EQ])
-                  end
+            val (left, right) =
+              case args of
+                [left, right] => (left, right)
               | _ => raise ERR name "wrong cardinality arguments"
-            val bound = card_bound ()
-            val context = Thm.concl bound :: context
-            val proof = prove_tac context target
+            val s = Term.genvar (Term.type_of left)
+            val t = Term.genvar (Term.type_of right)
+            val finite_sets =
+              if name = "sets-card-union" then [s, t] else [s]
+            val conditions = List.map pred_setSyntax.mk_finite finite_sets
+            val intersection = pred_setSyntax.mk_inter (s, t)
+            val bound_term = numSyntax.mk_leq
+              (pred_setSyntax.mk_card intersection,
+               if name = "sets-card-union" then
+                 numSyntax.mk_plus
+                   (pred_setSyntax.mk_card s, pred_setSyntax.mk_card t)
+               else pred_setSyntax.mk_card s)
+            val bound = prove_tac conditions bound_term
+              (bossLib.METIS_TAC
+                [pred_setTheory.CARD_INTER_LESS_EQ,
+                 arithmeticTheory.LESS_EQ_ADD,
+                 arithmeticTheory.LESS_EQ_TRANS])
+            val equation =
+              if name = "sets-card-union" then
+                boolSyntax.mk_eq (card (pred_setSyntax.mk_union (s, t)),
+                  intSyntax.mk_minus
+                    (intSyntax.mk_plus (card s, card t), card intersection))
+              else
+                boolSyntax.mk_eq (card (pred_setSyntax.mk_diff (s, t)),
+                  intSyntax.mk_minus (card s, card intersection))
+            (* Prove before instantiating: simplification of concrete sets
+               can otherwise hide CARD_DIFF_EQN and the subtraction bound. *)
+            val schematic = prove_tac (Thm.concl bound :: conditions) equation
               (bossLib.ASM_SIMP_TAC (bossLib.srw_ss ())
                 [pred_setTheory.CARD_UNION_EQN,
                  pred_setTheory.CARD_DIFF_EQN,
                  integerTheory.INT_OF_NUM_ADD,
                  integerTheory.INT_SUB])
-            val proof = Drule.PROVE_HYP bound proof
+            val substitution = [{redex = s, residue = left},
+                                {redex = t, residue = right}]
+            val instantiated = Thm.INST substitution
+              (Drule.PROVE_HYP bound schematic)
+            val finiteness = List.map
+              (fn condition => prove_tac context
+                (Term.subst substitution condition)
+                (bossLib.ASM_SIMP_TAC (bossLib.srw_ss ()) [])) conditions
+            val proof = List.foldl
+              (fn (finite, proved) => Drule.PROVE_HYP finite proved)
+              instantiated finiteness
+            val proof =
+              if Term.aconv (Thm.concl proof) target then proof
+              else Drule.PROVE_HYP proof
+                (prove_tac [Thm.concl proof] target
+                  (bossLib.ASM_SIMP_TAC (bossLib.srw_ss ()) []))
           in
             List.foldl (fn (premise, proved) => Drule.PROVE_HYP premise proved)
               proof prems
@@ -8510,12 +8528,71 @@ local
           val context =
             HOLset.listItems (#asserted_hyps state) @ #scope_hyps state @
             List.map Thm.concl prems
+          fun card_lower_bound () =
+            let
+              val (injected_card, lower) = intSyntax.dest_geq target
+              val number = intSyntax.dest_injected injected_card
+              val set = pred_setSyntax.dest_card number
+            in
+              if Term.aconv lower intSyntax.zero_tm then
+                let
+                  val n = Term.genvar numSyntax.num
+                  val proof = Tactical.TAC_PROOF
+                    (([], intSyntax.mk_geq
+                       (Term.mk_comb (intSyntax.int_injection, n), lower)),
+                     intLib.ARITH_TAC)
+                in Thm.INST [{redex = n, residue = number}] proof end
+              else
+                let
+                  val _ = Term.aconv lower intSyntax.one_tm orelse
+                    raise ERR "trust" "expected cardinality lower bound one"
+                  fun member_of_set tm =
+                    case Lib.total pred_setSyntax.dest_in tm of
+                      SOME (_, member_set) => Term.aconv member_set set
+                    | NONE => false
+                  val membership =
+                    case List.find member_of_set context of
+                      SOME tm => tm
+                    | NONE => raise ERR "trust" "missing Set membership premise"
+                  val (element, _) = pred_setSyntax.dest_in membership
+                  val finite = Tactical.TAC_PROOF
+                    ((context, pred_setSyntax.mk_finite set),
+                     bossLib.ASM_SIMP_TAC (bossLib.srw_ss ()) [])
+                  val s = Term.genvar (Term.type_of set)
+                  val x = Term.genvar (Term.type_of element)
+                  val member = pred_setSyntax.mk_in (x, s)
+                  val nonzero = boolSyntax.mk_neg
+                    (boolSyntax.mk_eq
+                      (pred_setSyntax.mk_card s, numSyntax.zero_tm))
+                  val nonzero_proof = Tactical.TAC_PROOF
+                    (([member, pred_setSyntax.mk_finite s], nonzero),
+                     bossLib.METIS_TAC
+                       [pred_setTheory.CARD_EQ_0,
+                        pred_setTheory.MEMBER_NOT_EMPTY])
+                  val positive = Tactical.TAC_PROOF
+                    (([nonzero], intSyntax.mk_geq
+                       (Term.mk_comb (intSyntax.int_injection,
+                          pred_setSyntax.mk_card s), intSyntax.one_tm)),
+                     intLib.ARITH_TAC)
+                  val instantiated = Thm.INST [{redex = s, residue = set},
+                       {redex = x, residue = element}]
+                    (Drule.PROVE_HYP nonzero_proof positive)
+                in
+                  Drule.PROVE_HYP finite instantiated
+                end
+            end
+          fun contextual () =
+            Tactical.TAC_PROOF ((context, target),
+              bossLib.ASM_SIMP_TAC (bossLib.srw_ss ()) [])
+            handle Feedback.HOL_ERR holerr =>
+              if SmtResource.is_resource_gate holerr then
+                raise Feedback.HOL_ERR holerr
+              else card_lower_bound ()
           val thm = SmtResource.with_resource_step_time "Set" "contextual"
             (fn () =>
               (List.app (SmtResource.check_resource_goal "Set" "contextual")
                  (target :: context);
-               Tactical.TAC_PROOF ((context, target),
-                 bossLib.ASM_SIMP_TAC (bossLib.srw_ss ()) []))) ()
+               contextual ())) ()
         in
           List.foldl (fn (premise, proved) => Drule.PROVE_HYP premise proved)
             thm prems
@@ -15645,8 +15722,6 @@ local
     SmtLib_Logics.parsedicts_of_logic "ALL"
   val rare_source_tmdict = Library.union_dict rare_source_base_tmdict
     SmtLib_Theories.CVC5_Seq.tmdict
-  val rare_source_reglan_ty =
-    Type.mk_thy_type {Thy = "smtstring", Tyop = "reglan", Args = []}
 
   fun rare_source_empty carrier =
     if is_smtstr_type (Term.type_of carrier) then
@@ -15680,7 +15755,7 @@ local
   fun rare_source_fixed_type source =
     case source of
       RareSourceString => SOME (Term.type_of ``SmtStr []``)
-    | RareSourceRegex => SOME (Term.type_of ``reglan_none``)
+    | RareSourceRegex => SOME (reglan_ty)
     | RareSourceInt => SOME intSyntax.int_ty
     | RareSourceSeq => NONE
     | RareSourceElement => NONE
@@ -15963,7 +16038,7 @@ local
             if List.length operands < 2 then raise ERR name
               "declarative equality requires at least two operands"
             else if Type.compare
-                (Term.type_of (List.hd operands), rare_source_reglan_ty) =
+                (Term.type_of (List.hd operands), reglan_ty) =
                 EQUAL then
               boolSyntax.list_mk_conj
                 (adjacent (fn left => fn right =>
@@ -18890,7 +18965,7 @@ local
                               replay_reglan_cong_from_source source prems
                             else if Type.compare
                               (Term.type_of source,
-                               Term.type_of ``reglan_none``) = EQUAL then
+                               reglan_ty) = EQUAL then
                               replay_reglan_producer_cong_from_source
                                 source prems
                             else
@@ -20064,7 +20139,7 @@ in
             | source_type RareSourceString =
                 Type.mk_thy_type
                   {Thy = "smtstring", Tyop = "smtstr", Args = []}
-            | source_type RareSourceRegex = Term.type_of ``reglan_none``
+            | source_type RareSourceRegex = reglan_ty
             | source_type RareSourceInt = intSyntax.int_ty
             | source_type RareSourceElement = intSyntax.int_ty
           fun argument (_, RareSourceIndex, _) =

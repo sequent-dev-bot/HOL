@@ -16162,6 +16162,113 @@ end
 (* The Set names are an explicit frozen registry, not a prefix catch-all.
    Exercise every recorded name through CPC's cvc5 dictionary and retain a
    separate loud-failure pin for future spellings. *)
+fun cpc_finite_literal_card_success () =
+let
+  val goals =
+    [``!(a:'a) b. CARD {a; b} = 2 <=> a <> b``,
+     ``!(a:'a) b c. CARD {a; b; c} = 3 <=>
+         a <> b /\ a <> c /\ b <> c``]
+  fun check_translation tm =
+    let
+      val (simplified, _) =
+        SolverSpec.simplify (SmtLib.CVC_SIMP_TAC true) ([], tm)
+      val (_, lines) = CVC.goal_to_SmtLib_translation simplified
+      val text = String.concat lines
+    in
+      assert (contains "set.card" text andalso
+          not (contains "(Array " text),
+        "checked CARD preprocessing lost the native finite Set encoding")
+    end
+  val _ = List.app check_translation goals
+  val (translation, _) = CVC.goal_to_SmtLib_translation
+    ([``FINITE ({}:int set)``], ``({}:int set) = {}``)
+  fun parse text = CPC_ProofParser.parse_stream_with_version
+    (SmtLib.parser_dicts_for_translation translation) "1.3.4"
+    (TextIO.openString text)
+  fun replay text = CPC_ProofReplay.replay_root_for_test (parse text)
+  val element = Term.mk_var ("card_element", Type.alpha)
+  val expected_refl = boolSyntax.mk_eq (element, element)
+  val (abstract_translation, _) =
+    CVC.goal_to_SmtLib_translation ([], expected_refl)
+  val saved_grammars = Parse.current_grammars ()
+  val abstract_refl = Portable.finally
+    (fn () => Parse.temp_set_grammars saved_grammars)
+    (fn () =>
+      (Parse.temp_set_grammars Parse.min_grammars;
+       CPC_ProofReplay.replay_root_for_test
+         (CPC_ProofParser.parse_stream_with_version
+           (SmtLib.parser_dicts_for_translation abstract_translation) "1.3.4"
+           (TextIO.openString
+             "((step @p :rule refl :args (v0)))")))) ()
+  val _ = assert (Term.aconv (Thm.concl abstract_refl) expected_refl,
+    "CPC reflexivity misclassified a polymorphic element as RegLan")
+  val packet = "(set.insert (@list 7 8) " ^
+    "(set.insert (@list 9) (set.singleton 10)))"
+  val packet_proof = replay ("((define @s () " ^ packet ^
+    ") (step @p :rule refl :args (@s)))")
+  val empty = pred_setSyntax.mk_empty intSyntax.int_ty
+  fun singleton element = pred_setSyntax.mk_insert (element, empty)
+  fun numeral n = intSyntax.term_of_int (Arbint.fromInt n)
+  fun card set = Term.mk_comb
+    (intSyntax.int_injection, pred_setSyntax.mk_card set)
+  val expected_set = List.foldr pred_setSyntax.mk_insert empty
+    (List.map numeral [7, 8, 9, 10])
+  val _ = assert (Term.aconv (Thm.concl packet_proof)
+      (boolSyntax.mk_eq (expected_set, expected_set)),
+    "nested CPC set.insert packet changed its element order or base set")
+  val union = replay
+    ("((step @p :rule sets-card-union " ^
+     ":args ((set.singleton 7) (set.singleton 8))))")
+  val minus = replay
+    ("((step @p :rule sets-card-minus " ^
+     ":args ((set.singleton 7) (set.singleton 8))))")
+  val nonnegative = replay
+    ("((step @p :rule trust :args " ^
+     "((>= (set.card (set.inter (set.singleton 7) " ^
+     "(set.singleton 8))) 0))))")
+  val positive = replay
+    ("((declare-const a Int) (declare-const b Int) " ^
+     "(define @s () (set.minus (set.singleton a) (set.singleton b))) " ^
+     "(assume @p1 (set.member a @s)) " ^
+     "(step @p2 :rule trust :premises (@p1) " ^
+     ":args ((>= (set.card @s) 1))))")
+  val left = singleton (numeral 7)
+  val right = singleton (numeral 8)
+  val intersection_card = card (pred_setSyntax.mk_inter (left, right))
+  val expected_union = boolSyntax.mk_eq
+    (card (pred_setSyntax.mk_union (left, right)),
+     intSyntax.mk_minus
+       (intSyntax.mk_plus (card left, card right), intersection_card))
+  val expected_minus = boolSyntax.mk_eq
+    (card (pred_setSyntax.mk_diff (left, right)),
+     intSyntax.mk_minus (card left, intersection_card))
+  val a = Term.mk_var ("a", intSyntax.int_ty)
+  val b = Term.mk_var ("b", intSyntax.int_ty)
+  val difference = pred_setSyntax.mk_diff (singleton a, singleton b)
+  val membership = pred_setSyntax.mk_in (a, difference)
+  val expected_positive = intSyntax.mk_geq (card difference, intSyntax.one_tm)
+  val _ = assert (Term.aconv (Thm.concl union) expected_union andalso
+      Term.aconv (Thm.concl minus) expected_minus andalso
+      Term.aconv (Thm.concl nonnegative)
+        (intSyntax.mk_geq (intersection_card, intSyntax.zero_tm)) andalso
+      Term.aconv (Thm.concl positive) expected_positive andalso
+      List.exists (Term.aconv membership) (Thm.hyp positive),
+    "literal Set cardinality replay changed the conclusion or membership: " ^
+      Library.term_to_string (Thm.concl union) ^ "; " ^
+      Library.term_to_string (Thm.concl minus) ^ "; " ^
+      Library.term_to_string (Thm.concl positive) ^ "; hypotheses: " ^
+      String.concatWith ", " (List.map Library.term_to_string
+        (Thm.hyp positive)))
+in
+  expect_hol_error_contains "empty insertion packet" "@list"
+    (fn () => ignore (parse
+      "((define @s () (set.insert (@list) (set.singleton 8))))"));
+  assert ((ignore (parse
+      "((define @s () (set.insert (@list true) (set.singleton 8))))");
+      false) handle Feedback.HOL_ERR _ => true,
+    "CPC insertion packet accepted an element with the wrong type")
+end
+
 fun cpc_proof_replay_set_rules_success () =
 let
   val (translation, _) = CVC.goal_to_SmtLib_translation
@@ -28756,6 +28863,7 @@ let
       cpc_proof_replay_boolean_rewrites_success),
     ("cpc_proof_replay_seq_rules_success",
       cpc_proof_replay_seq_rules_success),
+    ("cpc_finite_literal_card_success", cpc_finite_literal_card_success),
     ("cpc_proof_replay_set_rules_success",
       cpc_proof_replay_set_rules_success),
     ("cpc_proof_replay_bag_trust_success",

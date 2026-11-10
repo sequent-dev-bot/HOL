@@ -331,6 +331,9 @@ in
       [thm_Z3p_v4, thm_CVCp]),
     (``(x : int) IN (s UNION t) <=> x IN s \/ x IN t``,
       [thm_CVC, thm_CVCp]),
+    (``!(a:'a) b. CARD {a; b} = 2 <=> a <> b``, [thm_CVCp]),
+    (``!(a:'a) b c. CARD {a; b; c} = 3 <=>
+        a <> b /\ a <> c /\ b <> c``, [thm_CVCp]),
     (* Z3 proves this through an array lemma outside its checked Bag replay
        ladder; cvc5 supplies the native checked Bag certificate. *)
     (``BAG_IN (x : bool) (BAG_INSERT y EMPTY_BAG) <=> x = y``, [thm_CVCp]),

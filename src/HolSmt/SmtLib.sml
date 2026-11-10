@@ -7447,8 +7447,11 @@ in
         List.exists (fn subterm =>
           Option.isSome (Lib.total pred_setSyntax.dest_compl subterm))
           (Library.subterms tm)
+      fun needs_native_set tm =
+        has_complement tm orelse contains_set_card tm
     in
-      if List.exists has_complement (#1 g @ [#2 g]) then
+      (* Unfolding EMPTY destroys finite-literal recognition for CARD. *)
+      if List.exists needs_native_set (#1 g @ [#2 g]) then
         NATIVE_SET_SIMP_TAC g
       else
         Library.SET_SIMP_TAC g
