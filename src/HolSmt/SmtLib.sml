@@ -7406,13 +7406,20 @@ in
     MAP_EVERY (fn _ => cleanup_one) assumptions g
   end
 
-  (* Expand just an atom whose set operand is outside the printer's native
-     grammar.  Applying SET_SIMP_TAC to the entire goal would also erase an
-     unrelated UNION/INTER atom, defeating native-by-default emission. *)
-  fun set_atom_needs_predicate_expansion tm =
+  fun has_set_complement tm =
+    List.exists (fn subterm =>
+      Option.isSome (Lib.total pred_setSyntax.dest_compl subterm))
+      (Library.subterms tm)
+
+  (* Checked CARD needs its operands intact, while unrelated set atoms must
+     still lower to predicates. Native-by-default mode only lowers operands
+     outside the printer's native grammar. *)
+  fun set_atom_needs_predicate_expansion expand_native tm =
   let
     val (rator, rands) = boolSyntax.strip_comb tm
-    fun unsupported set = is_set_type set andalso not (native_set_term set)
+    fun unsupported set = is_set_type set andalso
+      (not (native_set_term set) orelse
+       (expand_native andalso not (has_set_complement tm)))
   in
     if same_const rator pred_setSyntax.in_tm then
       (case rands of [_, set] => unsupported set | _ => false)
@@ -7428,34 +7435,37 @@ in
       false
   end
 
-  fun native_set_preprocess_conv tm =
-    if set_atom_needs_predicate_expansion tm then
+  val card_operand_cong = Thm.REFL (pred_setSyntax.mk_card
+    (Term.mk_var ("card_set", pred_setSyntax.mk_set_type Type.alpha)))
+
+  fun native_set_preprocess_conv expand_native tm =
+    if set_atom_needs_predicate_expansion expand_native tm then
       simpLib.SIMP_CONV
         (simpLib.mk_simpset [pred_setSimps.SET_SPEC_ss])
-        [pred_setTheory.SPECIFICATION, pred_setTheory.GSPEC_ETA,
+        [simpLib.Cong card_operand_cong,
+         pred_setTheory.SPECIFICATION, pred_setTheory.GSPEC_ETA,
          pred_setTheory.EMPTY_DEF, pred_setTheory.UNIV_DEF,
          pred_setTheory.UNION_DEF, pred_setTheory.INTER_DEF] tm
     else
       raise Conv.UNCHANGED
 
   val NATIVE_SET_SIMP_TAC =
-    Tactic.CONV_TAC (Conv.TOP_DEPTH_CONV native_set_preprocess_conv)
+    Tactic.CONV_TAC
+      (Conv.TOP_DEPTH_CONV (native_set_preprocess_conv false))
 
-  fun CHECKED_SET_SIMP_TAC g =
-    let
-      fun has_complement tm =
-        List.exists (fn subterm =>
-          Option.isSome (Lib.total pred_setSyntax.dest_compl subterm))
-          (Library.subterms tm)
-      fun needs_native_set tm =
-        has_complement tm orelse contains_set_card tm
-    in
-      (* Unfolding EMPTY destroys finite-literal recognition for CARD. *)
-      if List.exists needs_native_set (#1 g @ [#2 g]) then
-        NATIVE_SET_SIMP_TAC g
-      else
-        Library.SET_SIMP_TAC g
-    end
+  fun CHECKED_SET_SIMP_TAC preserve_native_card g =
+    if preserve_native_card andalso
+        List.exists contains_set_card (#1 g @ [#2 g]) then
+      let val conv =
+        Conv.TOP_DEPTH_CONV (native_set_preprocess_conv true)
+      in
+        Tactical.THEN
+          (Tactic.RULE_ASSUM_TAC (Conv.CONV_RULE conv), Tactic.CONV_TAC conv) g
+      end
+    else if List.exists has_set_complement (#1 g @ [#2 g]) then
+      NATIVE_SET_SIMP_TAC g
+    else
+      Library.SET_SIMP_TAC g
 
   (* Preserve equality on native collections.  FUN_EQ_THM would turn it into
      a predicate equality before collection discovery can select Set or Bag. *)
@@ -7558,7 +7568,8 @@ in
        must retain complements: SET_SIMP_TAC lowers their membership to NOTIN,
        which does not have a native SMT Set translation. *)
     stage "set-simp"
-      (if simp_let then CHECKED_SET_SIMP_TAC else NATIVE_SET_SIMP_TAC) THEN
+      (if simp_let then CHECKED_SET_SIMP_TAC preserve_native_bags
+       else NATIVE_SET_SIMP_TAC) THEN
     Tactic.RULE_ASSUM_TAC
       (Conv.CONV_RULE (Conv.DEPTH_CONV INT_DIVIDES_LITERAL_MOD_CONV)) THEN
     Tactic.CONV_TAC (Conv.DEPTH_CONV INT_DIVIDES_LITERAL_MOD_CONV) THEN

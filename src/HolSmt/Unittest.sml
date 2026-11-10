@@ -16177,12 +16177,29 @@ let
         "checked CARD preprocessing lost the native finite Set encoding")
     end
   val _ = List.app check_translation goals
+  val ((_, z3_empty), _) = SolverSpec.simplify
+    (SmtLib.Z3_SIMP_TAC true)
+    ([], ``CARD ({}:int set) = CARD (\x:int. F)``)
+  val (z3_left, z3_right) = boolSyntax.dest_eq z3_empty
+  val _ = assert (Term.aconv z3_left z3_right,
+    "checked cvc5 CARD preservation changed Z3 set preprocessing")
+  val (mixed, _) = SolverSpec.simplify (SmtLib.CVC_SIMP_TAC true)
+    ([``FINITE (s:int set)``],
+     ``CARD (s:int set) < CARD s + 1 /\
+       ((x:int) IN (t UNION u) <=> x IN t \/ x IN u)``)
+  val (_, mixed_lines) = CVC.goal_to_SmtLib_translation mixed
+  val _ = assert (contains "set.card" (String.concat mixed_lines),
+    "unrelated non-finite set atoms disabled finite CARD translation")
   val (translation, _) = CVC.goal_to_SmtLib_translation
     ([``FINITE ({}:int set)``], ``({}:int set) = {}``)
   fun parse text = CPC_ProofParser.parse_stream_with_version
     (SmtLib.parser_dicts_for_translation translation) "1.3.4"
     (TextIO.openString text)
-  fun replay text = CPC_ProofReplay.replay_root_for_test (parse text)
+  fun replay text =
+    let val theorem = CPC_ProofReplay.replay_root_for_test (parse text) in
+      check_oracle_tags "finite literal CARD replay" theorem;
+      theorem
+    end
   val element = Term.mk_var ("card_element", Type.alpha)
   val expected_refl = boolSyntax.mk_eq (element, element)
   val (abstract_translation, _) =
@@ -16197,6 +16214,7 @@ let
            (SmtLib.parser_dicts_for_translation abstract_translation) "1.3.4"
            (TextIO.openString
              "((step @p :rule refl :args (v0)))")))) ()
+  val _ = check_oracle_tags "polymorphic CPC reflexivity" abstract_refl
   val _ = assert (Term.aconv (Thm.concl abstract_refl) expected_refl,
     "CPC reflexivity misclassified a polymorphic element as RegLan")
   val packet = "(set.insert (@list 7 8) " ^
