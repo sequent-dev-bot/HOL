@@ -84,8 +84,11 @@ fun note_load thyname (parents : (string * string) list) stamps_canonical =
 
 (* The rest of a load, once the theory's types and constants exist. *)
 fun bind_data ({thyname,strings,terms,theorems,thydata,...} : decoded) =
-    (DB.bindl thyname theorems;
-     app (temp_encoded_update (strings, terms) thyname) thydata;
+    (if Theory.load_skipped "D" then ()
+     else Theory.load_phase "D" (DB.bindl thyname) theorems;
+     if Theory.load_skipped "E" then ()
+     else Theory.load_phase "E"
+            (app (temp_encoded_update (strings, terms) thyname)) thydata;
      theorems)
 
 val capture = ref false
@@ -197,7 +200,7 @@ fun register_kernel hash ({thyname,parents,new_types,new_consts,...}
 
 (* Repeats load_thydata_from_dat's registration in the same order. *)
 fun register_decoded hash d =
-    (register_kernel hash d; ignore (bind_data d))
+    (Theory.load_phase "C" (register_kernel hash) d; ignore (bind_data d))
     handle Interrupt => raise Interrupt
          | e as TheoryReader _ => raise e
          | e => raise TheoryReader ("Exception raised: " ^

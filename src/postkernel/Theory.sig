@@ -162,6 +162,11 @@ sig
      the last thing done when they load.  This will in turn cause a
      TheoryDelta event to be sent to all registered listeners *)
   val load_complete : string -> unit
+  (* load profiling (instrumented bench build only) *)
+  val load_profiling : bool ref
+  val load_phase : string -> ('a -> 'b) -> 'a -> 'b
+  val load_skip : string list ref
+  val load_skipped : string -> bool
 
   (* True while load_complete is calling the TheoryLoaded listeners.
      Listeners use it to defer work nobody reads during a load. *)

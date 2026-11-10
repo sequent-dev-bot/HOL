@@ -1202,16 +1202,42 @@ end;
     "on load" stuff
    ---------------------------------------------------------------------- *)
 
+val load_profiling = ref false
+val load_skip : string list ref = ref []
+fun load_skipped nm = List.exists (fn s => s = nm) (!load_skip)
+fun load_phase nm f x =
+    if !load_profiling then Profile.profile ("phase:" ^ nm) f x else f x
+
+fun profiled_hooks td =
+    let
+      fun foldthis ((k,f), A) =
+          case Exn.capture (Profile.profile ("hook:" ^ k) f) td of
+              Exn.Res () => A
+            | Exn.Exn e => (k,f,e) :: A
+      fun error_report (s,_,e) =
+          Feedback.HOL_WARNING "Theory" "callhooks"
+            ("Hook " ^ s ^ " failed on event " ^ TheoryDelta.toString td ^
+             " with problem " ^ Feedback.exn_to_string e)
+    in
+      List.app error_report
+               (List.foldr foldthis [] (Listener.listeners delta_hook))
+    end
+
 (* per thread, so a thread that is not loading never defers *)
 val load_hooks_running : bool ThreadLocal.t = ThreadLocal.new ()
 fun in_load_hooks () = getOpt (ThreadLocal.get load_hooks_running, false)
 fun load_complete thyname =
     let val old = in_load_hooks ()
+        fun hooks td =
+            if load_skipped "F" then ()
+            else if !load_profiling then
+              Profile.profile "phase:F" profiled_hooks td
+            else call_hooks td
     in
       Thm.mark_sealed thyname;
       ThreadLocal.set (load_hooks_running, true);
       Portable.finally (fn () => ThreadLocal.set (load_hooks_running, old))
-        call_hooks (TheoryDelta.TheoryLoaded thyname)
+        hooks (TheoryDelta.TheoryLoaded thyname)
     end
 
 
