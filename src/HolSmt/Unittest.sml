@@ -16190,6 +16190,20 @@ let
   val (_, mixed_lines) = CVC.goal_to_SmtLib_translation mixed
   val _ = assert (contains "set.card" (String.concat mixed_lines),
     "unrelated non-finite set atoms disabled finite CARD translation")
+  val _ = List.app (fn goal =>
+    let
+      val (simplified, _) = SolverSpec.simplify (SmtLib.CVC_SIMP_TAC true)
+        ([``FINITE (s:int set)``], goal)
+      val (_, lines) = CVC.goal_to_SmtLib_translation simplified
+      val text = String.concat lines
+    in
+      assert (contains "set.card" text,
+        "partially finite set atom disabled finite CARD translation")
+    end)
+    [``CARD (s:int set) < CARD s + 1 /\
+       ((x:int) IN (s INTER t) <=> x IN s /\ x IN t)``,
+     ``CARD (s:int set) < CARD s + 1 /\
+       ((x:int) IN (s DIFF t) <=> x IN s /\ ~(x IN t))``]
   val (finite_equality, _) = SolverSpec.simplify (SmtLib.CVC_SIMP_TAC true)
     ([``FINITE (s:int set)``], ``CARD (s:int set) = 0 <=> s = {}``)
   val (_, finite_lines) = CVC.goal_to_SmtLib_translation finite_equality

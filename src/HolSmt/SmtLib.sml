@@ -7419,7 +7419,9 @@ in
     val (rator, rands) = boolSyntax.strip_comb tm
     fun unsupported set = is_set_type set andalso
       (not (native_set_term set) orelse
-       (expand_native andalso not (finite_set_term finite_terms set) andalso
+       (expand_native andalso
+        not (List.all (finite_set_term finite_terms)
+          (collect_native_set_terms set [set])) andalso
         not (has_set_complement tm)))
   in
     if same_const rator pred_setSyntax.in_tm then
