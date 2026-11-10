@@ -36,6 +36,10 @@ type ancestor_memo = string HOLset.set Symtab.table
 
 (* A parent list may name the theory itself (e.g., after set_parents
    [current_theory()]); that edge adds nothing to its ancestry *)
+val memo_sets = ref 0
+val memo_elems = ref 0
+fun memo_stats () = {sets = !memo_sets, elems = !memo_elems}
+
 fun proper_parents parents thy =
     List.filter (fn p => p <> thy) (parents {thyname = thy})
 
@@ -56,7 +60,12 @@ fun extend_memo parents (thy, memo) =
         if Thm.getCT() = SOME thy orelse
            not (List.all (Symtab.defined memo') ps)
         then memo'
-        else Symtab.update (thy, ancestor_set memo' thy ps) memo'
+        else
+          let val a = ancestor_set memo' thy ps
+          in memo_sets := !memo_sets + 1;
+             memo_elems := !memo_elems + HOLset.numItems a;
+             Symtab.update (thy, a) memo'
+          end
       end
 
 (* The ancestry of a theory not in the memo *)
@@ -110,7 +119,7 @@ fun fpluck _ [] = NONE
 fun merge_start (info : ('d,'v) info) thys =
     let
       val {parents,ancestors,...} = info
-      val ancs = ancestor_sets ancestors parents thys
+      val ancs = Theory.load_phase "anc" (ancestor_sets ancestors parents) thys
       (* drop the theories that are ancestors of others in the list *)
       fun redundant thy =
           List.exists (fn t => t <> thy andalso smem (ancs t) thy) thys
@@ -143,7 +152,7 @@ fun merge_from (info : ('d,'v) info) (v0, aset0, rest) : 'v =
             | Apply ds :: rest =>
               recurse (rev_itlist apply_delta ds A, aset) rest
     in
-      recurse (Susp.force v0, aset0) (map Visit rest)
+      Theory.load_phase "mfrom" (recurse (Susp.force v0, aset0)) (map Visit rest)
     end
 
 fun merge (info : ('d,'v) info) thys : 'v option =
