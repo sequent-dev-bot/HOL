@@ -16190,6 +16190,13 @@ let
   val (_, mixed_lines) = CVC.goal_to_SmtLib_translation mixed
   val _ = assert (contains "set.card" (String.concat mixed_lines),
     "unrelated non-finite set atoms disabled finite CARD translation")
+  val (finite_equality, _) = SolverSpec.simplify (SmtLib.CVC_SIMP_TAC true)
+    ([``FINITE (s:int set)``], ``CARD (s:int set) = 0 <=> s = {}``)
+  val (_, finite_lines) = CVC.goal_to_SmtLib_translation finite_equality
+  val finite_text = String.concat finite_lines
+  val _ = assert (contains "set.card" finite_text andalso
+      not (contains "(Array " finite_text),
+    "finite equality beside CARD lost its native Set operands")
   val (translation, _) = CVC.goal_to_SmtLib_translation
     ([``FINITE ({}:int set)``], ``({}:int set) = {}``)
   fun parse text = CPC_ProofParser.parse_stream_with_version

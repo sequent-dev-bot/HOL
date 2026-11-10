@@ -7411,15 +7411,16 @@ in
       Option.isSome (Lib.total pred_setSyntax.dest_compl subterm))
       (Library.subterms tm)
 
-  (* Checked CARD needs its operands intact, while unrelated set atoms must
-     still lower to predicates. Native-by-default mode only lowers operands
-     outside the printer's native grammar. *)
-  fun set_atom_needs_predicate_expansion expand_native tm =
+  (* Checked CARD keeps finite set atoms native, while unrelated non-finite
+     atoms still lower to predicates. Native-by-default mode only lowers
+     operands outside the printer's native grammar. *)
+  fun set_atom_needs_predicate_expansion expand_native finite_terms tm =
   let
     val (rator, rands) = boolSyntax.strip_comb tm
     fun unsupported set = is_set_type set andalso
       (not (native_set_term set) orelse
-       (expand_native andalso not (has_set_complement tm)))
+       (expand_native andalso not (finite_set_term finite_terms set) andalso
+        not (has_set_complement tm)))
   in
     if same_const rator pred_setSyntax.in_tm then
       (case rands of [_, set] => unsupported set | _ => false)
@@ -7438,8 +7439,8 @@ in
   val card_operand_cong = Thm.REFL (pred_setSyntax.mk_card
     (Term.mk_var ("card_set", pred_setSyntax.mk_set_type Type.alpha)))
 
-  fun native_set_preprocess_conv expand_native tm =
-    if set_atom_needs_predicate_expansion expand_native tm then
+  fun native_set_preprocess_conv expand_native finite_terms tm =
+    if set_atom_needs_predicate_expansion expand_native finite_terms tm then
       simpLib.SIMP_CONV
         (simpLib.mk_simpset [pred_setSimps.SET_SPEC_ss])
         [simpLib.Cong card_operand_cong,
@@ -7451,13 +7452,15 @@ in
 
   val NATIVE_SET_SIMP_TAC =
     Tactic.CONV_TAC
-      (Conv.TOP_DEPTH_CONV (native_set_preprocess_conv false))
+      (Conv.TOP_DEPTH_CONV (native_set_preprocess_conv false []))
 
   fun CHECKED_SET_SIMP_TAC preserve_native_card g =
     if preserve_native_card andalso
         List.exists contains_set_card (#1 g @ [#2 g]) then
-      let val conv =
-        Conv.TOP_DEPTH_CONV (native_set_preprocess_conv true)
+      let
+        val finite_terms = List.mapPartial finite_set_hypothesis (#1 g)
+        val conv =
+          Conv.TOP_DEPTH_CONV (native_set_preprocess_conv true finite_terms)
       in
         Tactical.THEN
           (Tactic.RULE_ASSUM_TAC (Conv.CONV_RULE conv), Tactic.CONV_TAC conv) g
