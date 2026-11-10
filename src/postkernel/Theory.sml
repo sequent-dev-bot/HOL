@@ -1202,9 +1202,33 @@ end;
     "on load" stuff
    ---------------------------------------------------------------------- *)
 
+val load_profiling = ref false
+val load_skip : string list ref = ref []
+fun load_skipped nm = List.exists (fn s => s = nm) (!load_skip)
+fun load_phase nm f x =
+    if !load_profiling then Profile.profile ("phase:" ^ nm) f x else f x
+
+fun profiled_hooks td =
+    let
+      fun foldthis ((k,f), A) =
+          case Exn.capture (Profile.profile ("hook:" ^ k) f) td of
+              Exn.Res () => A
+            | Exn.Exn e => (k,f,e) :: A
+      fun error_report (s,_,e) =
+          Feedback.HOL_WARNING "Theory" "callhooks"
+            ("Hook " ^ s ^ " failed on event " ^ TheoryDelta.toString td ^
+             " with problem " ^ Feedback.exn_to_string e)
+    in
+      List.app error_report
+               (List.foldr foldthis [] (Listener.listeners delta_hook))
+    end
+
 fun load_complete thyname =
     (Thm.mark_sealed thyname;
-     call_hooks (TheoryDelta.TheoryLoaded thyname))
+     if load_skipped "F" then ()
+     else if !load_profiling then
+       Profile.profile "phase:F" profiled_hooks (TheoryDelta.TheoryLoaded thyname)
+     else call_hooks (TheoryDelta.TheoryLoaded thyname))
 
 
 (* ----------------------------------------------------------------------

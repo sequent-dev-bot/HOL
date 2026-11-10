@@ -388,7 +388,8 @@ fun load_signature directory base_id use file =
             let
               val path = OS.Path.concat
                            (directory, module_file base_id (thy, dat_digest))
-              val m = read_module path name (thy, dat_digest)
+              val m = Theory.load_phase "A" (read_module path name)
+                                        (thy, dat_digest)
               val refused = exists path andalso not (Option.isSome m)
             in
               if refused then report_refused thy else ();
@@ -406,8 +407,8 @@ fun warm_load file hash ({signature_value, values, data, ...} : module) =
     val name = #1 values
     val thy = TheoryReader.decoded_name data
     val structure_value =
-        case make_structure (name, #2 signature_value,
-                             RunCall.unsafeCast (#2 values)) of
+        case Theory.load_phase "B" make_structure
+                (name, #2 signature_value, RunCall.unsafeCast (#2 values)) of
             SOME s => s
           | NONE => raise Fail ("cannot rebuild structure " ^ name)
     val path = OS.Path.base file ^ ".dat"
@@ -419,7 +420,7 @@ fun warm_load file hash ({signature_value, values, data, ...} : module) =
     val _ = if !Globals.print_thy_loads then TextIO.print "done\n" else ()
     val _ = Theory.load_complete thy
   in
-    #enterStruct namespace (name, structure_value);
+    Theory.load_phase "B" (#enterStruct namespace) (name, structure_value);
     hits := !hits + 1
   end
 
@@ -474,7 +475,8 @@ fun load_structure directory base_id use file =
     | f => cold_load directory base_id use file f
 
 fun load_source directory base_id use file =
-  if not (theory_file file) orelse not (eligible ()) then use file
+  if not (theory_file file) orelse not (eligible ()) then
+    Theory.load_phase "L" use file
   else if OS.Path.ext file = SOME "sig" then
     load_signature directory base_id use file
   else load_structure directory base_id use file
