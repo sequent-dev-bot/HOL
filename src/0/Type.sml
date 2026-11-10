@@ -278,20 +278,7 @@ fun type_var_in v =
  * Substitute in a type, trying to preserve existing structure.              *
  *---------------------------------------------------------------------------*)
 
-fun ty_sub [] _ = SAME
-  | ty_sub theta ty =
-    let
-      fun ty_sub1 theta (Tyapp(tyc,Args)) =
-            (case delta_map (ty_sub1 theta) Args of
-                SAME => SAME
-              | DIFF Args' => DIFF (Tyapp(tyc, Args')))
-        | ty_sub1 theta v =
-             case Lib.subst_assoc (equal v) theta of
-                NONE    => SAME
-              | SOME ty => DIFF ty
-    in
-       ty_sub1 theta ty
-    end
+fun ty_sub theta ty = mk_ty_sub theta ty
 
 fun type_subst theta = delta_apply (ty_sub theta)
 
@@ -300,8 +287,7 @@ fun type_subst theta = delta_apply (ty_sub theta)
  * Is a type polymorphic?                                                    *
  *---------------------------------------------------------------------------*)
 
-fun polymorphic (Tyv _) = true
-  | polymorphic (Tyapp(_,Args)) = exists polymorphic Args
+fun polymorphic ty = mk_polymorphic () ty
 
 
 (*---------------------------------------------------------------------------
