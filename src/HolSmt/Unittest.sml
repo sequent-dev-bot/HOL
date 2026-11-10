@@ -14457,6 +14457,25 @@ let
       \(define @t1 () (@var \"x\" Bool)) \
       \(define @t2 () (lambda (@list @t1) (f @t1))) \
       \(step @p1 :rule lambda-elim :args ((= @t2 f))))")
+  fun nested_eta reversed binders =
+    CPC_ProofReplay.replay_root_for_test
+      (parse_cpc_proof_string
+        ("((declare-const f (-> (-> Int Int) Int " ^
+         (if binders = 2 then "Int " else "") ^ "Int)) " ^
+         "(declare-const g (-> Int Int)) " ^
+         "(define @z () (@var \"z\" Int)) " ^
+         "(define @h () (lambda (@list @z) (g @z))) " ^
+         "(define @x () (@var \"x\" Int)) " ^
+         "(define @y () (@var \"y\" Int)) " ^
+         "(define @lhs () (lambda (@list @x " ^
+         (if binders = 2 then "@y" else "") ^ ") (f @h @x " ^
+         (if binders = 2 then "@y" else "") ^ "))) " ^
+         "(step @p1 :rule lambda-elim :args ((= " ^
+         (if reversed then "(_ f @h) @lhs" else "@lhs (_ f @h)") ^
+         "))))"))
+  val nested = nested_eta false 1
+  val reversed = nested_eta true 1
+  val multiple = nested_eta false 2
   val alpha = CPC_ProofReplay.replay_root_for_test
     (parse_cpc_proof_string
       "((define @t1 () (@var \"x\" Int)) \
@@ -14474,10 +14493,22 @@ in
     assert (Term.aconv eta_reduced eta_right,
       "CPC lambda-elim returned the wrong eta equality")
   end;
+  assert (Thm.concl nested ~~
+      ``(\x:int. (f:(int -> int) -> int -> int) (\z. g z) x) =
+        f (\z:int. g z)``,
+    "CPC lambda-elim normalized a nested function argument");
+  assert (Thm.concl reversed ~~
+      ``(f:(int -> int) -> int -> int) (\z:int. g z) =
+        (\x:int. f (\z:int. g z) x)``,
+    "CPC reversed lambda-elim normalized a nested function argument");
+  assert (Thm.concl multiple ~~
+      ``(\x:int y:int. (f:(int -> int) -> int -> int -> int)
+          (\z. g z) x y) = f (\z:int. g z)``,
+    "CPC lambda-elim did not preserve the multi-binder target");
   assert (Thm.concl alpha ~~ ``(\x:int. x) = (\y:int. y)``,
     "CPC alpha_equiv did not replay abstraction renaming");
   List.app (check_oracle_tags "CPC HO conversion unit test")
-    [beta, eta, alpha]
+    [beta, eta, nested, reversed, multiple, alpha]
 end
 
 (* Alpha interning must retain the exact source binder and mapping. *)
