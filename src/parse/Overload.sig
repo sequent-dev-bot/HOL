@@ -59,6 +59,11 @@ sig
     overload_info -> overload_info
 
   val merge_oinfos : overload_info -> overload_info -> overload_info
+  val dest_oinfo : overload_info ->
+                   overloaded_op_info Symtab.table * PrintMap.lvtermnet
+  val mk_oinfo : overloaded_op_info Symtab.table * PrintMap.lvtermnet ->
+                 overload_info
+  val mk_op_info : term list -> overloaded_op_info
 
   val known_constants : overload_info -> string list
 

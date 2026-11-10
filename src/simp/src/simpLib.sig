@@ -138,6 +138,10 @@ sig
      Never raises Conv.UNCHANGED. *)
   val exclude_ssfrags : string list -> simpset -> simpset
   val force_add       : simpset -> ssfrag -> simpset
+  val union_ss        : ((string option * string) * (string option * string)
+                         -> order) -> simpset * simpset -> simpset
+  val net_entries     : simpset -> (string option * string) list
+  val num_dprocs      : simpset -> int
 
   val ssfrag_names_of : simpset -> string list
   val ++              : simpset * ssfrag -> simpset  (* infix *)

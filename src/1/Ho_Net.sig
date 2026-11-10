@@ -17,5 +17,6 @@ sig
  val merge_nets : 'a net * 'a net -> 'a net
  val fold'      : ('a -> 'b -> 'b) -> 'a net -> 'b -> 'b
  val vfilter    : ('a -> bool) -> 'a net -> 'a net
+ val union      : ('a * 'a -> order) -> 'a net * 'a net -> 'a net
 
 end

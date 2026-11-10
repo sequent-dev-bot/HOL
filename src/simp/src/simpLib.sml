@@ -756,6 +756,39 @@ fun force_add (ss as SS sset) f =
       setexcluded excluded' ss ++ f
     end
 
+(* Structural union of two simpsets that grew from a common one by adding
+   rewrite fragments: the nets are merged by Ho_Net.union, with cmp on
+   the (thypart, name) of their entries; fragments in ss2's history that
+   ss1 lacks are added to ss1's.  Decision procedures, traversal rules
+   and the rewrite maker are ss1's. *)
+fun union_ss cmp (ss1 as SS s1, ss2 as SS s2) =
+    if Portable.pointer_eq (ss1, ss2) then ss1
+    else
+      let
+        fun key ({thypart, ci = {name, ...}} : net_conv_info) = (thypart, name)
+        val net = Ho_Net.union (fn (a, b) => cmp (key a, key b))
+                               (#initial_net s1, #initial_net s2)
+        val names1 = List.mapPartial (fn ADDFRAG f => frag_name f | _ => NONE)
+                                     (#history s1)
+        fun new (ADDFRAG f) =
+            (case frag_name f of
+                 SOME n => not (Lib.mem n names1)
+               | NONE => false)
+          | new _ = false
+      in
+        SS {mk_rewrs = #mk_rewrs s1,
+            history = List.filter new (#history s2) @ #history s1,
+            initial_net = net, dprocs = #dprocs s1,
+            travrules = #travrules s1, limit = #limit s1,
+            excluded = Binaryset.union (#excluded s1, #excluded s2)}
+      end
+
+fun net_entries (SS {initial_net, ...}) =
+    Ho_Net.fold' (fn ({thypart, ci = {name, ...}} : net_conv_info) => fn A =>
+                     (thypart, name) :: A) initial_net []
+
+fun num_dprocs (SS {dprocs, ...}) = length dprocs
+
 (*---------------------------------------------------------------------------*)
 (* SIMP_QCONV : simpset -> thm list -> conv                                  *)
 (*---------------------------------------------------------------------------*)

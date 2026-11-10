@@ -584,4 +584,12 @@ in
 end
 fun remove_mapping str crec = gen_remove_mapping str (prim_mk_const crec)
 
+(* Raw access for structural union of overload information *)
+fun dest_oinfo (oi : overload_info) = oi
+fun mk_oinfo (oi : overloaded_op_info Symtab.table * PrintMap.lvtermnet) :
+    overload_info = oi
+fun mk_op_info ops : overloaded_op_info =
+    {actual_ops = ops, base_type = au_tml ops,
+     tyavoids = tmlist_tyvs (free_varsl ops)}
+
 end (* Overload *)

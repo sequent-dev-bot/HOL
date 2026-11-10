@@ -179,4 +179,39 @@ fun vfilter P n =
         end
       | EMPTY vs => EMPTY (List.filter P vs)
 
+(* Structural union of two nets whose tip lists are ordered by cmp,
+   greatest first.  Tips that compare EQUAL form a run (one origin's
+   entries); a run present in both nets is taken from n1 only.  Shared
+   subnets are not traversed, so union cmp (n, n) = n. *)
+fun union cmp (n1, n2) =
+    if Portable.pointer_eq (n1, n2) then n1
+    else
+      let
+        fun run x l =
+            let fun go acc (z :: zs) =
+                    if cmp (z, x) = EQUAL then go (z :: acc) zs
+                    else (List.rev acc, z :: zs)
+                  | go acc [] = (List.rev acc, [])
+            in go [] l end
+        fun mergetips (xs, []) = xs
+          | mergetips ([], ys) = ys
+          | mergetips (xs as x :: _, ys as y :: _) =
+            case cmp (x, y) of
+                GREATER => let val (r, xs') = run x xs
+                           in r @ mergetips (xs', ys) end
+              | LESS => let val (r, ys') = run y ys
+                        in r @ mergetips (xs, ys') end
+              | EQUAL => let val (r, xs') = run x xs
+                             val (_, ys') = run y ys
+                         in r @ mergetips (xs', ys') end
+        fun child _ (a, b) =
+            if Portable.pointer_eq (a, b) then raise LabelTab.SAME
+            else union cmp (a, b)
+        val es = LabelTab.join child (edges n1, edges n2)
+        val ts = if Portable.pointer_eq (tips n1, tips n2) then tips n1
+                 else mergetips (tips n1, tips n2)
+      in
+        if LabelTab.is_empty es then EMPTY ts else NODE (es, ts)
+      end
+
 end (* struct *)
