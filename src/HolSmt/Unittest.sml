@@ -14560,6 +14560,11 @@ let
         "((declare-const f (-> Bool Bool)) (declare-const x Bool) \
         \(step @p :rule refl :args ((= (_ f x) x))))"))
   val first_order_source = ``(f:bool->bool) x = x``
+  val named_literal = CPC_ProofReplay.replay_root_for_test
+    (parse_cpc_proof_string
+      "((declare-const bv5 (-> Int Int)) (declare-const x Int) \
+      \(step @p :rule refl :args ((_ bv5 x))))")
+  val named_literal_source = ``(bv5:int->int) x``
   fun reflexive source expected =
     let
       val theorem = CPC_ProofReplay.replay_root_for_test
@@ -14585,6 +14590,10 @@ in
       boolSyntax.mk_eq (first_order_source, first_order_source),
     "CPC higher-order application needs a higher-order source logic");
   check_oracle_tags "CPC higher-order first-order dictionary" first_order;
+  assert (Thm.concl named_literal ~~
+      boolSyntax.mk_eq (named_literal_source, named_literal_source),
+    "declared CPC function was mistaken for an indexed literal");
+  check_oracle_tags "CPC declared bv function" named_literal;
   reflexive "(+ (_ (ite c f g) x) 1)"
     ``(if c then (f:int->int) else g) x + 1``;
   reflexive "(_ (lambda (@list (@var x Int)) x) 1)"

@@ -1421,11 +1421,12 @@ local
             with_cpc_fp_entries tmdict)))))))))))))))))))))))
     end
 
-  fun cpc_indexed_identifier name =
+  fun cpc_indexed_identifier declared name =
     name = "BitVec" orelse name = "FloatingPoint" orelse
     List.exists (fn (family, _) => family <> "_" andalso family = name)
       cpc_indexed_term_families orelse
-    (String.isPrefix "bv" name andalso String.size name > 2 andalso
+    (not (declared name) andalso
+     String.isPrefix "bv" name andalso String.size name > 2 andalso
      List.all Char.isDigit
        (String.explode (String.extract (name, 2, NONE))))
 
@@ -1462,7 +1463,10 @@ local
                 end
             in
               if marked_head = "_" andalso
-                 cpc_indexed_identifier first_operand then
+                 cpc_indexed_identifier
+                   (fn name => Option.isSome
+                     (Redblackmap.peek (#2 (!dicts_ref), name)))
+                   first_operand then
                 ordinary ["(", marked_head, first_operand]
               else case application_terms [] of
                 function :: arguments =>
@@ -1588,29 +1592,29 @@ local
      CPC also spells higher-order application (_ f x).  Normalize nested
      occurrences to the shared parser's @ spelling, retaining genuine
      indexed identifiers and the heads of indexed operator applications. *)
-  fun normalize_cpc_testers raw =
+  fun normalize_cpc_testers indexed raw =
     case raw of
       RawList [RawAtom "@const", index, sort] =>
-        RawList [RawAtom "@const", normalize_cpc_testers index, sort]
+        RawList [RawAtom "@const", normalize_cpc_testers indexed index, sort]
     | RawList [RawAtom "is", RawAtom constructor, scrutinee] =>
         RawList
           [RawList [RawAtom "_", RawAtom "is", RawAtom constructor],
-           normalize_cpc_testers scrutinee]
+           normalize_cpc_testers indexed scrutinee]
     | RawList [RawAtom "and"] => RawAtom "true"
     | RawList [RawAtom "or"] => RawAtom "false"
     | RawList [RawAtom "and", operand] =>
-        normalize_cpc_testers operand
+        normalize_cpc_testers indexed operand
     | RawList [RawAtom "or", operand] =>
-        normalize_cpc_testers operand
+        normalize_cpc_testers indexed operand
     | RawList (RawAtom "_" :: (operands as RawAtom name :: _)) =>
-        if cpc_indexed_identifier name then raw
+        if indexed name then raw
         else RawList (RawAtom "@" ::
-          List.map normalize_cpc_testers operands)
+          List.map (normalize_cpc_testers indexed) operands)
     | RawList (RawAtom "_" :: operands) =>
-        RawList (RawAtom "@" :: List.map normalize_cpc_testers operands)
+        RawList (RawAtom "@" :: List.map (normalize_cpc_testers indexed) operands)
     | RawList ((head as RawList (RawAtom "_" :: _)) :: operands) =>
-        RawList (head :: List.map normalize_cpc_testers operands)
-    | RawList entries => RawList (List.map normalize_cpc_testers entries)
+        RawList (head :: List.map (normalize_cpc_testers indexed) operands)
+    | RawList entries => RawList (List.map (normalize_cpc_testers indexed) entries)
     | RawAtom _ => raw
 
   fun read_raw_term get_token =
@@ -1805,7 +1809,10 @@ local
      recovery. *)
   fun parse_located_term dicts_ref get_token : located_term =
     let
-      val raw = normalize_cpc_testers (read_raw_term get_token)
+      val raw = normalize_cpc_testers
+        (cpc_indexed_identifier (fn name => Option.isSome
+          (Redblackmap.peek (#2 (!dicts_ref), name))))
+        (read_raw_term get_token)
       val (elaboration_raw, local_dicts) =
         abstract_private_constants (!dicts_ref) raw
       val tokens = ref (raw_tokens elaboration_raw)
