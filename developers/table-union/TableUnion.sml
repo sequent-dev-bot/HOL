@@ -261,10 +261,12 @@ fun tmstr tm =
       | CONST {Name, Thy, Ty} => "C" ^ Thy ^ "$" ^ Name ^ ":" ^ tystr Ty
       | COMB (f, x) => "(" ^ tmstr f ^ " " ^ tmstr x ^ ")"
       | LAMB (v, b) => "\\" ^ tmstr v ^ "." ^ tmstr b
-fun tmkey tm =
-    if is_const tm then let val {Thy, Name, ...} = dest_thy_const tm
-                        in Thy ^ "$" ^ Name end
-    else tmstr tm
+(* overloads and their removals match terms up to alpha (aconv); a
+   constant may be overloaded at several of its type instances *)
+fun tmkey tm = tmstr tm
+fun constkey {Thy, Name} =
+    tmstr (prim_mk_const {Thy = Thy, Name = Name})
+    handle HOL_ERR _ => "C" ^ Thy ^ "$" ^ Name
 (* Keys: "name|const" for the parse map, "P|name|const" for the print
    map (MOVE_OVLPOSN changes only the first), "name|*" for CLR_OVL. *)
 fun okey (s, k) = s ^ "\001" ^ k
@@ -279,11 +281,10 @@ fun ovl_delta d =
       case d of
           TMD (OVERLOAD_ON (s, tm)) => SOME (both (okey (s, tmkey tm)) 1, SOME (s, tm))
         | TMD (IOVERLOAD_ON (s, tm)) => SOME (both (okey (s, tmkey tm)) 2, SOME (s, tm))
-        | TMD (RMOVMAP (s, {Thy, Name})) =>
-            SOME (both (okey (s, Thy ^ "$" ^ Name)) 0, NONE)
+        | TMD (RMOVMAP (s, kid)) => SOME (both (okey (s, constkey kid)) 0, NONE)
         | TMD (GRMOVMAP (s, tm)) => SOME (both (okey (s, tmkey tm)) 0, NONE)
-        | TMD (MOVE_OVLPOSN {frontp, skid = (s, {Thy, Name})}) =>
-            SOME ([(okey (s, Thy ^ "$" ^ Name), if frontp then 1 else 2)], NONE)
+        | TMD (MOVE_OVLPOSN {frontp, skid = (s, kid)}) =>
+            SOME ([(okey (s, constkey kid), if frontp then 1 else 2)], NONE)
         | TMD (CLR_OVL s) => SOME ([(clrkey s, 0)], NONE)
         | _ => NONE
     end
