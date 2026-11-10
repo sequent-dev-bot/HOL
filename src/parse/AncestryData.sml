@@ -54,6 +54,10 @@ val shared_ancestries :
     (string list * string HOLset.set) Symtab.table Sref.t =
     Sref.new Symtab.empty
 
+val share_counts = Array.array (4, 0)
+fun bump i = Array.update (share_counts, i, Array.sub (share_counts, i) + 1)
+fun share_stats () = List.tabulate (4, fn i => Array.sub (share_counts, i))
+
 fun shared_ancestor_set (memo : ancestor_memo) thy ps =
     let
       val shared = Sref.value shared_ancestries
@@ -62,19 +66,22 @@ fun shared_ancestor_set (memo : ancestor_memo) thy ps =
           case shared_set p of
               SOME s => Portable.pointer_eq (s, valOf (Symtab.lookup memo p))
             | NONE => false
+      val key = Listsort.sort String.compare ps
     in
-      if not (List.all is_shared ps) then ancestor_set memo thy ps
+      if not (List.all is_shared ps) then
+        (bump 0; ancestor_set memo thy ps)
       else
         case Symtab.lookup shared thy of
             SOME (ps', s) =>
-            if ps' = ps then s else ancestor_set memo thy ps
+            if ps' = key then (bump 1; s) else (bump 2; ancestor_set memo thy ps)
           | NONE =>
             let
               val s = ancestor_set memo thy ps
             in
               Sref.update shared_ancestries
                 (fn t => if Symtab.defined t thy then t
-                         else Symtab.update (thy, (ps, s)) t);
+                         else Symtab.update (thy, (key, s)) t);
+              bump 3;
               s
             end
     end

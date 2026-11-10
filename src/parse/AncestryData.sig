@@ -1,5 +1,6 @@
 signature AncestryData =
 sig
+  val share_stats : unit -> int list
   type ('delta,'value) adata_info = {
     tag : string, initial_values : (string * 'value) list,
     apply_delta : 'delta -> 'value -> 'value
