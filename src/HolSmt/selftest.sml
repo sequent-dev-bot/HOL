@@ -270,6 +270,11 @@ fun mk_CVCp expect_fun =
 val thm_CVCp = mk_CVCp (expect_thm true)
 val sat_CVCp = mk_CVCp expect_sat
 
+(* These bounded cardinality regressions must bypass the numeric filter. *)
+val thm_card_CVCp =
+  mk_test_fun (CVC.is_configured ()) (expect_thm true)
+    "cvc5 (proofs, finite CARD)" HolSmtLib.CVC_TAC
+
 (*****************************************************************************)
 (* HOL definitions (e.g., user-defined data types)                           *)
 (*****************************************************************************)
@@ -331,9 +336,9 @@ in
       [thm_Z3p_v4, thm_CVCp]),
     (``(x : int) IN (s UNION t) <=> x IN s \/ x IN t``,
       [thm_CVC, thm_CVCp]),
-    (``!(a:'a) b. CARD {a; b} = 2 <=> a <> b``, [thm_CVCp]),
+    (``!(a:'a) b. CARD {a; b} = 2 <=> a <> b``, [thm_card_CVCp]),
     (``!(a:'a) b c. CARD {a; b; c} = 3 <=>
-        a <> b /\ a <> c /\ b <> c``, [thm_CVCp]),
+        a <> b /\ a <> c /\ b <> c``, [thm_card_CVCp]),
     (* Z3 proves this through an array lemma outside its checked Bag replay
        ladder; cvc5 supplies the native checked Bag certificate. *)
     (``BAG_IN (x : bool) (BAG_INSERT y EMPTY_BAG) <=> x = y``, [thm_CVCp]),

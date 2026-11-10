@@ -16159,9 +16159,6 @@ in
            smt_seq_update [1] 0 [2]``) trust
 end
 
-(* The Set names are an explicit frozen registry, not a prefix catch-all.
-   Exercise every recorded name through CPC's cvc5 dictionary and retain a
-   separate loud-failure pin for future spellings. *)
 fun cpc_finite_literal_card_success () =
 let
   val goals =
@@ -16269,6 +16266,9 @@ in
     "CPC insertion packet accepted an element with the wrong type")
 end
 
+(* The Set names are an explicit frozen registry, not a prefix catch-all.
+   Exercise every recorded name through CPC's cvc5 dictionary and retain a
+   separate loud-failure pin for future spellings. *)
 fun cpc_proof_replay_set_rules_success () =
 let
   val (translation, _) = CVC.goal_to_SmtLib_translation
