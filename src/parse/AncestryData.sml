@@ -43,6 +43,42 @@ fun ancestor_set (memo : ancestor_memo) thy ps =
     foldl (fn (p, s) => HOLset.union (s, valOf (Symtab.lookup memo p)))
           (HOLset.singleton String.compare thy) ps
 
+(* Every tag keeps its own memo, but most tags give a theory the same
+   parents, so their memos would hold equal sets.  This table holds, for
+   each theory, a set computed from the table's own sets for its parents,
+   with the parent list it was computed from.  A tag whose memo holds
+   those very sets for the theory's parents, and that names the same
+   parents, takes the set from the table instead of building a copy:
+   ancestor_set would compute an equal set from the same inputs. *)
+val shared_ancestries :
+    (string list * string HOLset.set) Symtab.table Sref.t =
+    Sref.new Symtab.empty
+
+fun shared_ancestor_set (memo : ancestor_memo) thy ps =
+    let
+      val shared = Sref.value shared_ancestries
+      fun shared_set p = Option.map #2 (Symtab.lookup shared p)
+      fun is_shared p =
+          case shared_set p of
+              SOME s => Portable.pointer_eq (s, valOf (Symtab.lookup memo p))
+            | NONE => false
+    in
+      if not (List.all is_shared ps) then ancestor_set memo thy ps
+      else
+        case Symtab.lookup shared thy of
+            SOME (ps', s) =>
+            if ps' = ps then s else ancestor_set memo thy ps
+          | NONE =>
+            let
+              val s = ancestor_set memo thy ps
+            in
+              Sref.update shared_ancestries
+                (fn t => if Symtab.defined t thy then t
+                         else Symtab.update (thy, (ps, s)) t);
+              s
+            end
+    end
+
 (* Add thy and its ancestors to the memo, except those described above.
    "-" is not visited: the fringe can include a theory whose parents name
    "-" *)
@@ -56,7 +92,7 @@ fun extend_memo parents (thy, memo) =
         if Thm.getCT() = SOME thy orelse
            not (List.all (Symtab.defined memo') ps)
         then memo'
-        else Symtab.update (thy, ancestor_set memo' thy ps) memo'
+        else Symtab.update (thy, shared_ancestor_set memo' thy ps) memo'
       end
 
 (* The ancestry of a theory not in the memo *)
