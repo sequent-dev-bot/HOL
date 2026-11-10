@@ -31,4 +31,86 @@ datatype holty = GRND of hol_type
 fun to_hol_type (GRND ty) = ty
   | to_hol_type (POLY ty) = ty;
 
+(*---------------------------------------------------------------------------*
+ * Memo tables for one traversal of a value that may share subvalues (a     *
+ * term or type DAG).  ML has no pointer hash, so a table is searched by a  *
+ * bounded structural sample of the key; a hit needs [same] (pointer        *
+ * equality in the kernel), so the hash only picks the bucket searched and  *
+ * cannot change a result.                                                  *
+ *                                                                          *
+ * The first [threshold] calls of [memo] run [compute] directly and keep no *
+ * result: traversing a small value never hashes or allocates, and a node   *
+ * met again among those calls is recomputed, its result unshared.  Each    *
+ * bucket keeps only the [bucket_limit] most recent entries, so keys that   *
+ * all hash alike (a long list or numeral spine) cost a bounded search; a   *
+ * key whose entry was dropped is recomputed.                               *
+ *---------------------------------------------------------------------------*)
+
+structure Memo =
+struct
+  val threshold = 256
+  val bucket_limit = 8
+  val initial_size = 64
+
+  type ('a, 'b) table =
+       {hash : 'a -> word, same : 'a * 'a -> bool, calls : int ref,
+        count : int ref, buckets : ('a * word * 'b) list array ref}
+
+  fun new hash same : ('a, 'b) table =
+      {hash = hash, same = same, calls = ref 0, count = ref 0,
+       buckets = ref (Array.fromList [])}
+
+  fun index (h, buckets) =
+      Word.toInt (Word.andb (h, Word.fromInt (Array.length buckets - 1)))
+
+  fun grow (buckets : ('a * word * 'b) list array ref) =
+      let
+        val old = !buckets
+        val new = Array.array (Int.max (initial_size, 2 * Array.length old),
+                               [])
+        fun add (e as (_, h, _)) =
+            let val i = index (h, new)
+            in Array.update (new, i, e :: Array.sub (new, i)) end
+      in
+        Array.app (List.app add o List.rev) old;
+        buckets := new
+      end
+
+  fun insert ({buckets, count, ...} : ('a, 'b) table) (e as (_, h, _)) =
+      let
+        val _ = if !count >= 2 * Array.length (!buckets) then grow buckets
+                else ()
+        val b = !buckets
+        val i = index (h, b)
+        val bucket = e :: Array.sub (b, i)
+      in
+        if length bucket > bucket_limit then
+          Array.update (b, i, List.take (bucket, bucket_limit))
+        else (Array.update (b, i, bucket); count := !count + 1)
+      end
+
+  fun memo (t as {hash, same, calls, buckets, ...} : ('a, 'b) table) key
+           compute =
+      if !calls < threshold then (calls := !calls + 1; compute ())
+      else
+        let
+          val h = hash key
+          fun find [] = NONE
+            | find ((k, _, v) :: rest) =
+                if same (key, k) then SOME v else find rest
+          val b = !buckets
+        in
+          case (if Array.length b = 0 then NONE
+                else find (Array.sub (b, index (h, b)))) of
+            SOME v => v
+          | NONE => let val v = compute () in insert t (key, h, v); v end
+        end
+
+  fun mix (h1, h2) = Word.+ (Word.* (h1, 0w31), h2)
+  fun string_hash s =
+      CharVector.foldl (fn (c, h) => mix (h, Word.fromInt (Char.ord c)))
+                       0w5381 s
+  fun id_hash id = string_hash (KernelSig.name_of id)
+end
+
 end
