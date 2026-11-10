@@ -1039,9 +1039,18 @@ local
       (expect_one_arg "beta-reduce" args)
 
   fun replay_lambda_elim args =
-    conversion_equal "lambda-elim"
-      (Conv.TOP_DEPTH_CONV Drule.ETA_CONV)
-      (expect_one_arg "lambda-elim" args)
+    let
+      (* Contract the leading binders, preserving redexes in the function
+         being returned: CPC does not normalize its arguments here. *)
+      fun leading_eta_conv tm =
+        if Term.is_abs tm then
+          Conv.THENC (Conv.ABS_CONV leading_eta_conv,
+            Conv.TRY_CONV Drule.ETA_CONV) tm
+        else Thm.REFL tm
+    in
+      conversion_equal "lambda-elim" leading_eta_conv
+        (expect_one_arg "lambda-elim" args)
+    end
 
   (* CPC's HO_CONG omits both :args and its conclusion.  For an n-ary
      application cvc5 emits the function equality followed by one equality
