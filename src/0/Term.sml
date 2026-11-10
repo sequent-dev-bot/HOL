@@ -253,6 +253,9 @@ fun term_table () = new (hash 3) same
 fun term_depth_table () =
     new (fn (tm, i) => mix (hash 3 tm, Word.fromInt i))
         (fn ((t1, i1), (t2, i2)) => i1 = i2 andalso same (t1, t2))
+fun term_pair_table () =
+    new (fn (t1, t2) => mix (hash 3 t1, hash 3 t2))
+        (fn ((l1, r1), (l2, r2)) => same (l1, l2) andalso same (r1, r2))
 end
 
 fun interior (Comb _) = true
@@ -260,11 +263,23 @@ fun interior (Comb _) = true
   | interior (Clos _) = true
   | interior _ = false
 
+
+(* compare and aconv memoise pairs of Comb, Abs or Clos nodes for the
+   length of one call, so comparing two DAGs costs a visit per pair of
+   nodes met rather than one per path. *)
 fun compare (t1,t2) =
-    if fast_term_eq t1 t2 then EQUAL else
+  if fast_term_eq t1 t2 then EQUAL else
+  let
+    val table = term_pair_table ()
+    fun cmp (t1, t2) =
+        if fast_term_eq t1 t2 then EQUAL
+        else if interior t1 orelse interior t2 then
+          Memo.memo table (t1, t2) (fn () => step (t1, t2))
+        else step (t1, t2)
+    and step (t1, t2) =
     case (t1,t2) of
-      (t1 as Clos _, t2)     => compare (push_clos t1, t2)
-    | (t1, t2 as Clos _)     => compare (t1, push_clos t2)
+      (t1 as Clos _, t2)     => cmp (push_clos t1, t2)
+    | (t1, t2 as Clos _)     => cmp (t1, push_clos t2)
     | (u as Fv _, v as Fv _) => var_compare (u,v)
     | (Fv _, _)              => LESS
     | (Bv _, Fv _)           => GREATER
@@ -278,16 +293,19 @@ fun compare (t1,t2) =
                                                             to_hol_type ty2)
                                    | x => x)
     | (Const _, _)           => LESS
-    | (Comb(M,N),Comb(P,Q))  => (case compare (M,P)
-                                  of EQUAL => compare (N,Q)
+    | (Comb(M,N),Comb(P,Q))  => (case cmp (M,P)
+                                  of EQUAL => cmp (N,Q)
                                    | x => x)
     | (Comb _, Abs _)        => LESS
     | (Comb _, _)            => GREATER
     | (Abs(Fv(_, ty1),M),
        Abs(Fv(_, ty2),N))    => (case Type.compare(ty1,ty2)
-                                  of EQUAL => compare (M,N)
+                                  of EQUAL => cmp (M,N)
                                    | x => x)
-    | (Abs _, _)             => GREATER;
+    | (Abs _, _)             => GREATER
+  in
+    step (t1, t2)
+  end;
 
 val empty_tmset = HOLset.empty compare
 fun term_eq t1 t2 = compare(t1,t2) = EQUAL
@@ -579,16 +597,27 @@ local
   fun subsEQ(s1,s2) = s1 = s2
 in
 fun aconv t1 t2 = EQ(t1,t2) orelse
+ let
+   val table = term_pair_table ()
+   fun ac t1 t2 =
+       EQ(t1,t2) orelse
+       (if interior t1 orelse interior t2 then
+          Memo.memo table (t1, t2) (fn () => step t1 t2)
+        else step t1 t2)
+   and step t1 t2 =
  case(t1,t2)
-  of (Comb(M,N),Comb(P,Q)) => aconv N Q andalso aconv M P
+  of (Comb(M,N),Comb(P,Q)) => ac N Q andalso ac M P
    | (Abs(Fv(_,ty1),M),
-      Abs(Fv(_,ty2),N)) => ty1=ty2 andalso aconv M N
+      Abs(Fv(_,ty2),N)) => ty1=ty2 andalso ac M N
    | (Clos(e1,b1),
       Clos(e2,b2)) => (subsEQ(e1,e2) andalso EQ(b1,b2))
-                       orelse aconv (push_clos t1) (push_clos t2)
-   | (Clos _, _) => aconv (push_clos t1) t2
-   | (_, Clos _) => aconv t1 (push_clos t2)
+                       orelse ac (push_clos t1) (push_clos t2)
+   | (Clos _, _) => ac (push_clos t1) t2
+   | (_, Clos _) => ac t1 (push_clos t2)
    | (M,N)       => (M=N)
+ in
+   step t1 t2
+ end
 end;
 
 
