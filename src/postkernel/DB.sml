@@ -135,7 +135,8 @@ local val db_slot : dbmap Context.Data.slot =
             blist
       fun functional_bindl db thy blist =
           db |> updnamemap (functional_bindl_names thy blist)
-             |> updrevmap (functional_bindl_revmap thy blist)
+             |> (if Theory.load_skipped "Drev" then (fn x => x)
+                 else updrevmap (functional_bindl_revmap thy blist))
 
       fun purge_stale_bindings thyname =
           let

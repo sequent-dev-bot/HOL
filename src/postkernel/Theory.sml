@@ -1204,13 +1204,18 @@ end;
 
 val load_profiling = ref false
 val load_skip : string list ref = ref []
-fun load_skipped nm = List.exists (fn s => s = nm) (!load_skip)
+fun load_skipped nm =
+    List.exists (fn s => s = nm orelse
+                         (String.isSuffix "*" s andalso
+                          String.isPrefix (String.substring (s, 0, size s - 1)) nm))
+                (!load_skip)
 fun load_phase nm f x =
     if !load_profiling then Profile.profile ("phase:" ^ nm) f x else f x
 
 fun profiled_hooks td =
     let
       fun foldthis ((k,f), A) =
+          if load_skipped ("hook:" ^ k) then A else
           case Exn.capture (Profile.profile ("hook:" ^ k) f) td of
               Exn.Res () => A
             | Exn.Exn e => (k,f,e) :: A
