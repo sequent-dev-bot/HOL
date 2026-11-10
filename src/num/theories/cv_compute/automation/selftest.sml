@@ -140,6 +140,32 @@ val rec_test3_def = Define `
 
 val _ = cv_auto_trans rec_test3_def;
 
+val _ = Datatype ‘
+  filter_state = <| limit : num; values : num list |>
+’
+
+val filter_record_def = Define ‘
+  filter_record r = FILTER (\n. n <> r.limit) r.values
+’
+
+val _ = cv_auto_trans filter_record_def;
+
+val _ = testutils.convtest
+  ("cv_eval FILTER capturing a record", cv_eval,
+   “filter_record <| limit := 2; values := [1; 2; 2; 3] |>”,
+   “[1; 3]:num list”);
+
+val filter_update_def = Define ‘
+  filter_update r k = r with values := FILTER (\n. n <> k) r.values ++ [k]
+’
+
+val _ = cv_auto_trans filter_update_def;
+
+val _ = testutils.convtest
+  ("cv_eval FILTER in a record update", cv_eval,
+   “filter_update <| limit := 9; values := [1; 2; 2; 3] |> 2”,
+   “filter_state 9 [1; 3; 2]”);
+
 val fac_def = Define `
   fac (n:num) = if n = 0:num then 1 else n * fac (n-1)
 `

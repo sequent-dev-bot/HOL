@@ -122,6 +122,9 @@ New features
 Bugs fixed
 ----------
 
+-   Fixed a simplifier loop in `cv_auto_trans` when a higher-order predicate
+    captures a record field, for example `FILTER (λn. n ≠ r.limit) r.values`.
+
 -   `computeLib.del_persistent_consts` in an ancestor could undo a descendant's later `computeLib.add_persistent_funs` for the same constant.
     Loading a theory with more than one parent could re-run the ancestor's deletion against the global compset.
     Persistent compset deletions and `set_EVAL_skip` calls are now applied once, when the theory recording them is loaded.
