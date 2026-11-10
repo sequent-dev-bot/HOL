@@ -21894,6 +21894,59 @@ fun z3_trans_star_chain_search_no_path_diagnostic () =
         "trans* no-path diagnostic did not include endpoints: " ^ msg)
     end
 
+fun z3_nnf_neg_quantified_body_replay_success () =
+let
+  fun run_case (label, vars, source, result, witness) =
+    let
+      val body_target = boolSyntax.mk_eq
+        (boolSyntax.mk_neg source, result)
+      val target = boolSyntax.mk_eq
+        (boolSyntax.mk_neg (boolSyntax.list_mk_exists (vars, source)),
+         boolSyntax.list_mk_forall (vars, result))
+      val (skolem_source, _) = boolSyntax.dest_conj source
+      val (skolem_result, _) = boolSyntax.dest_disj result
+      val skolem_target = boolSyntax.mk_eq
+        (boolSyntax.mk_neg skolem_source, skolem_result)
+      val body_node = Z3_Proof.NNF_NEG
+        ([Z3_Proof.SKOLEM skolem_target], body_target)
+      val node = Z3_Proof.NNF_NEG
+        ([Z3_Proof.PROOF_BIND (vars, body_node)], target)
+      val initial = Z3_Proof.empty_proof "4.15.3"
+      val proof = Z3_Proof.update_proof_vars
+        (Z3_Proof.update_proof_steps initial
+          (Redblackmap.insert (Z3_Proof.proof_steps initial, 0, node)))
+        (HOLset.add (Term.empty_tmset, witness))
+      val () = Profile.reset_all ()
+      val {asserted_hyps, definition_hyps, thm} =
+        Z3_ProofReplay.replay_root_with_state_for_test proof
+    in
+      assert (Thm.concl thm ~~ target,
+        label ^ " returned the wrong quantified NNF equality");
+      assert (List.null asserted_hyps andalso
+          List.length definition_hyps = 1 andalso
+          HOLset.equal (Thm.hypset thm,
+            HOLset.addList (Term.empty_tmset, definition_hyps)),
+        label ^ " changed the skolem definition hypotheses");
+      assert (profile_call_count "nnf[metis-fallback]" = 0,
+        label ^ " used METIS for quantified NNF congruence");
+      check_oracle_tags label thm
+    end
+in
+  List.app run_case
+    [("one-binder negative existential",
+      [``y:int``],
+      ``(!x:int. ~(P x \/ Q (y:int) x) \/ R x) /\ P1 y /\ P2 y``,
+      ``~(~(P ((sk:int->int) y) \/ Q (y:int) (sk y)) \/ R (sk y)) \/
+        ~P1 y \/ ~P2 y``, ``sk:int->int``),
+     ("three-binder negative existential",
+      [``a:bool``, ``b:int``, ``c:bool``],
+      ``(!x:int. ~(P x (a:bool) (b:int) (c:bool) \/ Q x) \/ R x) /\
+        P1 a b c /\ P2 a b c``,
+      ``~(~(P ((sk:bool->int->bool->int) a b c) a b c \/ Q (sk a b c)) \/
+        R (sk a b c)) \/ ~P1 a b c \/ ~P2 a b c``,
+      ``sk:bool->int->bool->int``)]
+end
+
 fun z3_nnf_structural_replay_no_metis_success () =
 let
   val cases = [
@@ -29403,6 +29456,8 @@ let
       z3_trans_star_chain_search_replay_no_metis_success),
     ("z3_trans_star_chain_search_no_path_diagnostic",
       z3_trans_star_chain_search_no_path_diagnostic),
+    ("z3_nnf_neg_quantified_body_replay_success",
+      z3_nnf_neg_quantified_body_replay_success),
     ("z3_nnf_structural_replay_no_metis_success",
       z3_nnf_structural_replay_no_metis_success),
     ("z3_th_lemma_existing_theory_replay_minimal_success",
