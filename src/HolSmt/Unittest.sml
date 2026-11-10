@@ -19932,6 +19932,52 @@ in
       (Z3_ProofReplay.replay_root_for_test guarded_proof))
 end
 
+fun z3_skolem_dependent_witness_replay_success () =
+let
+  fun proof target witnesses =
+    let
+      val initial = Z3_Proof.empty_proof "4.15.3"
+      val steps = Redblackmap.insert (Z3_Proof.proof_steps initial, 0,
+        Z3_Proof.SKOLEM target)
+    in
+      Z3_Proof.update_proof_vars
+        (Z3_Proof.update_proof_steps initial steps)
+        (HOLset.addList (Term.empty_tmset, witnesses))
+    end
+  fun run_case (label, target, witness) =
+    let
+      val {asserted_hyps, definition_hyps, thm} =
+        Z3_ProofReplay.replay_root_with_state_for_test
+          (proof target [witness])
+      val definition =
+        case definition_hyps of
+          [term] => term
+        | _ => die ("FAIL: " ^ label ^ " lost the witness definition")
+      val (name, body) = boolSyntax.dest_eq definition
+    in
+      assert (Thm.concl thm ~~ target,
+        label ^ " returned the wrong skolem equality");
+      assert (List.null asserted_hyps andalso
+          List.length (Thm.hyp thm) = 1 andalso
+          name ~~ witness andalso Term.is_abs body,
+        label ^ " did not retain exactly the fresh function definition");
+      check_oracle_tags label thm;
+      expect_hol_error_contains (label ^ " rigid witness")
+        "expected a quantified formula"
+        (fn () => ignore
+          (Z3_ProofReplay.replay_root_with_state_for_test (proof target [])))
+    end
+in
+  List.app run_case
+    [("one-parameter skolem",
+      ``~(!x:int. ~P x \/ Q (y:int) x) =
+        ~(~P (sk y) \/ Q y (sk y))``, ``sk:int->int``),
+     ("three-parameter skolem",
+      ``~(!x:int. ~P x (a:bool) (b:int) (c:bool) \/ Q x) =
+        ~(~P (sk a b c) a b c \/ Q (sk a b c))``,
+      ``sk:bool->int->bool->int``)]
+end
+
 fun ground_subterm_evaluation_budget_success () =
 let
   val profile_name = "arith-linear(5)(ground-subterm-eval)_OK"
@@ -29321,6 +29367,8 @@ let
       quantified_boolean_rewrite_n_binders_success),
     ("z3_skolem_nary_binders_replay_success",
       z3_skolem_nary_binders_replay_success),
+    ("z3_skolem_dependent_witness_replay_success",
+      z3_skolem_dependent_witness_replay_success),
     ("z3_core_proof_rule_replay_minimal_raw_success",
       z3_core_proof_rule_replay_minimal_raw_success),
     ("z3_def_axiom_bounded_structural_ordering_success",

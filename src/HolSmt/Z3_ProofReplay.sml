@@ -6097,19 +6097,39 @@ local
             else
               raise ERR "z3_skolem" "expected a quantified formula"
         | NONE => raise ERR "z3_skolem" "expected a quantified formula"
+    fun definition {redex, residue} =
+      if HOLset.member (#var_set state, redex) then
+        redex |-> Thm.ASSUME (boolSyntax.mk_eq (redex, residue))
+      else
+        raise ERR "z3_skolem"
+          "match produced a definition for a non-Z3 variable"
     fun instantiate accumulated substs =
       let
-        fun definition {redex, residue} =
-          if HOLset.member (#var_set state, redex) then
-            redex |-> Thm.SYM
-              (Thm.ASSUME (boolSyntax.mk_eq (redex, residue)))
-          else
-            raise ERR "z3_skolem"
-              "match produced a definition for a non-Z3 variable"
-        val conversion = Drule.SUBST_CONV (List.map definition substs) t
+        fun reverse {redex, residue} = redex |-> Thm.SYM residue
+        val conversion = Drule.SUBST_CONV
+          (List.map (reverse o definition) substs) t
           (Thm.concl accumulated)
       in
         Thm.EQ_MP conversion accumulated
+      end
+    fun higher_order accumulated =
+      let
+        val rigid = HOLset.difference
+          (Term.FVL_dag [t] Term.empty_tmset, #var_set state)
+        val (substs, tyins) =
+          HolKernel.ho_match_term [] rigid t (Thm.concl accumulated)
+        val _ = List.null tyins orelse
+          raise ERR "z3_skolem" "match instantiated a fixed type variable"
+        (* Applied witnesses need lambda definitions.  Check their beta
+           instance against the SELECT theorem before recording them. *)
+        val conversion = Drule.SUBST_CONV
+          (List.map definition substs) t t
+        val conversion = Conv.CONV_RULE
+          (Conv.RAND_CONV (Conv.TOP_DEPTH_CONV Thm.BETA_CONV)) conversion
+        val accumulated = Conv.CONV_RULE
+          (Conv.TOP_DEPTH_CONV Thm.BETA_CONV) accumulated
+      in
+        Thm.EQ_MP (Thm.SYM conversion) accumulated
       end
     (* Z3 may skolemize all or only a prefix of a binder block.  Peel at
        least one binder (this is the [sk] rule), then stop at the first
@@ -6122,7 +6142,7 @@ local
         fun matched theorem =
           case Lib.total (Term.match_term t) (Thm.concl theorem) of
             SOME (substs, _) => SOME (instantiate theorem substs)
-          | NONE => NONE
+          | NONE => Lib.total higher_order theorem
       in
         case matched accumulated of
           SOME theorem => theorem
