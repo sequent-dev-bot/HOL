@@ -54,9 +54,9 @@ val shared_ancestries :
     (string list * string HOLset.set) Symtab.table Sref.t =
     Sref.new Symtab.empty
 
-val share_counts = Array.array (4, 0)
+val share_counts = Array.array (8, 0)
 fun bump i = Array.update (share_counts, i, Array.sub (share_counts, i) + 1)
-fun share_stats () = List.tabulate (4, fn i => Array.sub (share_counts, i))
+fun share_stats () = List.tabulate (8, fn i => Array.sub (share_counts, i))
 
 fun shared_ancestor_set (memo : ancestor_memo) thy ps =
     let
@@ -67,13 +67,20 @@ fun shared_ancestor_set (memo : ancestor_memo) thy ps =
               SOME s => Portable.pointer_eq (s, valOf (Symtab.lookup memo p))
             | NONE => false
       val key = Listsort.sort String.compare ps
+      (* a set computed some other way that equals the table's is
+         replaced by it, so that the tag's descendants can share too *)
+      fun dedup i s =
+          case shared_set thy of
+              SOME s' => if HOLset.equal (s, s') then (bump (i + 4); s')
+                         else (bump i; s)
+            | NONE => (bump i; s)
     in
       if not (List.all is_shared ps) then
-        (bump 0; ancestor_set memo thy ps)
+        dedup 0 (ancestor_set memo thy ps)
       else
         case Symtab.lookup shared thy of
             SOME (ps', s) =>
-            if ps' = key then (bump 1; s) else (bump 2; ancestor_set memo thy ps)
+            if ps' = key then (bump 1; s) else dedup 2 (ancestor_set memo thy ps)
           | NONE =>
             let
               val s = ancestor_set memo thy ps
