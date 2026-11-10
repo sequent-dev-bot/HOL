@@ -193,7 +193,7 @@ fun type_var_in v =
   if is_vartype v then exists_tyvar (equal v)
                   else raise ERR "type_var_in" "not a type variable"
 
-val polymorphic = exists_tyvar (fn _ => true)
+fun polymorphic ty = mk_polymorphic () ty
 
 fun (ty1 --> ty2) = Tyapp(fun_tyc, [ty1, ty2])
 
@@ -223,15 +223,7 @@ fun mk_vartype "'a" = alpha  | mk_vartype "'b" = beta
                                  "\"")
                          else (); Tyv s)
 
-fun ty_sub [] _ = SAME
-  | ty_sub theta (Tyapp(tyc,Args))
-      = (case delta_map (ty_sub theta) Args
-          of SAME => SAME
-           | DIFF Args' => DIFF (Tyapp(tyc, Args')))
-  | ty_sub theta v =
-      case Lib.subst_assoc (equal v) theta
-       of NONE    => SAME
-        | SOME ty => DIFF ty
+fun ty_sub theta ty = mk_ty_sub theta ty
 
 fun type_subst theta = delta_apply (ty_sub theta)
 

@@ -7,6 +7,7 @@ sig
   val termsig        : unit -> Type_dtype.holty KernelSig.symboltable
 
   val lazy_beta_conv : term -> term
+  val mk_inst        : (hol_type,hol_type) Lib.subst -> term -> term
   val imp            : term
   val dest_eq_ty     : term -> term * term * hol_type
   val prim_mk_eq     : hol_type -> term -> term -> term

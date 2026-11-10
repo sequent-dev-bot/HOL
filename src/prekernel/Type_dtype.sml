@@ -113,4 +113,55 @@ struct
   fun id_hash id = string_hash (KernelSig.name_of id)
 end
 
+
+(* A sample of a type's top three levels, for Memo buckets. *)
+fun type_hash ty =
+    let
+      fun sample _ (Tyv s) = Memo.string_hash s
+        | sample 0 (Tyapp ((id, _), _)) = Memo.id_hash id
+        | sample d (Tyapp ((id, _), args)) =
+            List.foldl (fn (a, h) => Memo.mix (h, sample (d - 1) a))
+                       (Memo.id_hash id) args
+    in
+      sample 3 ty
+    end
+
+fun same_type (ty1 : hol_type, ty2) = Portable.pointer_eq (ty1, ty2)
+
+(*---------------------------------------------------------------------------*
+ * [mk_ty_sub theta] is a substitution function for theta whose memo lasts   *
+ * as long as the function, so a caller substituting into several types    *
+ * (the typed leaves of a term) shares it across them.  Unchanged subtypes  *
+ * are returned as they are (SAME).                                         *
+ *---------------------------------------------------------------------------*)
+
+fun mk_ty_sub [] = (fn _ => Lib.SAME)
+  | mk_ty_sub theta =
+    let
+      val table = Memo.new type_hash same_type
+      fun sub (ty as Tyapp (tyc, args)) =
+            Memo.memo table ty (fn () =>
+              case Lib.delta_map sub args of
+                Lib.SAME => Lib.SAME
+              | Lib.DIFF args' => Lib.DIFF (Tyapp (tyc, args')))
+        | sub v =
+            case Lib.subst_assoc (fn x => x = v) theta of
+              NONE => Lib.SAME
+            | SOME ty => Lib.DIFF ty
+    in
+      sub
+    end
+
+(* [mk_polymorphic ()] tests for type variables, with a memo that lasts as
+   long as the function. *)
+fun mk_polymorphic () =
+    let
+      val table = Memo.new type_hash same_type
+      fun poly (Tyv _) = true
+        | poly (ty as Tyapp (_, args)) =
+            Memo.memo table ty (fn () => List.exists poly args)
+    in
+      poly
+    end
+
 end

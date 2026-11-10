@@ -428,7 +428,8 @@ fun GEN_ABS opt vlist (th as THM(ocl,asl,c)) =
 
 fun INST_TYPE [] th = th
   | INST_TYPE theta (THM(ocl,asl,c)) =
-     make_thm Count.InstType(ocl, hypset_map (inst theta) asl, inst theta c)
+     let val instf = Term.mk_inst theta
+     in make_thm Count.InstType(ocl, hypset_map instf asl, instf c) end
 
 (*---------------------------------------------------------------------------
  *          A |- M
