@@ -445,6 +445,13 @@ Proof
   metis_tac [integral_float_abs_lt_one_is_zero]
 QED
 
+(* realLib.REAL_ASM_ARITH_TAC feeds the whole assumption list to the
+   arithmetic procedure, which case-splits on every abs and if in it and
+   gets exponential in the goals below.  Pass it only the assumptions
+   matching the given patterns. *)
+fun real_arith_from pats =
+  MAP_EVERY (fn p => qpat_x_assum p mp_tac) pats >> realLib.REAL_ARITH_TAC
+
 Theorem integral_round_RNA_zero_class:
   -threshold (:'t # 'w) < x /\ x < threshold (:'t # 'w) /\
   abs x < 1 / 2 /\
@@ -478,7 +485,10 @@ Proof
     (mp_tac (Q.SPECL [`float_to_real y - x`, `x`]
        realTheory.ABS_TRIANGLE) >> realLib.REAL_ASM_ARITH_TAC) >>
   irule integral_float_abs_lt_one_is_zero >>
-  simp [] >> realLib.REAL_ASM_ARITH_TAC
+  simp [] >>
+  real_arith_from
+    [`abs (float_to_real y) <= abs (float_to_real y - x) + abs x`,
+     `abs (float_to_real y - x) <= abs x`, `abs x < 1 / 2`]
 QED
 
 Theorem integral_floor_closest[local]:
@@ -768,13 +778,6 @@ Proof
       integral_round_candidate_def] >>
   metis_tac []
 QED
-
-(* realLib.REAL_ASM_ARITH_TAC feeds the whole assumption list to the
-   arithmetic procedure, which case-splits on every abs and if in it and
-   gets exponential in the goals below.  Pass it only the assumptions
-   matching the given patterns. *)
-fun real_arith_from pats =
-  MAP_EVERY (fn p => qpat_x_assum p mp_tac) pats >> realLib.REAL_ARITH_TAC
 
 Theorem even_integral_closest_unique[local]:
   is_closest float_is_integral x (y : ('t,'w) float) /\
