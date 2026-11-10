@@ -16301,8 +16301,10 @@ in
       "((define @s () (set.insert (@list) (set.singleton 8))))"));
   assert ((ignore (parse
       "((define @s () (set.insert (@list true) (set.singleton 8))))");
-      false) handle Feedback.HOL_ERR _ => true,
-    "CPC insertion packet accepted an element with the wrong type")
+      false) handle Feedback.HOL_ERR error =>
+        Feedback.top_structure_of error = "pred_setSyntax" andalso
+        Feedback.top_function_of error = "mk_INSERT",
+    "CPC insertion packet did not report its element-type error")
 end
 
 (* The Set names are an explicit frozen registry, not a prefix catch-all.
