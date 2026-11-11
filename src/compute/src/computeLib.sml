@@ -318,25 +318,36 @@ val bool_compset =
   seal (set_skip (from_list bool_redns) boolSyntax.conditional NONE);
 
 (* Loading a theory compiles its compute theorems and datatypes into the
-   global compset, which nothing reads until something evaluates.  While
-   load hooks run (Theory.in_load_hooks), updates are queued instead, as
-   a chain of cells each holding the previous cell and the update; the
-   first read applies the whole chain in order, so the compset it gets is
-   the one eager application would have built.  The forcing lock keeps two
-   threads from applying the same update twice: updates mutate the
-   per-constant refs of the compset they are given. *)
+   global compset, which nothing reads until something evaluates.  Updates
+   are queued instead, as a chain of cells each holding the previous cell
+   and the update, while load hooks run (Theory.in_load_hooks) and, outside
+   them, for as long as nothing has read the compset since the last queued
+   update: a definition or datatype then adds to the queue too.  The first
+   read applies the whole chain in order, so the compset it gets is the one
+   eager application would have built; once read, updates apply at once
+   again.  The forcing lock keeps two threads from applying the same update
+   twice: updates mutate the per-constant refs of the compset they are
+   given. *)
 local
   datatype cell = Done of compset | Todo of cell ref * (compset -> compset)
   val force_lock = Lock.new "computeLib.force"
-  (* An update that is interrupted has mutated what it got so far; it is
-     marked done rather than left to run again on the same refs. *)
+  (* Applies the chain oldest first, without recursion: a load queues
+     thousands of updates.  An update that fails or is interrupted has
+     mutated what it got so far; it is marked done rather than left to run
+     again on the same refs. *)
   fun force r =
-      case !r of
-          Done cs => cs
-        | Todo (prev, f) =>
-          let val cs0 = force prev
-              val cs = f cs0 handle e => (r := Done cs0; raise e)
-          in r := Done cs; cs end
+      let
+        fun collect r acc =
+            case !r of
+                Done cs => (cs, acc)
+              | Todo (prev, f) => collect prev ((r, f) :: acc)
+        val (cs0, todo) = collect r []
+        fun apply ((r, f), cs0) =
+            let val cs = f cs0 handle e => (r := Done cs0; raise e)
+            in r := Done cs; cs end
+      in
+        List.foldl apply cs0 todo
+      end
   fun force_locked r =
       case !r of
           Done cs => cs
@@ -360,8 +371,11 @@ in
   fun upd_compset f =
       Context.Data.modify compset_slot
         (fn r => if Theory.in_load_hooks () then ref (Todo (r, guard f))
-                 else Lock.synchronized force_lock
-                        (fn () => ref (Done (f (force r)))))
+                 else
+                   case !r of
+                       Todo _ => ref (Todo (r, f))
+                     | Done _ => Lock.synchronized force_lock
+                                    (fn () => ref (Done (f (force r)))))
 end
 
 fun add_funs thms = upd_compset (add_thms thms)
