@@ -134,14 +134,15 @@ jobs:
       - if: always()
         run: ci/.github/theory-modules/diag.sh hol
 
-  # Every Poly/ML kernel with tests, against Poly/ML master: the module
+  # The module tests on every Poly/ML kernel but otknl (which needs
+  # opentheory; trknl uses the same Thm), against Poly/ML master: the
   # cache is used by stdknl and expknl only, and the others must decline.
   kernels:
     if: inputs.job == 'kernels'
     strategy:
       fail-fast: false
       matrix:
-        kernel: [stdknl, expk, otknl, trknl]
+        kernel: [stdknl, expk, trknl]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -153,10 +154,12 @@ jobs:
           path: hol
       - name: Build Poly/ML master
         run: ci/.github/theory-modules/poly.sh
-      - name: Build up to hol with tests
+      - name: Build up to hol, run the module tests
         working-directory: hol
         run: |
           poly < tools/smart-configure.sml
-          bin/build -j4 -t --${{ matrix.kernel }} --seq=tools/sequences/upto-hol
+          bin/build -j4 --${{ matrix.kernel }} --seq=tools/sequences/upto-hol
+          cd tools/Holmake/tests/theory_modules
+          ../../../../bin/Holmake
       - if: always()
         run: ci/.github/theory-modules/diag.sh hol
