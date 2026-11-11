@@ -1745,3 +1745,91 @@ in
   require (check_result (Lib.subst_eq aconv aconv [a |-> c]))
           (Lib.subst_keep_last aconv) [a |-> b, a |-> c]
 end
+
+(* Substitution and instantiation on terms and types with sharing: each
+   test's input has 2^1000 paths through about 1000 distinct nodes, so it
+   finishes only if shared nodes are processed once, and its result has to
+   share nodes too.  The kernel walks a large term plainly before it
+   memoises, and the first few hundred memoised steps are not shared,
+   hence the slack in the bounds. *)
+local
+  fun disj_dag 0 t = t
+    | disj_dag n t = disj_dag (n - 1) (mk_disj (t, t))
+  (* the distinct values reachable through children *)
+  fun distinct children x =
+      let
+        fun seen y = List.exists (fn s => Portable.pointer_eq (s, y))
+        fun walk (y, acc) =
+            if seen y acc then acc else List.foldl walk (y :: acc) (children y)
+      in
+        walk (x, [])
+      end
+  val comb_nodes =
+      length o distinct (fn t => if is_comb t then let val (f, x) = dest_comb t
+                                          in [f, x] end
+                        else [])
+  val type_nodes =
+      distinct (fn ty => if is_vartype ty then [] else #2 (dest_type ty))
+  fun tower 0 = alpha
+    | tower n = let val t = tower (n - 1) in t --> t end
+  val p = mk_var ("p", bool)
+in
+val _ = tprint "SPEC with a DAG argument keeps its sharing (HOL issue 1300)"
+val _ = require (check_result (fn n => n < 3000))
+                (fn t => comb_nodes
+                           (concl (SPEC T (SPEC t (ASSUME ``!x y. x \/ y``)))))
+                (disj_dag 1000 T)
+
+val _ = tprint "subst into a DAG keeps its sharing"
+val _ = require (check_result (fn n => n < 3000))
+                (fn t => comb_nodes (subst [p |-> T] t)) (disj_dag 1000 p)
+
+val _ = tprint "INST_TYPE on a type DAG keeps its sharing (HOL issue 2122)"
+val _ = require (check_result (fn n => 1000 < n andalso n < 1600))
+                (fn ty => let
+                   val th = INST_TYPE [alpha |-> bool] (REFL (mk_var ("x", ty)))
+                   val ty' = type_of (lhs (concl th))
+                   val nodes = type_nodes ty'
+                 in
+                   if List.exists is_vartype nodes then 0 else length nodes
+                 end)
+                (tower 1000)
+
+val _ = tprint "INST_TYPE on a term DAG keeps its sharing"
+val _ = require (check_result (fn n => n < 3000))
+                (fn t => comb_nodes
+                           (concl (INST_TYPE [alpha |-> bool] (ASSUME t))))
+                (disj_dag 1000 (mk_comb (mk_var ("f", alpha --> bool),
+                                         mk_var ("x", alpha))))
+
+(* The standard kernel can hold a term as a delayed substitution, which
+   dest_comb unfolds into fresh nodes on each call.  subst and inst unfold
+   it in their results, so taking a result apart twice gives the same
+   nodes. *)
+local
+  fun same_parts t =
+      not (is_comb t) orelse
+      let val (f1, x1) = dest_comb t and (f2, x2) = dest_comb t
+      in Portable.pointer_eq (f1, f2) andalso Portable.pointer_eq (x1, x2)
+         andalso same_parts f1 andalso same_parts x1
+      end
+  val x = mk_var ("x", bool)
+  val q = mk_var ("q", bool)
+  val f = mk_var ("f", bool --> bool --> bool)
+  (* f q q, which Beta leaves delayed where the kernel delays *)
+  val delayed =
+      rhs (concl (Thm.Beta
+                    (REFL (mk_comb (mk_abs (x, list_mk_comb (f, [x, x])), q)))))
+  val c = mk_var ("c", bool --> bool --> bool)
+  val g = mk_var ("g", alpha --> bool --> bool)
+in
+val _ = tprint "subst leaves no delayed substitution in its result"
+val _ = require (check_result same_parts)
+                (subst [p |-> T]) (list_mk_comb (c, [p, delayed]))
+
+val _ = tprint "INST_TYPE leaves no delayed substitution in its result"
+val _ = require (check_result same_parts)
+                (fn t => concl (INST_TYPE [alpha |-> bool] (ASSUME t)))
+                (list_mk_comb (g, [mk_var ("z", alpha), delayed]))
+end
+end
