@@ -10,11 +10,11 @@ fun read file = let val ins = TextIO.openIn file
   in TextIO.inputAll ins before TextIO.closeIn ins end;
 fun write file text = let val out = TextIO.openOut file
   in TextIO.output (out,text); TextIO.closeOut out end;
-val () = load_pft ["PFTReader","PFTReplay","ProofTraceReplay"];
+val () = load_pft ["PFTReader","PFTReplay","ProofTraceReplay","PFTMerge"];
 
 (* Replay and check before loading the libraries used to produce the traces. *)
 val () = if phase <> "raw" andalso phase <> "convert" andalso
-    phase <> "separate" then () else let
+    phase <> "separate" andalso phase <> "merged" then () else let
   val cases = [("identity_restore", "identity_restore", "item"),
     ("identity_collision", "bool", "T"), ("identity_closure", "bool", "T"),
     ("identity_negation", "bool", "T"),
@@ -33,8 +33,13 @@ val () = if phase <> "raw" andalso phase <> "convert" andalso
        {trace=trace thy,output=output thy,ruleset=PFTEmit.HOL4}) theories;
      PFTEmit.emit_theory {trace=trace "identity_negation",
        output="identity_negation.candle.pft",ruleset=PFTEmit.Candle};
+     PFTMerge.merge {inputs=map output theories,
+       targets=map (fn (thy,_,_) => PFTMerge.ThyAll(thy,false)) cases,
+       output=output "merged",binary=true};
      pass ())
-  val db = if phase = "separate" then
+  val db = if phase = "merged" then
+      PFTReplay.replay PFTReplay.empty_trDB (output "merged")
+    else if phase = "separate" then
       List.foldl (fn (thy,db) => PFTReplay.replay db (output thy))
         PFTReplay.empty_trDB theories
     else PFTReplay.empty_trDB
@@ -67,7 +72,8 @@ val () = if phase <> "raw" andalso phase <> "convert" andalso
         (List.exists (fn tm => #Thy (Term.dest_thy_const tm) = thy)
           (Term.decls nm))
     | _ => raise Fail name
-  val () = List.app declared (String.tokens Char.isSpace (read "identity.names"))
+  val () = if phase = "merged" then () else
+    List.app declared (String.tokens Char.isSpace (read "identity.names"))
 in pass () end;
 
 val () = if phase <> "loader-child" then () else

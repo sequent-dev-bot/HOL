@@ -48,6 +48,8 @@ by `Theory.export_theory`.
 The identity suite retains the raw producer/loader regressions and also
 converts their outputs. It compares all seven exact exported sequents and
 required public/private names through raw HOL and separate HOL PFT replay.
+Merged replay checks all eight target sequents; declarations unused by those
+targets may be pruned. The oracle suite also checks the merged sequent.
 It also converts an already-negated `NOT_INTRO` premise to Candle. Replay
 `bool` and `identity_negation.candle.pft` after the logical preamble, then
 run `identity-check-candle.ml` to check that theorem's exact sequent.

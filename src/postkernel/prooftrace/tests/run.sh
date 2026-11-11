@@ -25,7 +25,7 @@ for HOL_PFT_TEST in $pft_suites; do
            "$pft_scratch/$HOL_PFT_TEST/hol4"
   cd "$pft_scratch/$HOL_PFT_TEST"
   case "$HOL_PFT_TEST" in
-    identity) pft_phases='produce loader-parent loader-child raw convert separate' ;;
+    identity) pft_phases='produce loader-parent loader-child raw convert separate merged' ;;
     mk-abs) pft_phases='produce replay' ;;
     export) pft_phases='vacuous shadow overlap' ;;
     *) pft_phases=run ;;

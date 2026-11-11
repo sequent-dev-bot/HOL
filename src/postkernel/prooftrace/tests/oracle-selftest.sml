@@ -12,7 +12,7 @@ val () = Theory.export_theory ();
 
 val () = print "PFT_ORACLE_FIXTURES_PRODUCED\n";
 
-val () = load_pft ["PFTReader","PFTReplay"];
+val () = load_pft ["PFTReader","PFTMerge","PFTReplay"];
 val () = use (test_source ^ "oracle-check-results.sml");
 
 val separate = "oracle_hyps.pft.bin";
@@ -21,5 +21,11 @@ val () = PFTEmit.emit_theory
    ruleset=PFTEmit.HOL4};
 val () = check_oracle_results
   (PFTReplay.replay PFTReplay.empty_trDB separate);
-val () = OS.FileSys.remove separate;
+val merged = "oracle_merged.pft.bin";
+val () = PFTMerge.merge
+  {inputs=[separate], targets=[PFTMerge.ThyAll ("oracle_hyps", false)],
+   output=merged, binary=true};
+val () = check_oracle_results
+  (PFTReplay.replay PFTReplay.empty_trDB merged);
+val () = List.app OS.FileSys.remove [separate, merged];
 val () = print "PFT_ORACLE_SELFTEST_PASSED\n";
