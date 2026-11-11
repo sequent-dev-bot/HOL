@@ -479,11 +479,23 @@ in
 end;
 
 local
-  fun end_refute (_, [t]) = CLEANUP_SKOLEM_CONSTS_RULE t
-    | end_refute _ = raise BUG "FOL_REFUTE" "weird";
+  (* A definition or Skolem constant hypothesis left over after cleanup
+     would end up in the caller's theorem, so fail instead. *)
+  fun is_def cs tm =
+    case total (fst o dest_var o lhs) tm of NONE => false | SOME c => mem c cs;
+
+  fun end_refute cs (_, [t]) =
+    let
+      val t = CLEANUP_SKOLEM_CONSTS_RULE t
+    in
+      if List.exists (is_def cs) (hyp t) then
+        raise ERR "FOL_REFUTE" "proof leaves undischarged definitions"
+      else t
+    end
+    | end_refute _ _ = raise BUG "FOL_REFUTE" "weird";
 in
-  fun FOL_REFUTE slv lmap lim =
-    (end_refute o FOL_FIND slv lmap lim) (([], []), [F]);
+  fun FOL_REFUTE slv (lmap : logic_map) lim =
+    (end_refute (#consts lmap) o FOL_FIND slv lmap lim) (([], []), [F]);
 end;
 
 fun FOL_TACTIC slv lmap lim = ACCEPT_TAC (FOL_REFUTE slv lmap lim);
