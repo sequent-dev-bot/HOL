@@ -1,6 +1,8 @@
 # Builds HOL with theory value modules against current Poly/ML master on
-# Linux and macOS: a fresh full build, and a tree that is built, moved,
-# partly cleaned and rebuilt incrementally.
+# Linux and macOS: a fresh full build with tests, and a tree that is
+# built, partly cleaned and rebuilt, moved behind a symlink, and moved
+# and reconfigured.  The moved-tree job also runs on develop as a
+# control, to tell this change's failures from HOL's own.
 name: theory-modules
 
 on:
@@ -10,58 +12,82 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  full:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[full]')
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest]
-        scenario: [full, moved]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 350
     steps:
-      - name: Checkout HOL
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           path: hol
-
       - name: Build Poly/ML master
-        run: |
-          git clone --depth 1 https://github.com/polyml/polyml.git polyml
-          git -C polyml log -1 --format='polyml %H %ci'
-          cd polyml
-          ./configure --prefix="$HOME/poly" > configure.log
-          make -j4 > make.log 2>&1 || { tail -50 make.log; exit 1; }
-          make install > install.log
-          echo "$HOME/poly/bin" >> "$GITHUB_PATH"
-
+        run: hol/.github/theory-modules/poly.sh
       - name: Configure HOL
         working-directory: hol
-        run: |
-          poly -v < /dev/null | head -1
-          poly < tools/smart-configure.sml
-
+        run: poly < tools/smart-configure.sml
       - name: Full build with tests
-        if: matrix.scenario == 'full'
         working-directory: hol
         run: bin/build -j4 -t
+      - name: Diagnostics
+        if: always()
+        run: hol/.github/theory-modules/diag.sh hol
 
-      - name: Build up to hol, move, partly clean, rebuild
-        if: matrix.scenario == 'moved'
+  moved:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        hol: [change, develop]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: ci
+      - uses: actions/checkout@v5
+        with:
+          path: hol
+          ref: ${{ matrix.hol == 'develop' && 'a9587ae29' || github.sha }}
+      - name: Build Poly/ML master
+        run: ci/.github/theory-modules/poly.sh
+      - name: Build up to hol
+        working-directory: hol
         run: |
-          set -x
-          (cd hol && bin/build -j4 --seq=tools/sequences/upto-hol)
-          mv hol hol-moved
+          git log -1 --format='HOL %H %s'
+          poly < tools/smart-configure.sml
+          bin/build -j4 --seq=tools/sequences/upto-hol
+      - name: Partly clean, rebuild with tests
+        working-directory: hol
+        run: |
+          (cd src/num/termination && ../../../bin/Holmake cleanAll)
+          (cd src/bool && ../../bin/Holmake cleanAll)
+          bin/build -j4 -t --seq=tools/sequences/upto-hol
+      - if: always()
+        run: ci/.github/theory-modules/diag.sh hol
+      - name: Move behind a symlink, rebuild with tests
+        if: always()
+        run: |
+          mv hol hol-moved && ln -s hol-moved hol
+          cd hol-moved
+          (cd src/num/termination && ../../../bin/Holmake cleanAll)
+          bin/build -j4 -t --seq=tools/sequences/upto-hol
+      - if: always()
+        run: ci/.github/theory-modules/diag.sh hol-moved
+      - name: Drop the symlink, reconfigure, rebuild, run the module tests
+        if: always()
+        run: |
+          rm hol
           cd hol-moved
           poly < tools/smart-configure.sml
           (cd src/num/termination && ../../../bin/Holmake cleanAll)
-          (cd tools/Holmake/tests/theory_modules && ../../../../bin/Holmake cleanAll)
-          (cd tools/Holmake/tests/theory_modules/testdir && ../../../../../bin/Holmake cleanAll)
-          bin/build -j4 -t --seq=tools/sequences/upto-hol
-
-      - name: Diagnostics
-        if: always()
-        run: |
-          d=hol; [ -d hol-moved ] && d=hol-moved
-          cd "$d"
-          [ -x bin/hol ] && bin/hol run --noconfig .github/theory-modules/diag.sml || true
-          for f in $(find . -name theory-modules-selftest.log); do echo "== $f"; tail -40 "$f"; done
+          bin/build -j4 --seq=tools/sequences/upto-hol
+          if [ -d tools/Holmake/tests/theory_modules ]; then
+            cd tools/Holmake/tests/theory_modules
+            ../../../../bin/Holmake cleanAll && ../../../../bin/Holmake
+          fi
+      - if: always()
+        run: ci/.github/theory-modules/diag.sh hol-moved
