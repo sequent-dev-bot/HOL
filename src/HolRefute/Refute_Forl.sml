@@ -1452,9 +1452,11 @@ structure Refute_Forl :> Refute_Forl = struct
                 ["-max-msecs", IntInf.toString milliseconds] @
                 (if solve_all then ["-solve-all"] else []) @
                 ["-max-solutions", Int.toString max_solutions] @
-                (if max_threads > 0 then
-                   ["-max-threads", Int.toString max_threads]
-                 else [])
+                (* Start every batch problem; a processor-sized pool can
+                   starve later scopes. *)
+                ["-max-threads", Int.toString
+                  (if max_threads > 0 then max_threads
+                   else length indexed_problems)]
               (* Keep the caller's working directory for a shell-command
                  override such as [./kodkodi].  Every path Kodkodi touches
                  is absolute -- the ones below, and the CNF file it writes
