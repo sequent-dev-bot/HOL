@@ -1,7 +1,9 @@
 #!/bin/bash
-# Builds and installs current Poly/ML master in $HOME/poly.
+# poly.sh [commit]: builds and installs Poly/ML (master by default) in
+# $HOME/poly.
 set -e
-git clone -q --depth 1 https://github.com/polyml/polyml.git polyml
+git clone -q https://github.com/polyml/polyml.git polyml
+git -C polyml checkout -q "${1:-master}"
 git -C polyml log -1 --format='polyml %H %ci'
 cd polyml
 ./configure --prefix="$HOME/poly" > configure.log

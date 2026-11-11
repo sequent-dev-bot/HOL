@@ -10,10 +10,14 @@ on:
     branches:
       - "bot/opus/theory-modules-ci"
   workflow_dispatch:
+    inputs:
+      job:
+        type: choice
+        options: [full, moved, window]
 
 jobs:
   full:
-    if: github.event_name == 'workflow_dispatch'
+    if: inputs.job == 'full'
     strategy:
       fail-fast: false
       matrix:
@@ -42,7 +46,7 @@ jobs:
         run: ci/.github/theory-modules/diag.sh hol
 
   moved:
-    if: github.event_name == 'push'
+    if: inputs.job == 'moved'
     strategy:
       fail-fast: false
       matrix:
@@ -97,3 +101,35 @@ jobs:
           fi
       - if: always()
         run: ci/.github/theory-modules/diag.sh hol-moved
+
+  # Poly/ML master between saveDependentModuleBasic (2025-09) and
+  # showHierarchyWithIds (2026-06): HOL's Meta needs both, so modules
+  # stay off, and the probe must expect that.  Runs the change before
+  # the probe fix (31fbbb634) and as it is now.
+  window:
+    if: github.event_name == 'push' || inputs.job == 'window'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        hol: [unfixed, fixed]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: ci
+      - uses: actions/checkout@v5
+        with:
+          path: hol
+          ref: ${{ matrix.hol == 'unfixed' && '31fbbb63413674103cedf948ef7ec47e4b67a31e' || github.sha }}
+      - name: Build Poly/ML 15a6e83f
+        run: ci/.github/theory-modules/poly.sh 15a6e83fbbbcb30eb25c8a77d7f801bf7b25c1d6
+      - name: Build up to hol with tests
+        working-directory: hol
+        run: |
+          git log -1 --format='HOL %H %s'
+          poly < tools/smart-configure.sml
+          bin/build -j4 -t --seq=tools/sequences/upto-hol
+      - if: always()
+        run: ci/.github/theory-modules/diag.sh hol
