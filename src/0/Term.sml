@@ -232,8 +232,9 @@ fun fast_term_eq (t1:term) (t2:term) = Portable.pointer_eq (t1,t2)
    that is a DAG (a node reachable along several paths) costs one visit
    per node rather than one per path, and they return a node as it is
    when nothing below it changed.  A Clos is identified by its
-   environment and body: the shell push_clos makes from it is fresh on
-   each call, so it is neither a key nor stored. *)
+   environment and body, since the shell push_clos makes from it is fresh
+   on each call; like the stock functions, they always expand a Clos, so
+   no Clos is left in a result. *)
 local
   open Memo
   fun hash d tm =
@@ -632,10 +633,7 @@ fun rebuild_abs (tm, b0) (v, b) = if fast_term_eq b b0 then tm else Abs(v, b)
 (* Apply sub to the children of a Comb, Abs or Clos *)
 fun descend sub (tm as Comb(f, x)) = rebuild_comb (tm, f, x) (sub f, sub x)
   | descend sub (tm as Abs(v, b)) = rebuild_abs (tm, b) (v, sub b)
-  | descend sub (tm as Clos _) =
-      let val shell = push_clos tm
-          val r = descend sub shell
-      in if fast_term_eq r shell then tm else r end
+  | descend sub (tm as Clos _) = descend sub (push_clos tm)
   | descend _ tm = tm
 
 fun beta_conv (Comb(Abs(_,Body), Bv 0)) = Body
@@ -647,10 +645,7 @@ fun beta_conv (Comb(Abs(_,Body), Bv 0)) = Body
                else tm
          and down (tm as Abs(v,Body), i) =
                rebuild_abs (tm, Body) (v, subs(Body,i+1))
-           | down (tm as Clos _, i) =
-               let val shell = push_clos tm
-                   val r = down (shell, i)
-               in if fast_term_eq r shell then tm else r end
+           | down (tm as Clos _, i) = down (push_clos tm, i)
            | down (tm, i) = descend (fn t => subs(t,i)) tm
      in
        subs (Body,0)
@@ -763,10 +758,7 @@ fun mk_inst [] = I
          in if fast_term_eq v Bvar andalso fast_term_eq b Body then tm
             else Abs(v, b)
          end
-     | node t =
-         let val shell = push_clos t
-             val r = node shell
-         in if fast_term_eq r shell then t else r end
+     | node t = node (push_clos t)
     in
       inst1
     end;
