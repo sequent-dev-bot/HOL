@@ -254,6 +254,9 @@ fun term_table () = new (hash 3) same
 fun term_depth_table () =
     new (fn (tm, i) => mix (hash 3 tm, Word.fromInt i))
         (fn ((t1, i1), (t2, i2)) => i1 = i2 andalso same (t1, t2))
+fun term_pair_table () =
+    new (fn (t1, t2) => mix (hash 3 t1, hash 3 t2))
+        (fn ((l1, r1), (l2, r2)) => same (l1, l2) andalso same (r1, r2))
 end
 
 fun interior (Comb _) = true
@@ -595,17 +598,51 @@ local
   fun EQ(t1,t2) = fast_term_eq t1 t2
   fun subsEQ(s1,s2) = s1 = s2
 in
-fun aconv t1 t2 = EQ(t1,t2) orelse
+(* Past Memo's budget, aconv starts again remembering, for the length of
+   the call, the result for each pair of Comb, Abs or Clos nodes, so
+   comparing two equal DAGs that are separate values costs a visit per
+   pair of nodes met rather than one per path.  With bound variables as
+   Bv indices, a pair's result does not depend on where it occurs. *)
+fun memo_aconv t1 t2 =
+ let
+   val table = term_pair_table ()
+   fun ac t1 t2 =
+       EQ(t1,t2) orelse
+       (if interior t1 orelse interior t2 then
+          Memo.memo table (t1, t2) (fn () => step t1 t2)
+        else step t1 t2)
+   and step t1 t2 =
  case(t1,t2)
-  of (Comb(M,N),Comb(P,Q)) => aconv N Q andalso aconv M P
+  of (Comb(M,N),Comb(P,Q)) => ac N Q andalso ac M P
    | (Abs(Fv(_,ty1),M),
-      Abs(Fv(_,ty2),N)) => ty1=ty2 andalso aconv M N
+      Abs(Fv(_,ty2),N)) => ty1=ty2 andalso ac M N
    | (Clos(e1,b1),
       Clos(e2,b2)) => (subsEQ(e1,e2) andalso EQ(b1,b2))
-                       orelse aconv (push_clos t1) (push_clos t2)
-   | (Clos _, _) => aconv (push_clos t1) t2
-   | (_, Clos _) => aconv t1 (push_clos t2)
+                       orelse ac (push_clos t1) (push_clos t2)
+   | (Clos _, _) => ac (push_clos t1) t2
+   | (_, Clos _) => ac t1 (push_clos t2)
    | (M,N)       => (M=N)
+ in
+   step t1 t2
+ end
+
+fun aconv t1 t2 = EQ(t1,t2) orelse
+ let
+   val left = Memo.budget ()
+   fun ac t1 t2 = EQ(t1,t2) orelse
+ case(t1,t2)
+  of (Comb(M,N),Comb(P,Q)) => (Memo.tick left; ac N Q andalso ac M P)
+   | (Abs(Fv(_,ty1),M),
+      Abs(Fv(_,ty2),N)) => (Memo.tick left; ty1=ty2 andalso ac M N)
+   | (Clos(e1,b1),
+      Clos(e2,b2)) => (subsEQ(e1,e2) andalso EQ(b1,b2))
+                       orelse ac (push_clos t1) (push_clos t2)
+   | (Clos _, _) => ac (push_clos t1) t2
+   | (_, Clos _) => ac t1 (push_clos t2)
+   | (M,N)       => (M=N)
+ in
+   ac t1 t2 handle Memo.OverBudget => memo_aconv t1 t2
+ end
 end;
 
 
