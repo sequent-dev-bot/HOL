@@ -318,16 +318,15 @@ val bool_compset =
   seal (set_skip (from_list bool_redns) boolSyntax.conditional NONE);
 
 (* Loading a theory compiles its compute theorems and datatypes into the
-   global compset, which nothing reads until something evaluates.  Updates
-   are queued instead, as a chain of cells each holding the previous cell
-   and the update, while load hooks run (Theory.in_load_hooks) and, outside
-   them, for as long as nothing has read the compset since the last queued
-   update: a definition or datatype then adds to the queue too.  The first
-   read applies the whole chain in order, so the compset it gets is the one
-   eager application would have built; once read, updates apply at once
-   again.  The forcing lock keeps two threads from applying the same update
-   twice: updates mutate the per-constant refs of the compset they are
-   given. *)
+   global compset, and definitions and datatypes add to it, but nothing
+   reads it until something evaluates.  So every update is queued, as a
+   chain of cells each holding the previous cell and the update, and a
+   read applies the chain in order: the compset it gets is the one eager
+   application would have built.  An update queued by a load hook
+   (Theory.in_load_hooks) warns on failure, as a load hook does; any other
+   raises from the read that applies it.  The forcing lock keeps two
+   threads from applying the same update twice: updates mutate the
+   per-constant refs of the compset they are given. *)
 local
   datatype cell = Done of compset | Todo of cell ref * (compset -> compset)
   val force_lock = Lock.new "computeLib.force"
@@ -370,12 +369,8 @@ in
   fun put_compset cs = Context.Data.write compset_slot (ref (Done cs))
   fun upd_compset f =
       Context.Data.modify compset_slot
-        (fn r => if Theory.in_load_hooks () then ref (Todo (r, guard f))
-                 else
-                   case !r of
-                       Todo _ => ref (Todo (r, f))
-                     | Done _ => Lock.synchronized force_lock
-                                    (fn () => ref (Done (f (force r)))))
+        (fn r => ref (Todo (r, if Theory.in_load_hooks () then guard f
+                               else f)))
 end
 
 fun add_funs thms = upd_compset (add_thms thms)
