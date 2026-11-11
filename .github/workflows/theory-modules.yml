@@ -1,5 +1,5 @@
 # Builds HOL with theory value modules against current Poly/ML master on
-# Linux and macOS: a fresh full build with tests, and a tree that is
+# Linux and macOS: a fresh full build with tests (on dispatch), and a tree that is
 # built, partly cleaned and rebuilt, moved behind a symlink, and moved
 # and reconfigured.  The moved-tree job also runs on develop as a
 # control, to tell this change's failures from HOL's own.
@@ -13,19 +13,24 @@ on:
 
 jobs:
   full:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[full]')
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest]
+        hol: [change, develop]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v5
         with:
+          path: ci
+      - uses: actions/checkout@v5
+        with:
           path: hol
+          ref: ${{ matrix.hol == 'develop' && 'a9587ae29c265935848b198cfa492a8825e56bfb' || github.sha }}
       - name: Build Poly/ML master
-        run: hol/.github/theory-modules/poly.sh
+        run: ci/.github/theory-modules/poly.sh
       - name: Configure HOL
         working-directory: hol
         run: poly < tools/smart-configure.sml
@@ -34,9 +39,10 @@ jobs:
         run: bin/build -j4 -t
       - name: Diagnostics
         if: always()
-        run: hol/.github/theory-modules/diag.sh hol
+        run: ci/.github/theory-modules/diag.sh hol
 
   moved:
+    if: github.event_name == 'push'
     strategy:
       fail-fast: false
       matrix:
