@@ -596,11 +596,36 @@ fun abandoned_mono_verdict report exn =
     | Util.BAD (location, detail) => (report (location, detail); false)
     | _ => raise exn
 
+(* How far the model finder got, so that every [Unknown] it reports names
+   the phase it reached and its counts.  One record is shared by all
+   instances of a run; the counters add up over them. *)
+type progress =
+  {phase : string ref, definitions : int ref, emitted : int ref,
+   completed : int ref, offered : int ref, finished : int ref}
+
+fun new_progress () : progress =
+  {phase = ref "preprocessing", definitions = ref 0, emitted = ref 0,
+   completed = ref 0, offered = ref 0, finished = ref 0}
+
+fun enter_phase (progress : progress) name = #phase progress := name
+
+fun bump counter n = counter := !counter + n
+
+fun progress_reason (progress : progress) rejected =
+  "phase reached: " ^ !(#phase progress) ^ "; definitions accepted " ^
+  Int.toString (!(#definitions progress)) ^ "; scopes completed " ^
+  Int.toString (!(#completed progress)) ^ " of " ^
+  Int.toString (!(#emitted progress)) ^ " emitted; problems offered " ^
+  Int.toString (!(#offered progress)) ^ ", finished " ^
+  Int.toString (!(#finished progress)) ^ ", rejected " ^
+  Int.toString rejected
+
 fun run_instance deadline started (config : Refute_Core.config)
       incremental solver (initial_max_potential, initial_max_genuine)
-      reject_problem
+      reject_problem (progress : progress)
       (instance : Refute_Core.instance) =
   let
+    val _ = enter_phase progress "preprocessing"
     val _ = check_deadline deadline
     val mf = #mf config
     val sound_finitizes = none_true (#finitize mf)
@@ -641,6 +666,7 @@ fun run_instance deadline started (config : Refute_Core.config)
                second pass constant-time at this guard. *)
             raise RESTART_AFTER_HARVEST
         | (NONE, false) => ()
+    val _ = bump (#definitions progress) (length def_ts)
     val _ = MFH.refresh_iterator_arg_types context (nondef_ts @ def_ts)
     val _ = MFH.print_wf_cache context
     val nondef_us = map (MFNT.nut_from_term context MFNT.Eq) nondef_ts
@@ -702,6 +728,7 @@ fun run_instance deadline started (config : Refute_Core.config)
           SOME (SOME false) => false
         | _ => is_type_actually_monotonic ty
 
+    val _ = enter_phase progress "scope enumeration"
     val (mono_types, nonmono_types) =
       if unique_scope then (all_types, [])
       else MFS.mono_partition_with is_type_actually_monotonic
@@ -752,6 +779,7 @@ fun run_instance deadline started (config : Refute_Core.config)
     val fully_exhausted = ref false
     val skipped = ref fixed_skipped
     val scopes_emitted = ref (length fixed_scopes)
+    val _ = bump (#emitted progress) (length fixed_scopes)
     val batch_count = ref 0
 
     fun refill_batches () =
@@ -759,11 +787,13 @@ fun run_instance deadline started (config : Refute_Core.config)
           NONE => ()
         | SOME cursor =>
             let
+              val _ = enter_phase progress "scope enumeration"
               val {scopes, done, stopped, skipped = newly_skipped} =
                 MFS.scope_cursor_batch_with_stop cursor batch_size
                   (fn () => Refute_Core.search_expired config)
               val _ = skipped := !skipped + newly_skipped
               val _ = scopes_emitted := !scopes_emitted + length scopes
+              val _ = bump (#emitted progress) (length scopes)
               val _ = pending_batches := Util.chunk_list batch_size scopes
               val _ = source_done := done
               val _ =
@@ -823,15 +853,34 @@ fun run_instance deadline started (config : Refute_Core.config)
     fun add_error reason =
       error_reasons := Refute_Core.add_reason (reason, !error_reasons)
 
+    fun problem_count problems scope = length (List.filter (fn problem =>
+      MFS.scopes_equivalent (#scope (metadata problem), scope)) problems)
+
+    fun scope_checked scope =
+      let
+        val generated = problem_count (!generated_problems) scope
+        val checked = problem_count (!checked_problems) scope
+      in
+        generated > 0 andalso generated = checked
+      end
+
+    fun scopes_checked () =
+      length (List.filter scope_checked (!generated_scopes))
+
     fun update_checked problems indices =
-      List.app (fn index =>
-        if index >= 0 andalso index < length problems then
-          let val problem = List.nth (problems, index)
-          in
-            if rich_member problem (!checked_problems) then ()
-            else checked_problems := problem :: !checked_problems
-          end
-        else ()) indices
+      let
+        val completed_before = scopes_checked ()
+        val _ = List.app (fn index =>
+          if index >= 0 andalso index < length problems then
+            let val problem = List.nth (problems, index)
+            in
+              if rich_member problem (!checked_problems) then ()
+              else checked_problems := problem :: !checked_problems
+            end
+          else ()) indices
+      in
+        bump (#completed progress) (scopes_checked () - completed_before)
+      end
 
     fun make_base (problem : rich_problem) : Refute_Core.counterexample =
       {backend = "kodkod", substrate = "kodkod",
@@ -840,7 +889,7 @@ fun run_instance deadline started (config : Refute_Core.config)
        scope = SOME (#card_assigns (#scope (metadata problem))),
        model = NONE, stats = []}
 
-    fun reconstruct problem bounds =
+    fun reconstruct_model problem bounds =
       if not (valid_instance (raw_problem problem) bounds) then
         (discarded_sound_model := true;
          add_error "Kodkodi returned a malformed model instance";
@@ -900,6 +949,15 @@ fun run_instance deadline started (config : Refute_Core.config)
               end
       end
 
+    fun reconstruct problem bounds =
+      let
+        val previous = !(#phase progress)
+        val _ = enter_phase progress "certification"
+        val result = reconstruct_model problem bounds
+      in
+        enter_phase progress previous; result
+      end
+
     fun keep_counterexample cex =
       (counterexamples := cex :: !counterexamples;
        (if #falsify mf then Refute_Core.publish_counterexamples
@@ -928,9 +986,16 @@ fun run_instance deadline started (config : Refute_Core.config)
           let
             val _ = check_deadline deadline
             val _ = kodkod_calls := !kodkod_calls + 1
+            val _ = enter_phase progress "solving"
+            val solved = KK.solve_any_problem (#debug mf) (#overlord mf)
+                deadline (#max_threads mf) max_solutions
+                (map raw_problem problems)
+            val _ = bump (#finished progress) (case solved of
+                KK.Normal (sat, unsat, _) => length sat + length unsat
+              | KK.TimedOut unsat => length unsat
+              | KK.Error (_, unsat) => length unsat)
           in
-            case KK.solve_any_problem (#debug mf) (#overlord mf) deadline
-                (#max_threads mf) max_solutions (map raw_problem problems) of
+            case solved of
                 KK.Normal ([], unsat_indices, warning) =>
                   let
                     val all_reported_unsat = List.all
@@ -1138,6 +1203,7 @@ fun run_instance deadline started (config : Refute_Core.config)
       let
         fun add unsound (kept, unknown) =
           let
+              val _ = enter_phase progress "assembly"
               val _ = check_deadline deadline
           in
             case problem_for_scope deadline mf all_types solver
@@ -1186,6 +1252,7 @@ fun run_instance deadline started (config : Refute_Core.config)
         val (newest_first, donno) = List.foldl (fn (scope, result) =>
           add_problem flags scope result) ([], donno) scope_batch
         val problems = rev newest_first
+        val _ = bump (#offered progress) (length problems)
         val _ = last_donno := donno
         (* Order-free: only filtered, partitioned and counted. *)
         val _ = generated_problems :=
@@ -1211,20 +1278,6 @@ fun run_instance deadline started (config : Refute_Core.config)
                 run_batches next
               else next
             end
-
-    fun problem_count problems scope = length (List.filter (fn problem =>
-      MFS.scopes_equivalent (#scope (metadata problem), scope)) problems)
-
-    fun scope_checked scope =
-      let
-        val generated = problem_count (!generated_problems) scope
-        val checked = problem_count (!checked_problems) scope
-      in
-        generated > 0 andalso generated = checked
-      end
-
-    fun scopes_checked () =
-      length (List.filter scope_checked (!generated_scopes))
 
     (* A clean finite scope frontier proves totality only when it covers the
        actual types, not merely every scope the user requested.  A type
@@ -1384,7 +1437,8 @@ fun run_instance deadline started (config : Refute_Core.config)
   end
   handle RESTART_AFTER_HARVEST =>
     run_instance deadline started config incremental solver
-      (initial_max_potential, initial_max_genuine) reject_problem instance
+      (initial_max_potential, initial_max_genuine) reject_problem progress
+      instance
 
 fun kodkod_certainty_ceiling (config : Refute_Core.config) instances =
   let
@@ -1429,10 +1483,15 @@ fun run_body config instances =
     val incremental =
       Int.max (initial_max_potential, initial_max_genuine) >= 2
     val solver = actual_solver incremental mf
-    val typedef_reason = #1 (harvest_guard
-      (List.concat (map (fn (instance : Refute_Core.instance) =>
-        #original instance :: #evals instance) ordered)))
+    val progress = new_progress ()
     val rejections = ref ([] : ((string * string) * int) list)
+    (* Only the first [max_rejection_reasons] distinct reasons are kept; the
+       rest are counted. A size rejection names the universe size, so a long
+       search has one reason per scope, and keeping them all made counting
+       and reporting quadratic: a search with tens of thousands of
+       rejections overran its deadline by seconds. *)
+    val max_rejection_reasons = 64
+    val other_rejections = ref 0
 
     fun reject_problem reason =
       let
@@ -1440,26 +1499,37 @@ fun run_body config instances =
           | count ((previous, n) :: rest) =
               if previous = reason then (previous, n + 1) :: rest
               else (previous, n) :: count rest
+        val seen = List.exists (fn (previous, _) => previous = reason)
+          (!rejections)
       in
-        rejections := count (!rejections)
+        if seen orelse length (!rejections) < max_rejection_reasons
+        then rejections := count (!rejections)
+        else other_rejections := !other_rejections + 1
       end
 
     fun rejection_reasons () = map (fn ((location, message), count) =>
       Int.toString count ^ " problem" ^ (if count = 1 then "" else "s") ^
-      " rejected: " ^ message ^ " (" ^ location ^ ")") (!rejections)
+      " rejected: " ^ message ^ " (" ^ location ^ ")") (!rejections) @
+      (if !other_rejections = 0 then []
+       else [Int.toString (!other_rejections) ^
+             " further problems rejected for other reasons"])
 
     fun report_rejections result =
       let
+        val count = List.foldl (fn ((_, n), total) => total + n)
+          (!other_rejections) (!rejections)
         val reasons = rejection_reasons ()
-        val count = List.foldl (fn ((_, n), total) => total + n) 0
-          (!rejections)
+        (* Every [Unknown] starts with the phase reached and the counts, so
+           that a consumer that cuts a long reason list still has them. *)
+        val progress_first = progress_reason progress count
         fun with_rejections (cex : Refute_Core.counterexample) =
           replace_stats (#stats cex @ [("problems_rejected", count)]) cex
       in
         case result of
             Refute_Core.Unknown more =>
               Refute_Core.Unknown
-                (List.foldl Refute_Core.add_reason more reasons)
+                (progress_first ::
+                 List.foldl Refute_Core.add_reason more reasons)
           | Refute_Core.Counterexample cexs =>
               Refute_Core.Counterexample (map with_rejections cexs)
           | Refute_Core.Model models =>
@@ -1468,6 +1538,9 @@ fun run_body config instances =
       end
     val _ = Refute_Core.set_backend_diagnostics rejection_reasons
       report_rejections
+    val typedef_reason = #1 (harvest_guard
+      (List.concat (map (fn (instance : Refute_Core.instance) =>
+        #original instance :: #evals instance) ordered)))
 
     fun search [] cexs reasons all_none _ =
           if not (null cexs) then Refute_Core.Counterexample cexs
@@ -1484,7 +1557,7 @@ fun run_body config instances =
             let
               val (result, next_budget) =
                 run_instance deadline started config incremental solver
-                  budget reject_problem instance
+                  budget reject_problem progress instance
                 handle Util.NOT_SUPPORTED reason =>
                   (Refute_Core.Unknown [reason], budget)
                      | Timeout.TIMEOUT _ =>

@@ -107,7 +107,10 @@ fun check_arity guilty universe_card arity =
         else " of Kodkod relation associated with \"" ^
           MFN.original_name guilty ^ "\"") ^
        " too large for a universe of size " ^
-       Int.toString universe_card)
+       Int.toString universe_card ^
+       (* The reason names the limit that was exceeded. *)
+       " (limit: arity " ^
+       Int.toString (Refute_Forl.max_arity universe_card) ^ ")")
   else
     ()
 
@@ -192,7 +195,9 @@ fun check_table_size size =
   if size > max_table_size then
     raise Util.TOO_LARGE
       ("Refute_ModelFinder_Kodkod.check_table_size",
-       "precomputed table too large (" ^ Int.toString size ^ ")")
+       (* The reason names the limit that was exceeded. *)
+       "precomputed table too large (" ^ Int.toString size ^
+       ", limit: " ^ Int.toString max_table_size ^ " entries)")
   else
     ()
 
@@ -1348,7 +1353,9 @@ fun lone_rep_fallback kk new_rep old_rep relation =
         if cardinality >= lone_rep_fallback_max_card then
           raise Util.TOO_LARGE
             ("Refute_ModelFinder_Kodkod.lone_rep_fallback",
-             "too high cardinality (" ^ Int.toString cardinality ^ ")")
+             (* The reason names the limit that was exceeded. *)
+             "too high cardinality (" ^ Int.toString cardinality ^
+             ", limit: " ^ Int.toString lone_rep_fallback_max_card ^ ")")
         else
           kk_case_switch kk old_rep new_rep relation
             (all_singletons_for_rep old_rep)

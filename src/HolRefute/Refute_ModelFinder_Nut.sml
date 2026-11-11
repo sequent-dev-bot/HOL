@@ -1080,7 +1080,12 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
       if arity > Refute_Forl.max_arity min_univ_card then
         raise Util.TOO_LARGE
           ("Refute_ModelFinder_Nut.choose_rep_for_bound_var",
-           "arity " ^ Int.toString arity ^ " of bound variable too large")
+           (* The reason names the bound variable and the limit that was
+              exceeded. *)
+           "arity " ^ Int.toString arity ^ " of bound variable \"" ^
+           (MFN.original_name (nickname_of variable) handle NUT _ => "?") ^
+           "\" too large (limit: arity " ^
+           Int.toString (Refute_Forl.max_arity min_univ_card) ^ ")")
       else
         NameTable.update (variable, representation) table
     end

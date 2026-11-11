@@ -2539,10 +2539,10 @@ val mf_num3 = mf |> upd_card [(SOME ``:num``, [3]), (NONE, [1])]
 val _ = test "unregistered typedefs are reported without kodkodi" (fn () =>
   List.all (fn goal =>
     case refute (mf |> upd_timeout 2.0) goal of
-        Unknown [reason] =>
-          String.isSuffix
+        Unknown reasons =>
+          List.exists (String.isSuffix
             "unregistered typedef zoo_unharvested: register with \
-            \Refute.register_typedef" reason
+            \Refute.register_typedef") reasons
       | _ => false)
     [``zoo_unharvested_abs 0 = (x : zoo_unharvested)``,
      ``zoo_unharvested_wrapper T 0 = (x : zoo_unharvested)``])
@@ -2614,6 +2614,61 @@ val _ = mf_test "adaptive arity rejections survive interrupted display"
       unknown_with "2 problems rejected:" result andalso
       unknown_with "arity 4" result andalso
       unknown_with "universe of size 256" result
+    end))
+
+(* Every [Unknown] of the model finder names the phase it reached and its
+   counts, first among its reasons. *)
+fun progress_reason_of outcome =
+  List.find (String.isSubstring "phase reached: ") (reasons_of outcome)
+
+fun progress_has needles outcome =
+  case progress_reason_of outcome of
+      SOME reason => List.all (fn needle =>
+        String.isSubstring needle reason) needles
+    | NONE => false
+
+val _ = mf_test "a size rejection names the relation, the limit, phase and counts"
+  (fn () =>
+    let val result =
+      refute (arity_config |> upd_card [(NONE, [256])]) arity_goal
+    in
+      unknown_with "associated with \"r\"" result andalso
+      unknown_with "(limit: arity 3)" result andalso
+      progress_has ["phase reached: assembly", "definitions accepted ",
+                    "scopes completed 0 of 1 emitted",
+                    "problems offered 0, finished 0, rejected 2"] result
+    end)
+
+val _ = mf_test "a declined goal names the phase and counts"
+  (fn () =>
+    List.all (fn goal =>
+      let val result = refute (mf |> upd_timeout 10.0) goal
+      in
+        unknown_with "unregistered typedef zoo_unharvested" result andalso
+        progress_has ["phase reached: preprocessing",
+                      "scopes completed 0 of 0 emitted",
+                      "problems offered 0, finished 0, rejected 0"] result
+      end)
+      [``zoo_unharvested_abs 0 = (x : zoo_unharvested)``,
+       ``zoo_unharvested_wrapper T 0 = (x : zoo_unharvested)``])
+
+(* The postprocessor blocks while the first model is displayed, so the
+   deadline always arrives in the certification phase, with the one sound
+   problem offered and finished. *)
+val _ = mf_test "a goal stopped by its deadline names the phase and counts"
+  (fn () => registration_context (fn () =>
+    let
+      val never = Synchronized.var "progress deadline test" ()
+      fun display tm =
+        (Synchronized.guarded_access never (fn _ => NONE); tm)
+      val _ = register_term_postprocessor ``:'a`` display
+      val result = refute
+        (arity_config |> upd_card [(NONE, [2])] |> upd_timeout 10.0)
+        arity_goal
+    in
+      unknown_with "timed out" result andalso
+      progress_has ["phase reached: certification",
+                    "problems offered 1, finished 1"] result
     end))
 
 val _ = mf_test "rejected scopes do not hide a genuine counterexample"
@@ -2821,6 +2876,24 @@ val _ = mf_test "unencoded word operations are refused by name" (fn () =>
   unknown_with "word operations are not encoded with binary integers"
     (refute (word_cfg |> upd_binary_ints (SOME true) |> upd_bits [4])
             ``(w : 3 word) * 2w <> w + w``))
+
+(* A goal declined through [NOT_SUPPORTED] (the path every real
+   unencoded-operation decline takes) names the phase and the counts. *)
+val _ = mf_test "a goal declined as not supported names the phase and counts"
+  (fn () =>
+    List.all (fn (goal, needle) =>
+      let val result = refute word_cfg goal
+      in
+        unknown_with needle result andalso
+        progress_has ["phase reached: preprocessing",
+                      "definitions accepted ",
+                      "scopes completed 0 of 0 emitted",
+                      "problems offered 0, finished 0, rejected 0"] result
+      end)
+      [(``w2w (w : 3 word) = (0w : 4 word)``,
+        "word operation words$w2w is not encoded"),
+       (``(w : 3 word) #<< 1 = w``,
+        "word operation words$word_rol is not encoded")])
 
 val carrier = default_config |> quiet |> only [ModelFinder]
   |> upd_timeout 60.0 |> upd_max_threads 1
