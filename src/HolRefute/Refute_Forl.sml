@@ -955,10 +955,12 @@ structure Refute_Forl :> Refute_Forl = struct
       else Substring.string text
     end
 
-  fun read_next_instance input =
+  fun read_next_instance input_truncated input =
     let val section = #2 (Substring.position instance_marker input)
     in
-      if Substring.isEmpty section then
+      if Substring.isEmpty section andalso input_truncated then
+        raise Truncated
+      else if Substring.isEmpty section then
         raise SYNTAX
           ("Refute_Forl.read_next_instance",
            "expected \"INSTANCE\" marker")
@@ -966,7 +968,7 @@ structure Refute_Forl :> Refute_Forl = struct
         extract_instance (read_section_body instance_marker section)
     end
 
-  fun read_next_outcomes index (input, sat, unsat, truncated) =
+  fun read_next_outcomes input_truncated index (input, sat, unsat, truncated) =
     let
       val (prefix, section) = Substring.position outcome_marker input
       val next_problem = #2 (Substring.position problem_marker prefix)
@@ -981,17 +983,21 @@ structure Refute_Forl :> Refute_Forl = struct
         in
           if outcome = "UNSATISFIABLE" orelse
              outcome = "TRIVIALLY_UNSATISFIABLE" then
-            read_next_outcomes index (rest, sat, index :: unsat, truncated)
+            read_next_outcomes input_truncated index
+              (rest, sat, index :: unsat, truncated)
           else if outcome = "SATISFIABLE" orelse
                   outcome = "TRIVIALLY_SATISFIABLE" then
             let
               (* An instance belongs to this problem only.  Do not let a
                  missing marker consume the next problem's model. *)
-              val this_problem =
-                #1 (Substring.position problem_marker section)
+              val (this_problem, next_problem) =
+                Substring.position problem_marker section
+              val instance_truncated =
+                input_truncated andalso Substring.isEmpty next_problem
             in
-              read_next_outcomes index
-                (rest, (index, read_next_instance this_problem) :: sat,
+              read_next_outcomes input_truncated index
+                (rest, (index,
+                  read_next_instance instance_truncated this_problem) :: sat,
                  unsat, truncated)
             end
           else
@@ -1004,7 +1010,7 @@ structure Refute_Forl :> Refute_Forl = struct
         handle Truncated => (Substring.full "", sat, unsat, true)
     end
 
-  fun read_next_problems (input, sat, unsat, truncated) =
+  fun read_next_problems input_truncated (input, sat, unsat, truncated) =
     let val section = #2 (Substring.position problem_marker input)
     in
       if Substring.isEmpty section then
@@ -1019,8 +1025,8 @@ structure Refute_Forl :> Refute_Forl = struct
         in
           case Int.fromString number of
               SOME one_based =>
-                read_next_problems
-                  (read_next_outcomes (one_based - 1)
+                read_next_problems input_truncated
+                  (read_next_outcomes input_truncated (one_based - 1)
                     (after_marker, sat, unsat, truncated))
             | NONE =>
                 (* No delimiter after the number means the header itself
@@ -1033,9 +1039,10 @@ structure Refute_Forl :> Refute_Forl = struct
         end
     end
 
-  fun parse_output text =
+  fun parse_output input_truncated text =
     let val (sat, unsat, truncated) =
-      read_next_problems (Substring.full text, [], [], false)
+      read_next_problems input_truncated
+        (Substring.full text, [], [], false)
     in
       (rev sat, rev unsat, truncated)
     end
@@ -1487,7 +1494,8 @@ structure Refute_Forl :> Refute_Forl = struct
                  decides the verdict. *)
               fun parsed () =
                 let
-                  val (solutions0, unsat0, truncated) = parse_output output
+                  val (solutions0, unsat0, truncated) =
+                    parse_output output_truncated output
                 in
                   (List.map (fn (index, instance) =>
                      (reindex index, instance)) solutions0,

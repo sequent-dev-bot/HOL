@@ -41,7 +41,7 @@ val _ =
     end
   else
     let
-      val expected = if mode = "stdout" then "output" else "stderr"
+      val expected = if mode = "stderr" then "stderr" else "output"
       val bounded = case solve 256 [problem, problem] of
           Normal ([], [0], message) =>
             String.isSubstring ("Kodkodi " ^ expected ^ " was truncated")
