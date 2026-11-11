@@ -61,10 +61,68 @@ fun updexisting key f m =
    case-sensitive *)
 type submap = data list Symtab.table
 val empty_sdata_map : submap = Symtab.empty
+
+fun add_to_submap m (newdata as ((s1, s2), x)) =
+    let val s2key = toLower s2
+        val oldvalue = case Symtab.lookup m s2key of
+                           NONE => []
+                         | SOME items => items
+    in
+      Symtab.update
+        (s2key, newdata :: List.filter (not o dataNameEq s2) oldvalue) m
+    end
+
+(* A theory loaded from disk keeps the bindings it was loaded with, sorted
+   by exact name, which is all that fetching a theorem needs (load hooks
+   fetch from almost every ancestor), and builds its submap from them only
+   when something else asks for it. *)
+datatype thyentry =
+         Loaded of {byname : (string * thm * thminfo) vector,
+                    submap : submap Susp.susp}
+       | Built of submap
+
+fun loaded_entry thy blist =
+    let
+      fun foldthis ((n,th,info), m) = add_to_submap m ((thy,n), (th,info))
+      (* Later bindings of a name replace earlier ones, as in the submap:
+         sort by name and position, and keep the last of each name. *)
+      val indexed =
+          ListPair.zip (blist, List.tabulate (length blist, fn i => i))
+      fun cmp (((n1,_,_), i1), ((n2,_,_), i2)) =
+          case String.compare (n1, n2) of EQUAL => Int.compare (i1, i2) | c => c
+      fun dedup (x :: (rest as (y :: _))) =
+            if #1 (#1 x) = #1 (#1 y) then dedup rest else #1 x :: dedup rest
+        | dedup l = map #1 l
+    in
+      Loaded {byname = Vector.fromList (dedup (Listsort.sort cmp indexed)),
+              submap = Susp.delay
+                         (fn () => List.foldl foldthis empty_sdata_map blist)}
+    end
+
+fun submap_of (Loaded {submap, ...}) = Susp.force submap
+  | submap_of (Built m) = m
+
+fun lookup_byname v name =
+    let
+      fun search lo hi =
+          if lo >= hi then NONE
+          else
+            let val mid = (lo + hi) div 2
+                val e as (n, _, _) = Vector.sub (v, mid)
+            in
+              case String.compare (name, n) of
+                  EQUAL => SOME e
+                | LESS => search lo mid
+                | GREATER => search (mid + 1) hi
+            end
+    in
+      search 0 (Vector.length v)
+    end
+
 (* the dbmap contains:
     - a map from theory-name to a submap (as above)
 *)
-datatype dbmap = DB of { namemap : submap Symtab.table,
+datatype dbmap = DB of { namemap : thyentry Symtab.table,
                          revmap : location list Termtab.table,
                          localmap : (thm * thminfo) Symtab.table
                        }
@@ -79,26 +137,16 @@ fun updrevmap f (DB{namemap,revmap,localmap}) =
 fun updlocalmap f (DB{namemap,revmap,localmap}) =
     DB {namemap = namemap, revmap = revmap, localmap = f localmap}
 
-fun add_to_submap m (newdata as ((s1, s2), x)) =
-    let val s2key = toLower s2
-        val oldvalue = case Symtab.lookup m s2key of
-                           NONE => []
-                         | SOME items => items
-    in
-      Symtab.update
-        (s2key, newdata :: List.filter (not o dataNameEq s2) oldvalue) m
-    end
-
 fun insert_localmap_into_namemap thyname ltab nmap =
     let
       val sm0 = case Symtab.lookup nmap thyname of
                     NONE => empty_sdata_map
-                  | SOME sm0 => sm0
+                  | SOME e => submap_of e
       fun foldthis (thname, th_thi) sm0 =
           add_to_submap sm0 ((thyname,thname), th_thi)
       val sm = Symtab.fold foldthis ltab sm0
     in
-      Symtab.update (thyname, sm) nmap
+      Symtab.update (thyname, Built sm) nmap
     end
 
 fun allnamemap cthy d =
@@ -115,26 +163,30 @@ local val db_slot : dbmap Context.Data.slot =
       fun lemmas() = lemmas_of (Context.snapshot())
       val put_db = Context.Data.write db_slot
       val upd_db = Context.Data.modify db_slot
-      fun functional_bindl_names thy blist namemap =
-          (* used when a theory is loaded from disk *)
-          let val submap =
-                  case Symtab.lookup namemap thy of
-                    NONE => empty_sdata_map
-                  | SOME m => m
-              fun foldthis ((n,th,info), m) =
-                  add_to_submap m ((thy,n), (th,info))
-              val submap' = List.foldl foldthis submap blist
-          in
-            Symtab.update (thy, submap') namemap
-          end
+      (* [loading]: a theory loaded from disk, rather than bindings added to
+         the current theory one at a time *)
+      fun functional_bindl_names loading thy blist namemap =
+          case (loading, Symtab.lookup namemap thy) of
+              (true, NONE) =>
+              Symtab.update (thy, loaded_entry thy blist) namemap
+            | (_, eopt) =>
+              let
+                fun foldthis ((n,th,info), m) =
+                    add_to_submap m ((thy,n), (th,info))
+                val sm0 = case eopt of SOME e => submap_of e
+                                     | NONE => empty_sdata_map
+              in
+                Symtab.update (thy, Built (List.foldl foldthis sm0 blist))
+                              namemap
+              end
       fun functional_bindl_revmap thy blist revmap =
           List.foldl
             (fn ((n,th,i), A) =>
                 Termtab.cons_list(concl th,Stored {Thy = thy,Name = n}) A)
             revmap
             blist
-      fun functional_bindl db thy blist =
-          db |> updnamemap (functional_bindl_names thy blist)
+      fun functional_bindl loading db thy blist =
+          db |> updnamemap (functional_bindl_names loading thy blist)
              |> updrevmap (functional_bindl_revmap thy blist)
 
       fun purge_stale_bindings thyname =
@@ -155,7 +207,8 @@ local val db_slot : dbmap Context.Data.slot =
             upd_db (fn db =>
               db |> updnamemap
                       (updexisting thyname
-                         (fn sm => Symtab.fold foldthis sm empty_sdata_map))
+                         (fn e => Built (Symtab.fold foldthis (submap_of e)
+                                                     empty_sdata_map)))
                  |> updrevmap purge_stale)
           end
 
@@ -170,7 +223,8 @@ local val db_slot : dbmap Context.Data.slot =
                       (toLower bnm,
                        List.filter(not o dataNameEq bnm) datas) sm
           in
-            upd_db (updnamemap (updexisting ct (smdelbinding bnm)))
+            upd_db (updnamemap
+                      (updexisting ct (Built o smdelbinding bnm o submap_of)))
           end
 
       fun hook thydelta =
@@ -184,20 +238,21 @@ local val db_slot : dbmap Context.Data.slot =
                   if Theory.is_temp_binding (#1 nb) then ()
                   else
                     upd_db (fn db =>
-                              functional_bindl db (current_theory()) [flat nb])
+                              functional_bindl false db (current_theory())
+                                               [flat nb])
                 )
               | DelBinding s => delete_binding s
               | UpdBinding(s,{old,new,thm}) =>
                 if Theory.is_temp_binding s then ()
                 else upd_db (fn db =>
-                               functional_bindl db (current_theory())
+                               functional_bindl false db (current_theory())
                                                 [(s,thm,new)])
               | ExportTheory s => purge_stale_bindings s
               | _ => ()
           end
       val _ = Theory.register_hook("DB", hook)
 in
-fun bindl thy blist = upd_db (fn db => functional_bindl db thy blist)
+fun bindl thy blist = upd_db (fn db => functional_bindl true db thy blist)
 fun revlookup th = Termtab.lookup_list (revmap (lemmas())) (concl th)
 (*---------------------------------------------------------------------------
     To the database representing all ancestor theories, add the
@@ -239,7 +294,8 @@ fun thy s =
     in
       case Symtab.lookup namemap (norm_thyname s) of
           NONE => []
-        | SOME m => Symtab.fold (fn (_, datas) => fn A => datas @ A) m []
+        | SOME e => Symtab.fold (fn (_, datas) => fn A => datas @ A)
+                                (submap_of e) []
     end
 
 fun findpred pat =
@@ -260,7 +316,7 @@ fun find0 incprivatep s =
              else List.filter (fn (_, (_, {private=p,...})) => not p) vs) @
             acc
           else acc
-      fun fold (_, m) acc = Symtab.fold_rev subfold m acc
+      fun fold (_, e) acc = Symtab.fold_rev subfold (submap_of e) acc
     in
       Symtab.fold_rev fold namemap []
     end
@@ -279,7 +335,8 @@ fun matchp0 incprivate P thylist =
         val curr = current_theory()
     in
       case thylist of
-        [] => let fun fold (_, m) acc = Symtab.fold_rev subfold m acc
+        [] => let fun fold (_, e) acc =
+                      Symtab.fold_rev subfold (submap_of e) acc
               in
                 Symtab.fold_rev fold (allnamemap curr (CT())) []
               end
@@ -287,7 +344,7 @@ fun matchp0 incprivate P thylist =
                  fun fold (thyn, acc) =
                      case Symtab.lookup db (norm_thyname thyn) of
                        NONE => acc
-                     | SOME m => Symtab.fold_rev subfold m acc
+                     | SOME e => Symtab.fold_rev subfold (submap_of e) acc
              in
                List.foldr fold [] thylist
              end
@@ -478,7 +535,7 @@ end
 
 fun listDB () =
     let fun subfold (_,v) acc = v @ acc
-        fun fold (_, m) acc = Symtab.fold_rev subfold m acc
+        fun fold (_, e) acc = Symtab.fold_rev subfold (submap_of e) acc
     in
       Symtab.fold_rev fold (namemap (CT())) []
     end
@@ -494,7 +551,7 @@ fun listPublicDB() =
           in
             dvs' :: acc
           end
-      fun fold (_, m) acc = Symtab.fold_rev subfold m acc
+      fun fold (_, e) acc = Symtab.fold_rev subfold (submap_of e) acc
     in
       List.concat (Symtab.fold_rev fold (namemap (CT())) [])
     end
@@ -521,18 +578,28 @@ fun thm_class origf thy name = let
   val db = namemap (CT())
   val thy = norm_thyname thy
   val nosuchthm = ("theorem "^thy^"$"^name^" not found")
-  val thymap = case Symtab.lookup db thy of
-                   SOME m => m
+  val entry = case Symtab.lookup db thy of
+                   SOME e => e
                  | NONE => raise ERR origf ("no such theory: "^thy)
-  val result = case Symtab.lookup thymap (toLower name) of
-                   SOME r => r
-                 | NONE => raise ERR origf nosuchthm
 in
-  case filter (equal (norm_thyname thy,name) o fst) result of
-    [(_,p)] => p
-  | [] => raise ERR origf nosuchthm
-  | other => raise ERR origf
-                       ("multiple things in theory "^thy^" with name "^name)
+  case entry of
+      Loaded {byname, ...} =>
+      (case lookup_byname byname name of
+           SOME (_, th, info) => (th, info)
+         | NONE => raise ERR origf nosuchthm)
+    | Built thymap =>
+      let
+        val result = case Symtab.lookup thymap (toLower name) of
+                         SOME r => r
+                       | NONE => raise ERR origf nosuchthm
+      in
+        case filter (equal (norm_thyname thy,name) o fst) result of
+          [(_,p)] => p
+        | [] => raise ERR origf nosuchthm
+        | other =>
+          raise ERR origf
+                ("multiple things in theory "^thy^" with name "^name)
+      end
 end
 
 fun fetch s1 s2 = #1 (thm_class "fetch" s1 s2);
