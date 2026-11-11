@@ -320,12 +320,24 @@ fun all_atoms t = all_atomsl [t] empty_tmset
         Free variables of a term. Tail recursive. Returns a set.
  ---------------------------------------------------------------------------*)
 
-fun FVL [] A = A
-  | FVL ((v as Fv _)::rst) A      = FVL rst (HOLset.add(A,v))
-  | FVL (Comb(Rator,Rand)::rst) A = FVL (Rator::Rand::rst) A
-  | FVL (Abs(_,Body)::rst) A      = FVL (Body::rst) A
-  | FVL ((t as Clos _)::rst) A    = FVL (push_clos t::rst) A
-  | FVL (_::rst) A                = FVL rst A
+(* Free variables are never bound by an enclosing Abs here (bound
+   variables are Bv indices), so a node met again along another path adds
+   nothing, and the walk visits each node once. *)
+fun FVL tms A =
+    let
+      val table = term_table ()
+      val acc = ref A
+      fun walk (v as Fv _) = acc := HOLset.add(!acc, v)
+        | walk tm =
+            if interior tm then Memo.memo table tm (fn () => descend tm)
+            else ()
+      and descend (Comb(Rator,Rand)) = (walk Rator; walk Rand)
+        | descend (Abs(_,Body)) = walk Body
+        | descend (t as Clos _) = descend (push_clos t)
+        | descend _ = ()
+    in
+      List.app walk tms; !acc
+    end
 
 
 (* ----------------------------------------------------------------------
