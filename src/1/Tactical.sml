@@ -70,19 +70,38 @@ in
       `with_context` documents.  The LSP's proof pool pins, because
       there the cell really is being rewound underneath a running
       proof. *)
+   fun is_suspend t =
+       let val {Thy,Name,...} = dest_thy_const (fst (strip_comb t))
+       in Thy = "marker" andalso Name = "suspendlabel" end
+       handle HOL_ERR _ => false
+   (* A hypothesis that is neither an assumption of the goal nor a
+      suspension label makes the theorem weaker than the goal. *)
+   fun check_hyps asl thm =
+       case List.find (fn h => not (List.exists (aconv h) asl orelse
+                                    is_suspend h))
+                      (hyp thm) of
+         NONE => ()
+       | SOME h => raise ERR "TAC_PROOF"
+                     ("theorem has extra hypothesis: " ^
+                      Parse.term_to_string h)
    fun TAC_PROOF_in ctxt (g, tac) =
       (check_current_thy ctxt g;
        case Context.in_proof (fn () => tac g ctxt) () of
          ([], p) =>
-             (let
-                 val thm = Context.in_proof p []
-                 val c = concl thm
-                 val () = set_unsolved []
-              in
-                 if identical c (snd g) then thm
-                 else EQ_MP (ALPHA c (snd g)) thm
-              end
-              handle e => raise ERR "TAC_PROOF" "Can't alpha convert")
+             let
+               val thm =
+                   let
+                     val thm = Context.in_proof p []
+                     val c = concl thm
+                     val () = set_unsolved []
+                   in
+                     if identical c (snd g) then thm
+                     else EQ_MP (ALPHA c (snd g)) thm
+                   end
+                   handle e => raise ERR "TAC_PROOF" "Can't alpha convert"
+             in
+               check_hyps (fst g) thm; thm
+             end
        | (l, _) => (set_unsolved l;
                     raise ERR "TAC_PROOF" "unsolved goals"))
 end
