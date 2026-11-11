@@ -13,7 +13,7 @@ on:
     inputs:
       job:
         type: choice
-        options: [full, moved, window]
+        options: [full, moved, window, kernels]
 
 jobs:
   full:
@@ -131,5 +131,32 @@ jobs:
           git log -1 --format='HOL %H %s'
           poly < tools/smart-configure.sml
           bin/build -j4 -t --seq=tools/sequences/upto-hol
+      - if: always()
+        run: ci/.github/theory-modules/diag.sh hol
+
+  # Every Poly/ML kernel with tests, against Poly/ML master: the module
+  # cache is used by stdknl and expknl only, and the others must decline.
+  kernels:
+    if: inputs.job == 'kernels'
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: [stdknl, expknl, otknl]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: ci
+      - uses: actions/checkout@v5
+        with:
+          path: hol
+      - name: Build Poly/ML master
+        run: ci/.github/theory-modules/poly.sh
+      - name: Build up to hol with tests
+        working-directory: hol
+        run: |
+          poly < tools/smart-configure.sml
+          bin/build -j4 -t --${{ matrix.kernel }} --seq=tools/sequences/upto-hol
       - if: always()
         run: ci/.github/theory-modules/diag.sh hol
