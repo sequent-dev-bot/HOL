@@ -1,0 +1,67 @@
+# Builds HOL with theory value modules against current Poly/ML master on
+# Linux and macOS: a fresh full build, and a tree that is built, moved,
+# partly cleaned and rebuilt incrementally.
+name: theory-modules
+
+on:
+  push:
+    branches:
+      - "bot/opus/theory-modules-ci"
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        scenario: [full, moved]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 350
+    steps:
+      - name: Checkout HOL
+        uses: actions/checkout@v5
+        with:
+          path: hol
+
+      - name: Build Poly/ML master
+        run: |
+          git clone --depth 1 https://github.com/polyml/polyml.git polyml
+          git -C polyml log -1 --format='polyml %H %ci'
+          cd polyml
+          ./configure --prefix="$HOME/poly" > configure.log
+          make -j4 > make.log 2>&1 || { tail -50 make.log; exit 1; }
+          make install > install.log
+          echo "$HOME/poly/bin" >> "$GITHUB_PATH"
+
+      - name: Configure HOL
+        working-directory: hol
+        run: |
+          poly -v < /dev/null | head -1
+          poly < tools/smart-configure.sml
+
+      - name: Full build with tests
+        if: matrix.scenario == 'full'
+        working-directory: hol
+        run: bin/build -j4 -t
+
+      - name: Build up to hol, move, partly clean, rebuild
+        if: matrix.scenario == 'moved'
+        run: |
+          set -x
+          (cd hol && bin/build -j4 --seq=tools/sequences/upto-hol)
+          mv hol hol-moved
+          cd hol-moved
+          poly < tools/smart-configure.sml
+          (cd src/num/termination && ../../../bin/Holmake cleanAll)
+          (cd tools/Holmake/tests/theory_modules && ../../../../bin/Holmake cleanAll)
+          (cd tools/Holmake/tests/theory_modules/testdir && ../../../../../bin/Holmake cleanAll)
+          bin/build -j4 -t --seq=tools/sequences/upto-hol
+
+      - name: Diagnostics
+        if: always()
+        run: |
+          d=hol; [ -d hol-moved ] && d=hol-moved
+          cd "$d"
+          [ -x bin/hol ] && bin/hol run --noconfig .github/theory-modules/diag.sml || true
+          for f in $(find . -name theory-modules-selftest.log); do echo "== $f"; tail -40 "$f"; done
