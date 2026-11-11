@@ -248,11 +248,19 @@ local
     in (fst (dest_var c) :: cs, SKOLEM_CONST_RULE c th)
     end;
 
+  (* A definition c = t can mention a type variable that c's type lacks.
+     Instantiating it would give two definitions of the same c, which
+     CLEANUP_SKOLEM_CONSTS_RULE cannot discharge, so it stays fixed. *)
+  fun hidden_tyvars tm =
+    let val (c,t) = dest_eq tm
+    in subtract (type_vars_in_term t) (type_vars (type_of c)) end;
+
   fun ithm (th,(cs,vths)) =
     let
-      val h = List.filter (not o is_def cs) (hyp th)
-      val tyV = subtract (type_vars_in_term (concl th)) (type_vars_in_terms h)
       val (cs,th) = repeat iconst (cs,th)
+      val (d,h) = List.partition (is_def cs) (hyp th)
+      val fixed = type_vars_in_terms h @ List.concat (map hidden_tyvars d)
+      val tyV = subtract (type_vars_in_term (concl th)) fixed
       val (tmV,th) = GSPEC' th
       val vths' = map (pair (tmV,tyV)) (CONJUNCTS' th)
     in
