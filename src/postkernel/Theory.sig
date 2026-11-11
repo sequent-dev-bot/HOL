@@ -166,6 +166,7 @@ sig
   (* True while load_complete is calling the TheoryLoaded listeners.
      Listeners use it to defer work nobody reads during a load. *)
   val in_load_hooks : unit -> bool
+  val export_notes : (unit -> string) list ref
 
   val oracle_string_of : thm -> string option
 end

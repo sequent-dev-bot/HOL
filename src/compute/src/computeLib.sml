@@ -256,8 +256,10 @@ and strong_up _ (th, Cbv_top) = th
  * using rewrites rws.
  *---------------------------------------------------------------------------*)
 
+(* SEQ-3461 count instrumentation *)
+val cnt_cbv = ref 0
 fun CBV_CONV rws t =
-  let val (rws', init) = initial_state rws t
+  let val _ = cnt_cbv := !cnt_cbv + 1 val (rws', init) = initial_state rws t
   in evaluate (strong rws' (cbv_wk rws' init))
   end;
 
@@ -268,7 +270,7 @@ fun CBV_CONV rws t =
  *---------------------------------------------------------------------------*)
 
 fun WEAK_CBV_CONV rws t =
-  let val (rws', init) = initial_state rws t
+  let val _ = cnt_cbv := !cnt_cbv + 1 val (rws', init) = initial_state rws t
       val ((th,_),stk) = cbv_wk rws' init
   in evaluate (stack_out(th,stk))
   end;
@@ -347,10 +349,25 @@ local
       in
         List.foldl apply cs0 todo
       end
+  val cnt_reads = ref 0
+  val cnt_forces = ref 0
+  val cnt_writes = ref 0
+  val first_force = ref ""
+  fun note_force () =
+      (cnt_forces := !cnt_forces + 1;
+       if !first_force = "" then
+         first_force :=
+           Theory.current_theory () ^ "/" ^
+           Int.toString (length (Theory.current_theorems ()) +
+                         length (Theory.current_definitions ())) ^
+           (if Theory.in_load_hooks () then "/hook" else "")
+       else ())
   fun force_locked r =
-      case !r of
+      (cnt_reads := !cnt_reads + 1;
+       case !r of
           Done cs => cs
-        | Todo _ => Lock.synchronized force_lock (fn () => force r)
+        | Todo _ => (note_force ();
+                     Lock.synchronized force_lock (fn () => force r)))
   (* A load hook's failure is a warning that leaves the value as it was;
      a deferred update's failure is reported the same way. *)
   fun guard f cs =
@@ -369,8 +386,14 @@ in
   fun put_compset cs = Context.Data.write compset_slot (ref (Done cs))
   fun upd_compset f =
       Context.Data.modify compset_slot
-        (fn r => ref (Todo (r, if Theory.in_load_hooks () then guard f
-                               else f)))
+        (fn r => if Theory.in_load_hooks () then ref (Todo (r, guard f))
+                 else (cnt_writes := !cnt_writes + 1; ref (Todo (r, f))))
+  val _ = Theory.export_notes := !Theory.export_notes @ [fn () =>
+      "(* SEQ3461 compset writes=" ^ Int.toString (!cnt_writes) ^
+      " reads=" ^ Int.toString (!cnt_reads) ^
+      " forces=" ^ Int.toString (!cnt_forces) ^
+      " cbv=" ^ Int.toString (!cnt_cbv) ^
+      " first_force=" ^ !first_force ^ " *)\n"]
 end
 
 fun add_funs thms = upd_compset (add_thms thms)

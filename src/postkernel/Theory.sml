@@ -939,6 +939,9 @@ end (* struct *)
  *         PRINTING THEORIES OUT AS ML STRUCTURES AND SIGNATURES.            *
  *---------------------------------------------------------------------------*)
 
+(* Instrumentation (SEQ-3461 count): lines appended to the generated .sml *)
+val export_notes : (unit -> string) list ref = ref []
+
 fun theory_out p ostrm =
  let
  in
@@ -1133,7 +1136,14 @@ fun export_theory_return_hash () = let
            val hash = SHA1.sha1_file {filename = #tmp datfile_t}
          in
            theory_out (TheoryPP.pp_sig sigthry) (#ostrm sigfile_t);
-           theory_out (TheoryPP.pp_struct hash structthry) (#ostrm smlfile_t);
+           let val s = #ostrm smlfile_t
+           in
+             PP.prettyPrint ((fn x => TextIO.output (s, x)), 75)
+                            (TheoryPP.pp_struct hash structthry)
+               handle e => (Portable.close_out s; raise e);
+             List.app (fn f => TextIO.output (s, f ())) (!export_notes);
+             TextIO.closeOut s
+           end;
            if Feedback.get_tracefn "TheoryPP.include_html_docs" () = 1 then
              let val docsdir = ".hol/docs"
                  val () = HOLFS_dtype.createDirIfNecessary docsdir

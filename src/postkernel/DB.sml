@@ -233,8 +233,21 @@ fun norm_thyname "-" = current_theory()
      find : Look up something by name fragment
  ---------------------------------------------------------------------------*)
 
+(* SEQ-3461 count instrumentation: lookups outside load hooks *)
+val cnt_thy = ref 0
+val cnt_all = ref 0
+val cnt_fetch = ref 0
+val cnt_fetch_hook = ref 0
+fun bump c = c := !c + 1
+val _ = Theory.export_notes := !Theory.export_notes @ [fn () =>
+    "(* SEQ3461 db thy=" ^ Int.toString (!cnt_thy) ^
+    " allfold=" ^ Int.toString (!cnt_all) ^
+    " fetch=" ^ Int.toString (!cnt_fetch) ^
+    " fetch_in_hooks=" ^ Int.toString (!cnt_fetch_hook) ^ " *)\n"]
+
 fun thy s =
     let
+      val _ = bump cnt_thy
       val DB{namemap,...} = CT()
     in
       case Symtab.lookup namemap (norm_thyname s) of
@@ -252,6 +265,7 @@ fun findpred pat =
 
 fun find0 incprivatep s =
     let
+      val _ = bump cnt_all
       val DB{namemap,...} = CT()
       val check = findpred s (* pre-compiles regexp *)
       fun subfold (k, vs) acc =
@@ -279,7 +293,8 @@ fun matchp0 incprivate P thylist =
         val curr = current_theory()
     in
       case thylist of
-        [] => let fun fold (_, m) acc = Symtab.fold_rev subfold m acc
+        [] => let val _ = bump cnt_all
+                  fun fold (_, m) acc = Symtab.fold_rev subfold m acc
               in
                 Symtab.fold_rev fold (allnamemap curr (CT())) []
               end
@@ -477,7 +492,7 @@ in List.filter (check o dataName)
 end
 
 fun listDB () =
-    let fun subfold (_,v) acc = v @ acc
+    let val _ = bump cnt_all fun subfold (_,v) acc = v @ acc
         fun fold (_, m) acc = Symtab.fold_rev subfold m acc
     in
       Symtab.fold_rev fold (namemap (CT())) []
