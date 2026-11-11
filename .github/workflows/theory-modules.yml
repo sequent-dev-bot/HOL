@@ -51,7 +51,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           path: hol
-          ref: ${{ matrix.hol == 'develop' && 'a9587ae29' || github.sha }}
+          ref: ${{ matrix.hol == 'develop' && 'a9587ae29c265935848b198cfa492a8825e56bfb' || github.sha }}
       - name: Build Poly/ML master
         run: ci/.github/theory-modules/poly.sh
       - name: Build up to hol
