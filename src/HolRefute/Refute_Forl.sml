@@ -1476,11 +1476,12 @@ structure Refute_Forl :> Refute_Forl = struct
                  for an external solver -- so nothing lands in the cwd. *)
               val command =
                 (* POSIX -f uses 512-byte blocks and covers CNFs too.
-                   Keep this disk limit separate from the transcript read. *)
-                "ulimit -f " ^
+                   Keep this disk limit separate from the transcript read.
+                   Capture setup errors too, with a non-timeout status. *)
+                "{ ulimit -f " ^
                 IntInf.toString (IntInf.fromInt max_file_size * 2048) ^
-                " && exec " ^ launcher_command () ^ " " ^
-                String.concatWith " " arguments ^ " < " ^
+                " || exit 125; exec " ^ launcher_command () ^ " " ^
+                String.concatWith " " arguments ^ "; } < " ^
                 shell_quote input_path ^ " > " ^ shell_quote output_path ^
                 " 2> " ^ shell_quote error_path
               val code = run_child command

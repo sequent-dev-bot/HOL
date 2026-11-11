@@ -39,6 +39,11 @@ val _ =
       check "CNF above 16 MiB reaches external MiniSat" accepted;
       check "lower file limit is enforced after cached success" refused
     end
+  else if mode = "inherited" then
+    check "inherited hard limit returns a solver error"
+      (case solve 256 [problem] of
+           Error (message, []) => String.isSubstring "ulimit" message
+         | _ => false)
   else
     let
       val expected = if mode = "stderr" then "stderr" else "output"

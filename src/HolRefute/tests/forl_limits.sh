@@ -42,3 +42,9 @@ for mode in stdout stdout_marker stderr; do
   FORL_LIMIT_CASE="$mode" HOL4_KODKODI_EXEC="$scratch/launcher" \
     "$HOLDIR/bin/hol" --gcthreads=1 run forl_limits
 done
+(
+  # A smaller inherited hard limit must fail as solver data, not an ML I/O error.
+  ulimit -f 262144
+  FORL_LIMIT_CASE=inherited HOL4_KODKODI_EXEC="$scratch/launcher" \
+    "$HOLDIR/bin/hol" --gcthreads=1 run forl_limits
+)
