@@ -134,15 +134,15 @@ jobs:
       - if: always()
         run: ci/.github/theory-modules/diag.sh hol
 
-  # The module tests on every Poly/ML kernel but otknl (which needs
-  # opentheory; trknl uses the same Thm), against Poly/ML master: the
-  # cache is used by stdknl and expknl only, and the others must decline.
+  # The module tests on stdknl, expk and otknl (trknl doesn't build on
+  # Poly/ML master), against Poly/ML master: the cache is used by stdknl
+  # and expknl only, and otknl must decline.
   kernels:
     if: inputs.job == 'kernels'
     strategy:
       fail-fast: false
       matrix:
-        kernel: [stdknl, expk, trknl]
+        kernel: [stdknl, expk, otknl]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -154,6 +154,15 @@ jobs:
           path: hol
       - name: Build Poly/ML master
         run: ci/.github/theory-modules/poly.sh
+      - name: Install OpenTheory
+        if: matrix.kernel == 'otknl'
+        run: |
+          wget -q -O ot.zip https://github.com/binghe/opentheory/archive/refs/heads/develop.zip
+          unzip -q ot.zip
+          make -C opentheory-develop polyml
+          mkdir -p $HOME/bin && cp opentheory-develop/bin/polyml/opentheory $HOME/bin
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          $HOME/bin/opentheory init && $HOME/bin/opentheory install base
       - name: Build up to hol, run the module tests
         working-directory: hol
         run: |
