@@ -320,12 +320,40 @@ fun all_atoms t = all_atomsl [t] empty_tmset
         Free variables of a term. Tail recursive. Returns a set.
  ---------------------------------------------------------------------------*)
 
-fun FVL [] A = A
-  | FVL ((v as Fv _)::rst) A      = FVL rst (HOLset.add(A,v))
-  | FVL (Comb(Rator,Rand)::rst) A = FVL (Rator::Rand::rst) A
-  | FVL (Abs(_,Body)::rst) A      = FVL (Body::rst) A
-  | FVL ((t as Clos _)::rst) A    = FVL (push_clos t::rst) A
-  | FVL (_::rst) A                = FVL rst A
+(* Free variables are never bound by an enclosing Abs here (bound
+   variables are Bv indices), so a node met again along another path adds
+   nothing: past Memo's budget, FVL starts again with memo_FVL, which
+   visits each node once. *)
+fun memo_FVL tms A =
+    let
+      val table = term_table ()
+      val acc = ref A
+      fun walk (v as Fv _) = acc := HOLset.add(!acc, v)
+        | walk tm =
+            if interior tm then Memo.memo table tm (fn () => descend tm)
+            else ()
+      and descend (Comb(Rator,Rand)) = (walk Rator; walk Rand)
+        | descend (Abs(_,Body)) = walk Body
+        | descend (t as Clos _) = descend (push_clos t)
+        | descend _ = ()
+    in
+      List.app walk tms; !acc
+    end
+
+fun FVL tms A =
+    let
+      val left = Memo.budget ()
+      fun plain [] A = A
+        | plain ((v as Fv _)::rst) A      = plain rst (HOLset.add(A,v))
+        | plain (Comb(Rator,Rand)::rst) A =
+            (Memo.tick left; plain (Rator::Rand::rst) A)
+        | plain (Abs(_,Body)::rst) A      =
+            (Memo.tick left; plain (Body::rst) A)
+        | plain ((t as Clos _)::rst) A    = plain (push_clos t::rst) A
+        | plain (_::rst) A                = plain rst A
+    in
+      plain tms A handle Memo.OverBudget => memo_FVL tms A
+    end
 
 
 (* ----------------------------------------------------------------------
