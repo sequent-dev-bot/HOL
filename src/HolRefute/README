@@ -168,6 +168,15 @@ solvers, then SAT4J); JNI solvers are offered when their libraries exist
 under `jni/<platform>`, and Isabelle's `*_HOME` variables select external
 solvers.  No JVM is started at load or build time.
 
+`upd_max_file_size n` sets `mf.max_file_size`, the maximum size in MiB of
+each regular file Kodkodi or its solver writes (positive; default 256).
+This includes temporary DIMACS CNFs and captured stdout/stderr. A
+50-problem batch can therefore use up to 12.5 GiB for CNFs alone; choose
+this limit together with `batch_size` for the available disk space. The
+limit is per file, not an aggregate disk quota. Each stdout/stderr read
+still stops at 16 MiB and reports truncation, retaining completed results
+from that prefix. Large CNFs do not consume the transcript read budget.
+
 Module layout
 -------------
 

@@ -927,7 +927,8 @@ fun run_instance deadline started (config : Refute_Core.config)
             val _ = kodkod_calls := !kodkod_calls + 1
           in
             case KK.solve_any_problem (#debug mf) (#overlord mf) deadline
-                (#max_threads mf) max_solutions (map raw_problem problems) of
+                (#max_threads mf) (#max_file_size mf) max_solutions
+                (map raw_problem problems) of
                 KK.Normal ([], unsat_indices, warning) =>
                   let
                     val all_reported_unsat = List.all

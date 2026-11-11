@@ -166,5 +166,5 @@ signature Refute_Forl = sig
 
   val is_configured : unit -> bool
   val solve_any_problem :
-    bool -> bool -> Time.time -> int -> int -> problem list -> outcome
+    bool -> bool -> Time.time -> int -> int -> int -> problem list -> outcome
 end

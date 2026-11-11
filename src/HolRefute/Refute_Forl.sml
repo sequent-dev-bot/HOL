@@ -927,9 +927,8 @@ structure Refute_Forl :> Refute_Forl = struct
   val outcome_marker = "---OUTCOME---\n"
   val instance_marker = "---INSTANCE---\n"
 
-  (* Solver output is unbounded (the [ulimit -f] cap below is 16 MB) and
-     is not ours to quote at length.  A diagnostic that embeds any of it
-     shows an excerpt only. *)
+  (* Solver output is not ours to quote at length. A diagnostic that
+     embeds any of it shows an excerpt only. *)
   val max_quoted_output = 80
 
   fun quote_output text =
@@ -1302,13 +1301,29 @@ structure Refute_Forl :> Refute_Forl = struct
       Portable.finally close work ()
     end
 
-  fun read_all path =
+  val max_captured_output_bytes = 16 * 1024 * 1024
+
+  fun read_output path =
     let
       val stream = TextIO.openIn path
       fun close () =
         TextIO.closeIn stream handle Interrupt => raise Interrupt | _ => ()
     in
-      Portable.finally close (fn () => TextIO.inputAll stream) ()
+      Portable.finally close (fn () =>
+        let
+          fun read remaining chunks =
+            if remaining = 0 then
+              (String.concat (rev chunks),
+               Option.isSome (TextIO.input1 stream))
+            else
+              let val chunk = TextIO.inputN (stream, Int.min (65536, remaining))
+              in
+                if chunk = "" then (String.concat (rev chunks), false)
+                else read (remaining - String.size chunk) (chunk :: chunks)
+              end
+        in
+          read max_captured_output_bytes []
+        end) ()
     end
 
   fun remove path = OS.FileSys.remove path handle OS.SysErr _ => ()
@@ -1366,17 +1381,10 @@ structure Refute_Forl :> Refute_Forl = struct
           handle error => (terminate (); Exn.reraise error)
       end) ()
 
-  (* The solver runs through a shell, so place a kernel-enforced output cap
-     on its stdout and stderr before it starts.  This bounds both temporary
-     storage and the later [TextIO.inputAll] parse.  POSIX [ulimit -f] is in
-     512-byte blocks. *)
-  val max_captured_output_bytes = 16 * 1024 * 1024
-  val max_captured_output_blocks = max_captured_output_bytes div 512
-
   val fudge_milliseconds = 250
 
   fun uncached_solve_any_problem overlord deadline max_threads
-      max_solutions problems =
+      max_file_size max_solutions problems =
     let
       val true_index = find_index (fn problem => #formula problem = True)
         problems
@@ -1460,14 +1468,17 @@ structure Refute_Forl :> Refute_Forl = struct
                  is absolute -- the ones below, and the CNF file it writes
                  for an external solver -- so nothing lands in the cwd. *)
               val command =
-                "ulimit -f " ^ Int.toString max_captured_output_blocks ^
-                "; exec " ^ launcher_command () ^ " " ^
+                (* POSIX -f uses 512-byte blocks and covers CNFs too.
+                   Keep this disk limit separate from the transcript read. *)
+                "ulimit -f " ^
+                IntInf.toString (IntInf.fromInt max_file_size * 2048) ^
+                " && exec " ^ launcher_command () ^ " " ^
                 String.concatWith " " arguments ^ " < " ^
                 shell_quote input_path ^ " > " ^ shell_quote output_path ^
                 " 2> " ^ shell_quote error_path
               val code = run_child command
-              val output = read_all output_path
-              val errors = read_all error_path
+              val (output, output_truncated) = read_output output_path
+              val (errors, errors_truncated) = read_output error_path
               (* The transcript is solver output: a run killed mid-write
                  leaves it truncated, and a launcher of the caller's own
                  choosing can put anything at all in it.  Neither may
@@ -1481,15 +1492,20 @@ structure Refute_Forl :> Refute_Forl = struct
                   (List.map (fn (index, instance) =>
                      (reindex index, instance)) solutions0,
                    List.map reindex unsat0,
-                   if truncated then "Kodkodi output was truncated" else "")
+                   if truncated orelse output_truncated then
+                     "Kodkodi output was truncated" else "")
                 end
                 handle SYNTAX (_, reason) => ([], [], reason)
               val (solutions, nontrivial_unsat, parse_message) = parsed ()
               val unsat = trivially_unsat @ nontrivial_unsat
               val solver_message = first_error errors
-              val message =
-                if solver_message <> "" then solver_message
-                else parse_message
+              val message = String.concatWith "; "
+                (List.filter (fn text => text <> "")
+                  [solver_message,
+                   if output_truncated then "Kodkodi output was truncated"
+                   else if solver_message = "" then parse_message else "",
+                   if errors_truncated then "Kodkodi stderr was truncated"
+                   else ""])
               val _ =
                 if errors <> "" andalso Refute_Core.Private.enabled 2
                 then Refute_Core.Private.warn "Refute_Forl"
@@ -1514,21 +1530,21 @@ structure Refute_Forl :> Refute_Forl = struct
     end
 
   val cached_outcome = Refute_Session.state "kodkodi_outcome"
-    (NONE : ((int * problem list) * outcome) option)
+    (NONE : ((int * int * problem list) * outcome) option)
 
   (* ListPair.allEq is already false on unequal lengths. *)
   fun problem_lists_equivalent (first, second) =
     ListPair.allEq problems_equivalent (first, second)
 
-  fun solve_any_problem debug overlord deadline max_threads max_solutions
-      problems =
+  fun solve_any_problem debug overlord deadline max_threads max_file_size
+      max_solutions problems =
     let
       fun solve () =
         uncached_solve_any_problem overlord deadline max_threads
-          max_solutions problems
-      fun keys_equivalent ((solutions1, problems1),
-                           (solutions2, problems2)) =
-        solutions1 = solutions2 andalso
+          max_file_size max_solutions problems
+      fun keys_equivalent ((solutions1, limit1, problems1),
+                           (solutions2, limit2, problems2)) =
+        solutions1 = solutions2 andalso limit1 = limit2 andalso
         problem_lists_equivalent (problems1, problems2)
       fun fresh () =
         let val outcome = solve ()
@@ -1536,7 +1552,8 @@ structure Refute_Forl :> Refute_Forl = struct
           (case outcome of
                Normal (_, _, "") =>
                  Refute_Session.update cached_outcome
-                   (fn _ => SOME ((max_solutions, problems), outcome))
+                   (fn _ => SOME
+                     ((max_solutions, max_file_size, problems), outcome))
              | _ => ());
           outcome
         end
@@ -1545,7 +1562,8 @@ structure Refute_Forl :> Refute_Forl = struct
       else
         case Refute_Session.read cached_outcome of
             SOME (key, outcome) =>
-              if keys_equivalent (key, (max_solutions, problems)) then outcome
+              if keys_equivalent
+                   (key, (max_solutions, max_file_size, problems)) then outcome
               else fresh ()
           | NONE => fresh ()
     end

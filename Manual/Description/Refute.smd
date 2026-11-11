@@ -347,6 +347,7 @@ for key `k`; a Boolean value of `NONE` lets Refute choose.
 | `upd_debug` | `false` | Debug output, one problem per batch. |
 | `upd_overlord` | `false` | Keep the solver's files. |
 | `upd_max_threads` | `0` | Kodkodi threads; `0` leaves it to Kodkodi. |
+| `upd_max_file_size` | `256` | Per-file Kodkodi disk limit in MiB (at least 1), including temporary CNFs. Stdout/stderr reads stop at 16 MiB each. |
 | `upd_tac_timeout` | `0.5` | Seconds for internal proofs. |
 | `upd_specialize` | `true` | Specialize constants at fixed arguments. |
 | `upd_box` | `NONE` | Box function and pair types, by type. |

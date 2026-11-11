@@ -140,6 +140,8 @@ structure Refute_Core :> Refute_Core = struct
       debug : bool,
       overlord : bool,
       max_threads : int,
+      (* Maximum size of each file written by Kodkodi, in MiB. *)
+      max_file_size : int,
       tac_timeout : real,
       specialize : bool,
       box : (hol_type option * bool option) list,
@@ -264,6 +266,7 @@ structure Refute_Core :> Refute_Core = struct
       debug = false,
       overlord = false,
       max_threads = 0,
+      max_file_size = 256,
       tac_timeout = 0.5,
       specialize = true,
       box = [(NONE, NONE)],
@@ -629,6 +632,11 @@ structure Refute_Core :> Refute_Core = struct
       val _ = if #kodkod_sym_break mf < 0 then
                 range_error "kodkod_sym_break" "must not be negative"
               else ()
+      val _ = if #max_file_size mf < 1 then
+                range_error "max_file_size"
+                  ("must be at least 1 MiB; got " ^
+                   Int.toString (#max_file_size mf))
+              else ()
       val _ = if #max_threads mf < 0 then
                 range_error "max_threads" "must not be negative"
               else ()
@@ -660,6 +668,7 @@ structure Refute_Core :> Refute_Core = struct
     | MfDebug of bool
     | MfOverlord of bool
     | MfMaxThreads of int
+    | MfMaxFileSize of int
     | MfTacTimeout of real
     | MfSpecialize of bool
     | MfBox of (hol_type option * bool option) list
@@ -727,6 +736,8 @@ structure Refute_Core :> Refute_Core = struct
                   | _ => #overlord mf),
       max_threads = (case update of MfMaxThreads value => value
                      | _ => #max_threads mf),
+      max_file_size = (case update of MfMaxFileSize value => value
+                       | _ => #max_file_size mf),
       tac_timeout = (case update of MfTacTimeout value => value
                      | _ => #tac_timeout mf),
       specialize = (case update of MfSpecialize value => value
@@ -778,6 +789,7 @@ structure Refute_Core :> Refute_Core = struct
   fun upd_debug value = update_mf (MfDebug value)
   fun upd_overlord value = update_mf (MfOverlord value)
   fun upd_max_threads value = update_mf (MfMaxThreads value)
+  fun upd_max_file_size value = update_mf (MfMaxFileSize value)
   fun upd_tac_timeout value = update_mf (MfTacTimeout value)
   fun upd_specialize value = update_mf (MfSpecialize value)
   fun upd_box value = update_mf (MfBox value)
@@ -1488,6 +1500,7 @@ structure Refute_Core :> Refute_Core = struct
           "mf.debug = " ^ Bool.toString (#debug m) ^ "\n",
           "mf.overlord = " ^ Bool.toString (#overlord m) ^ "\n",
           "mf.max_threads = " ^ Int.toString (#max_threads m) ^ "\n",
+          "mf.max_file_size = " ^ Int.toString (#max_file_size m) ^ "\n",
           "mf.tac_timeout = " ^ Real.toString (#tac_timeout m) ^ "\n",
           "mf.specialize = " ^ Bool.toString (#specialize m) ^ "\n",
           "mf.box = " ^ type_bools (#box m) ^ "\n",

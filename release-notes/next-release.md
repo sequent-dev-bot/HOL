@@ -122,6 +122,10 @@ New features
 Bugs fixed
 ----------
 
+- HolRefute separates Kodkodi's configurable per-file disk limit
+  (`upd_max_file_size`, default 256 MiB) from its 16 MiB stdout/stderr read
+  limits, so external SAT solvers can receive larger temporary CNF files.
+
 -   `computeLib.del_persistent_consts` in an ancestor could undo a descendant's later `computeLib.add_persistent_funs` for the same constant.
     Loading a theory with more than one parent could re-run the ancestor's deletion against the global compset.
     Persistent compset deletions and `set_EVAL_skip` calls are now applied once, when the theory recording them is loaded.
