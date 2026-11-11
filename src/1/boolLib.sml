@@ -294,11 +294,26 @@ local
   open Feedback
   fun tac_failure s1 s2 =
       String.concat ["Failed to prove theorem ", Lib.quote s1, ":\n", s2]
+  fun is_suspend t =
+      let val {Thy,Name,...} = Term.dest_thy_const (Lib.fst (strip_comb t))
+      in Thy = "marker" andalso Name = "suspendlabel" end
+      handle HOL_ERR _ => false
+  (* The goal has no assumptions, so a hypothesis other than a suspension
+     label means the tactic was invalid and the theorem is weaker than
+     the statement. *)
+  fun check_no_hyps th =
+      case List.find (not o is_suspend) (Thm.hyp th) of
+          NONE => th
+        | SOME h =>
+            raise mk_HOL_ERR "boolLib" "store_thm_at"
+                  ("invalid tactic: theorem has extra hypothesis " ^
+                   Parse.term_to_string h)
 in
 fun store_thm_at loc (n0,t,tac) ctxt =
   let val attrblock = ThmAttribute.extract_attributes n0
       val name = #thmname attrblock
-      val th = prove_named ctxt {name = name, goal = ([], t), tac = tac}
+      val th = check_no_hyps
+                 (prove_named ctxt {name = name, goal = ([], t), tac = tac})
                handle HOL_ERR herr =>
                if !Globals.dumpheap_on_failure andalso
                   not (!Globals.interactive)
