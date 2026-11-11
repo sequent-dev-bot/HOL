@@ -533,6 +533,7 @@ fun selectDB sels =
  ---------------------------------------------------------------------------*)
 
 fun thm_class origf thy name = let
+  val _ = bump (if Theory.in_load_hooks () then cnt_fetch_hook else cnt_fetch)
   val db = namemap (CT())
   val thy = norm_thyname thy
   val nosuchthm = ("theorem "^thy^"$"^name^" not found")
