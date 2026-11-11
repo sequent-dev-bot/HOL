@@ -141,7 +141,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kernel: [stdknl, expknl, otknl]
+        kernel: [stdknl, expk, otknl, trknl]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
