@@ -13,6 +13,22 @@ val emit_expect : bool ref = ref false
 fun disk_save_name thy (Thm.SavedAnon i) = thy ^ "#" ^ Int.toString i
   | disk_save_name thy (Thm.SavedName s) = thy ^ "$" ^ s
 
+(* Old kernels accepted repeated redexes, with the last replacement winning.
+   Normalize emitted IDs, after emitting every raw pair and its dependencies. *)
+val keep_last_pairs : (int * int) list -> (int * int) list =
+  op_mk_set (fn (v, _) => fn (w, _) => v = w)
+
+fun keep_last_subst_pairs pairs = let
+  val kept = keep_last_pairs pairs
+  (* SUBST unions every equation's hypotheses and tags, even overridden
+     equations. Repeated references to the same theorem preserve both. *)
+  fun check (v, th) =
+    if List.exists (fn (w, last) => v = w andalso th <> last) kept then
+      raise Fail ("PFTEmit: SUBST repeats redex " ^ Int.toString v ^
+                  " with different equation theorems")
+    else ()
+in List.app check pairs; kept end
+
 (* ========================================================================= *)
 (* Candle name translation                                                   *)
 (* ========================================================================= *)
@@ -930,7 +946,7 @@ fun emit_theory {trace, output, ruleset} = let
     | SYM_prf a => r_sym (th a)
     | INST_prf (a, b) => let
         val pairs = list heap (tuple2 heap (tm, tm)) a
-      in r_inst (th b) pairs end
+      in r_inst (th b) (keep_last_pairs pairs) end
     | INST_TYPE_prf (a, b) => let
         val pairs = list heap (tuple2 heap (ty, ty)) a
       in r_inst_type (th b) pairs end
@@ -1166,8 +1182,9 @@ fun emit_theory {trace, output, ruleset} = let
         val template_ptr = b
         val c_th = th c
         val subst_map : (int * int) list =
-          List.map (fn (var_ptr, thm_ptr) =>
-            (tm var_ptr, th thm_ptr)) pairs
+          keep_last_subst_pairs
+            (List.map (fn (var_ptr, thm_ptr) =>
+              (tm var_ptr, th thm_ptr)) pairs)
         fun lookup_subst var_id =
           case List.find (fn (v, _) => v = var_id) subst_map of
             SOME (_, th_id) => SOME th_id
@@ -2384,7 +2401,7 @@ fun emit_theory {trace, output, ruleset} = let
           | INST_prf (a, b) => let
               val pairs = list heap (tuple2 heap (emit_term, emit_term)) a
               val b = emit_thm b
-            in PFTWriter.HOL4.inst out id b pairs end
+            in PFTWriter.HOL4.inst out id b (keep_last_pairs pairs) end
           | MK_COMB_prf (a, b) => let val a = emit_thm a val b = emit_thm b
               in PFTWriter.HOL4.mk_comb out id a b end
           | MP_prf (a, b) => let val a = emit_thm a val b = emit_thm b
@@ -2419,7 +2436,8 @@ fun emit_theory {trace, output, ruleset} = let
               val pairs = list heap (tuple2 heap (emit_term, emit_thm)) a
               val b = emit_term b
               val c = emit_thm c
-            in PFTWriter.HOL4.subst out id b c pairs end
+            in PFTWriter.HOL4.subst out id b c
+                 (keep_last_subst_pairs pairs) end
           | SYM_prf a => let val a = emit_thm a
               in PFTWriter.HOL4.sym out id a end
           | Specialize_prf (a, b) => let

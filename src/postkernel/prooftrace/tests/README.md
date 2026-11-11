@@ -8,7 +8,8 @@ Run a fixture with a tracing HOL built using exporter-capable Poly/ML:
 ```
 
 The suites are `identity`, `oracle`, `export`, `compute-binder`,
-`term-kind`, `mk-abs`, and `closedness`; `all` runs them together. Sources
+`term-kind`, `mk-abs`, `closedness`, and `duplicate-subst`; `all` runs them
+together. Sources
 load from this checkout, with separate processes for fresh kernel state and
 logs in the scratch dir.
 `compute-binder` also needs `cv_computeLib`.
@@ -16,6 +17,12 @@ logs in the scratch dir.
 * `closedness` reproduces the closedness sentinel collision for a closed
   abstraction containing another closed abstraction. It also checks that an
   unvisited term retains its sentinel.
+* `duplicate-subst` attaches historical duplicate substitution proof lists
+  using the tracing kernel's `mk_proof_thm`, since current kernels reject
+  duplicate calls. Replay checks last-wins `INST` and the exact hypotheses
+  of a repeated `SUBST` equation; differing equations are rejected to avoid
+  losing hypotheses or oracle dependencies. Run `duplicate-subst-check.ml`
+  after Candle replay for the same exact-sequent checks.
 * `oracle` reproduces lost hypotheses. The HOL checker compares the complete
   oracle sequent. After Candle replay, load `oracle-check-results.ml` and
   call `check_oracle_results ()` for the same exact sequent.

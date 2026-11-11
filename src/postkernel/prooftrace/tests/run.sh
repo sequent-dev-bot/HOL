@@ -7,8 +7,8 @@ if [ "$#" -ne 3 ]; then
 fi
 pft_test=$1
 case "$pft_test" in
-  all) pft_suites='identity oracle export compute-binder term-kind mk-abs closedness' ;;
-  identity|oracle|export|compute-binder|term-kind|mk-abs|closedness)
+  all) pft_suites='identity oracle export compute-binder term-kind mk-abs closedness duplicate-subst' ;;
+  identity|oracle|export|compute-binder|term-kind|mk-abs|closedness|duplicate-subst)
     pft_suites=$pft_test ;;
   *) echo "unknown prooftrace test: $pft_test" >&2; exit 2 ;;
 esac
@@ -26,7 +26,7 @@ for HOL_PFT_TEST in $pft_suites; do
   cd "$pft_scratch/$HOL_PFT_TEST"
   case "$HOL_PFT_TEST" in
     identity) pft_phases='produce loader-parent loader-child raw convert separate' ;;
-    mk-abs) pft_phases='produce replay' ;;
+    mk-abs|duplicate-subst) pft_phases='produce replay' ;;
     export) pft_phases='vacuous shadow overlap' ;;
     *) pft_phases=run ;;
   esac
@@ -36,7 +36,7 @@ for HOL_PFT_TEST in $pft_suites; do
     export HOL_PFT_EXPORT_CASE
     case "$HOL_PFT_TEST:$HOL_PFT_IDENTITY_PHASE" in
       identity:produce) set -- ;;
-      identity:*|mk-abs:replay) set -- --min ;;
+      identity:*|mk-abs:replay|duplicate-subst:replay) set -- --min ;;
       *) set -- ;;
     esac
     pft_log=$HOL_PFT_IDENTITY_PHASE.log
