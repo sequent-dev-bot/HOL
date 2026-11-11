@@ -7479,8 +7479,19 @@ let
   val function =
     ([], ``(i:int) = j /\ f (\x:int. x) /\
        g ((i =+ (e:int)) a) ==> g ((j =+ e) a)``)
-  fun check mode array goal =
+  val conditional =
+    ([], ``(P:(int -> bool) -> bool)
+       (if c then ((0 =+ T) s) else ({}:int set))``)
+  val conditional_implication =
+    ([], ``P (if c then ((0 =+ T) s) else ({}:int set)) /\
+       ~c ==> P {}``)
+  val bool_function =
+    ([], ``(i:int) = j /\ f (\x:int. x) /\
+       P ((i =+ T) (s:int set)) ==> P ((j =+ T) s)``)
+  fun check mode array (domain, range) goal =
     let
+      val array_sort = "(Array " ^ domain ^ " " ^ range ^ ")"
+      val function_sort = "(-> " ^ domain ^ " " ^ range ^ ")"
       val goal = case mode of
           NONE => goal
         | SOME checked => Lib.fst
@@ -7489,11 +7500,11 @@ let
       val text = String.concat strings
     in
       assert (if array then
-          contains "(Array Bool Bool)" text andalso
+          contains array_sort text andalso
           contains "(store " text andalso
-          not (contains "(-> Bool Bool)" text)
+          not (contains function_sort text)
         else
-          contains "(-> Int Int)" text andalso
+          contains function_sort text andalso
           contains "(lambda " text andalso contains "(ite " text andalso
           not (contains "(store " text),
         "UPDATE lost its selected Array or function carrier:\n" ^ text);
@@ -7502,10 +7513,19 @@ let
          elaborate_datatypes = false} text)
     end
 in
-  List.app (fn mode => check mode true marked) [NONE, SOME false];
-  List.app (fn mode => check mode true congruence)
+  List.app (fn mode => check mode true ("Bool", "Bool") marked)
+    [NONE, SOME false];
+  List.app (fn mode => check mode true ("Bool", "Bool") congruence)
     [NONE, SOME false, SOME true];
-  List.app (fn mode => check mode false function)
+  List.app (fn mode => check mode false ("Int", "Int") function)
+    [NONE, SOME false, SOME true];
+  (* The conditional marks the result without separately marking the base. *)
+  List.app (fn mode => check mode true ("Int", "Bool") conditional)
+    [NONE, SOME false, SOME true];
+  List.app (fn mode => check mode true ("Int", "Bool")
+      conditional_implication)
+    [NONE, SOME false, SOME true];
+  List.app (fn mode => check mode false ("Int", "Bool") bool_function)
     [NONE, SOME false, SOME true]
 end
 

@@ -361,6 +361,8 @@ in
        f ((T =+ T) s)``, [thm_CVC]),
     (``(s:bool set) = t /\ f s /\ f (\x:bool. x) /\
        f ((T =+ T) s) ==> f ((T =+ T) t)``, [thm_CVC, thm_CVCp_ho]),
+    (``P (if c then ((0 =+ T) s) else ({}:int set)) /\ ~c ==>
+       P {}``, [thm_CVC, thm_CVCp_ho]),
 
     (``F``, [sat_CVC, sat_YO, sat_Z3, sat_Z3p, sat_CVCp]),
     (``p = (p:bool)``, [thm_AUTO, thm_CVC, thm_YO, thm_Z3, thm_Z3p, thm_CVCp]),

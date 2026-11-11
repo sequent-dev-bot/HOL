@@ -1626,6 +1626,13 @@ local
         else terms
       fun propagate (tm, terms) =
         let
+          (* An UPDATE and its base use the same collection carrier. *)
+          val (head, args) = boolSyntax.strip_comb tm
+          val terms =
+            if same_const head combinSyntax.update_tm then
+              (case args of [_, _, base] => connect [tm, base] terms
+               | _ => terms)
+            else terms
           val terms =
             case Lib.total boolSyntax.dest_cond tm of
               SOME (_, left, right) => connect [tm, left, right] terms
