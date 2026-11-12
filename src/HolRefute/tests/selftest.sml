@@ -43,6 +43,67 @@ val selftest_level =
 (* Harness                                                             *)
 (* ------------------------------------------------------------------- *)
 
+(* Keep call details until the test is checked;
+   formatting them only on failure keeps quiet/captured output unchanged. *)
+val refute_calls = Synchronized.var "selftest refute calls"
+  ([] : (unit -> string) list)
+
+fun certainty_text Genuine = "Genuine"
+  | certainty_text (QuasiGenuine reasons) =
+      "QuasiGenuine: " ^ String.concatWith "; " reasons
+  | certainty_text (Potential reasons) =
+      "Potential: " ^ String.concatWith "; " reasons
+
+fun witnesses_text kind witnesses =
+  kind ^ " " ^ Int.toString (length witnesses) ^ " [" ^
+  String.concatWith "; " (map (fn (c : counterexample) =>
+    #backend c ^ "/" ^ #substrate c ^ " " ^ certainty_text (#certainty c))
+    witnesses) ^ "]"
+
+fun outcome_text (Counterexample cs) = witnesses_text "Counterexample" cs
+  | outcome_text NoCounterexample = "NoCounterexample"
+  | outcome_text (Model cs) = witnesses_text "Model" cs
+  | outcome_text NoModel = "NoModel"
+  | outcome_text (Unknown reasons) =
+      "Unknown: " ^ String.concatWith "; " reasons
+
+fun record_refute_call api (assumptions, goal) describe action =
+  let
+    val started = Time.now ()
+    val finished = ref NONE
+    fun details () =
+      " " ^ api ^ ": " ^
+      String.concatWith ", " (map Parse.term_to_string assumptions) ^
+      " |- " ^ Parse.term_to_string goal ^ "\n    " ^
+      (case !finished of
+           NONE => "did not return"
+         | SOME (elapsed, result) =>
+             (case result of
+                  Exn.Res value => describe value
+                | Exn.Exn e => "raised: " ^ General.exnMessage e) ^
+             " (" ^ Time.toString elapsed ^ " s)")
+    (* Reserve the row before calling: a backend can call back into Refute. *)
+    val _ = Synchronized.change refute_calls (fn calls => details :: calls)
+    val result = Exn.capture action ()
+    val _ = finished := SOME (Time.- (Time.now (), started), result)
+  in
+    Exn.release result
+  end
+
+fun refute cfg goal = record_refute_call "refute" ([], goal) outcome_text
+  (fn () => Refute.refute cfg goal)
+fun refute_goal cfg goal = record_refute_call "refute_goal" goal outcome_text
+  (fn () => Refute.refute_goal cfg goal)
+fun refute_with updates goal =
+  record_refute_call "refute_with" ([], goal) outcome_text
+    (fn () => Refute.refute_with updates goal)
+fun quickcheck goal = record_refute_call "quickcheck" ([], goal) outcome_text
+  (fn () => Refute.quickcheck goal)
+fun try_refute cfg goal = record_refute_call "try_refute" goal
+  (fn NONE => "NONE (no counterexample returned)"
+    | SOME (backend, result) => "SOME " ^ backend ^ ": " ^ outcome_text result)
+  (fn () => Refute.try_refute cfg goal)
+
 fun check_result P =
   testutils.check_result (fn r =>
     P r handle Interrupt => raise Interrupt
@@ -50,9 +111,15 @@ fun check_result P =
                      false))
 
 fun test name pred =
-  (tprint name;
-   require_msg (check_result pred) (fn () => name ^ " failed")
-     (fn () => ()) ())
+  (Synchronized.change refute_calls (K []);
+   tprint name;
+   require_msg (check_result pred)
+     (fn () => name ^ " failed" ^ String.concat
+       (Portable.mapi (fn i => fn details =>
+          "\n  call " ^ Int.toString (i + 1) ^ details ())
+         (rev (Synchronized.value refute_calls))))
+     (fn () => ()) ();
+   Synchronized.change refute_calls (K []))
 
 fun section name = print ("\n== " ^ name ^ "\n")
 fun skip name why = (tprint name; print ("skipped: " ^ why ^ "\n"))
