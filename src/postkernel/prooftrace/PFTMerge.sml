@@ -365,9 +365,12 @@ fun pass1_read_file descs_ref file_idx input =
          compute_init=fn _ => ()}
   in fs end
 
+(* Resolve LOADs while SAVE bindings still reflect their command position.
+   The final SAVE table is reserved for exports and missing-LOAD diagnostics. *)
 fun scan_index_file descs_ref file_idx input
                     (save_table: (string, save_entry) Redblackmap.dict ref)
-                    const_introducer type_introducer compute_inits loads =
+                    const_introducer type_introducer compute_inits
+                    load_sources aliases =
   let
     val ci_ref = ref 0
     val max_th = ref 0
@@ -377,8 +380,18 @@ fun scan_index_file descs_ref file_idx input
             if ns = NS_TH then max_th := Int.max(!max_th, id + 1)
             else ()) (#produced meta)
           val () = case #kind meta of
-              CmdLoad name => List.app (fn (_, id) =>
-                loads := (file_idx, ci, id, name) :: !loads) (#produced meta)
+              CmdLoad name =>
+                (case Redblackmap.peek(!save_table, name) of
+                   NONE => () (* Reached invalid LOADs fail in reachability. *)
+                 | SOME (entry as {file_idx=sfi, th_id=sth, ...}) =>
+                     let val (sfi, _, sid) = canonical (!aliases) sfi NS_TH sth
+                     in load_sources := Redblackmap.insert(
+                          !load_sources, (file_idx, ci), entry);
+                        List.app (fn (_, id) =>
+                          aliases := Redblackmap.insert(
+                            !aliases, (file_idx, id), (sfi, sid)))
+                          (#produced meta)
+                     end)
             | _ => ()
       in ci_ref := ci + 1; ci end
     fun save (name, th, ci) =
@@ -392,22 +405,6 @@ fun scan_index_file descs_ref file_idx input
         compute_init=fn ci =>
           compute_inits := (file_idx, ci) :: !compute_inits};
      {commands= !ci_ref, th_size=Int.min(!max_th, 1024 + 2 * !ci_ref)}
-  end
-
-(* Unreached bad LOADs remain lazy errors. Valid aliases are resolved in
-   forward command order, so their canonical sources need no file graph. *)
-fun index_aliases save_table loads =
-  let val aliases = ref (Redblackmap.mkDict pair_compare)
-  in List.app (fn (fi, ci, id, name) =>
-       case Redblackmap.peek(save_table, name) of
-         SOME {file_idx=sfi, cmd_idx=sci, th_id=sth} =>
-           if sfi < fi orelse (sfi = fi andalso sci < ci) then
-             let val (sfi, _, sid) = canonical (!aliases) sfi NS_TH sth
-             in aliases := Redblackmap.insert(!aliases, (fi, id), (sfi, sid))
-             end
-           else ()
-       | NONE => ()) loads;
-     !aliases
   end
 
 (* ========================================================================= *)
@@ -442,6 +439,7 @@ fun resolve_targets (targets: target list)
 fun compute_reachable ruleset
       (indexes: file_index vector) (read_file: int -> file_state)
       (save_table: (string, save_entry) Redblackmap.dict)
+      (load_sources: (int * int, save_entry) Redblackmap.dict)
       (const_introducer: (string, int * int) Redblackmap.dict)
       (type_introducer: (string, int * int) Redblackmap.dict)
       (compute_inits: (int * int) list)
@@ -522,15 +520,15 @@ fun compute_reachable ruleset
                 (* Follow cross-file LOAD dependencies *)
                 (case Metadata.kind cmds ci of
                    CmdLoad name =>
-                     (case Redblackmap.peek(save_table, name) of
-                        NONE => raise Fail ("PFTMerge: unknown LOAD: " ^ name)
-                      | SOME {file_idx=sfi, cmd_idx=sci, ...} =>
-                        let val () = if sfi < fi orelse
-                                        (sfi = fi andalso sci < ci) then ()
-                                     else raise Fail
-                                       ("PFTMerge: LOAD before SAVE: " ^ name ^
-                                        "; inputs must be in dependency order")
-                        in enqueue (sfi, sci) end)
+                     (case Redblackmap.peek(load_sources, (fi, ci)) of
+                        SOME {file_idx=sfi, cmd_idx=sci, ...} =>
+                          enqueue (sfi, sci)
+                      | NONE =>
+                          if Redblackmap.peek(save_table, name) = NONE then
+                            raise Fail ("PFTMerge: unknown LOAD: " ^ name)
+                          else raise Fail
+                            ("PFTMerge: LOAD before SAVE: " ^ name ^
+                             "; inputs must be in dependency order"))
                  | _ => ());
                 List.app (fn name =>
                   case Redblackmap.peek(const_introducer, name) of
@@ -575,6 +573,7 @@ fun pass2_emit (indexes: file_index vector)
                (read_file: int -> file_state)
                (aliases: (int * int, int * int) Redblackmap.dict)
                (save_table: (string, save_entry) Redblackmap.dict)
+               (load_sources: (int * int, save_entry) Redblackmap.dict)
                (const_introducer: (string, int * int) Redblackmap.dict)
                (type_introducer: (string, int * int) Redblackmap.dict)
                (compute_inits: (int * int) list)
@@ -672,7 +671,8 @@ fun pass2_emit (indexes: file_index vector)
              | _ => ()
            else ())) (#cmds fs)
     val included = compute_reachable ruleset indexes read_file save_table
-      const_introducer type_introducer compute_inits target_saves visit_file
+      load_sources const_introducer type_introducer compute_inits
+      target_saves visit_file
     val def_saves = List.concat
       (Vector.foldr (fn (r, acc) => rev (!r) :: acc) [] defs)
     val () = List.app (fn (name, _) =>
@@ -894,21 +894,22 @@ fun merge {inputs, targets, output, binary} =
     val const_introducer = ref (Redblackmap.mkDict String.compare)
     val type_introducer = ref (Redblackmap.mkDict String.compare)
     val compute_inits = ref []
-    val loads = ref []
+    val load_sources = ref (Redblackmap.mkDict pair_compare)
+    val aliases = ref (Redblackmap.mkDict pair_compare)
 
     (* Index global names and theorem aliases without retaining file graphs. *)
     val indexes = Vector.mapi (fn (fi, input) =>
       scan_index_file descs_ref fi input save_table
-        const_introducer type_introducer compute_inits loads) input_info
-    val aliases = index_aliases (!save_table) (rev (!loads))
-    val () = loads := []
+        const_introducer type_introducer compute_inits
+        load_sources aliases) input_info
     fun read_file fi = pass1_read_file descs_ref fi (Vector.sub(input_info, fi))
 
     (* Pass 1.5: resolve targets *)
     val target_saves = resolve_targets targets (!save_table)
 
     (* Pass 2: re-read and emit *)
-    val () = pass2_emit indexes read_file aliases (!save_table)
+    val () = pass2_emit indexes read_file (!aliases) (!save_table)
+               (!load_sources)
                (!const_introducer) (!type_introducer) (!compute_inits)
                input_info target_saves
                output the_version the_ruleset (!descs_ref)

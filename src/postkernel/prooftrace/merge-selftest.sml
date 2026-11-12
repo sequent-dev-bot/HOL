@@ -57,6 +57,22 @@ val () = read_commands (merged [conj] [PFTMerge.ThyAll("conj",false)])
 val () = check "merge retains the implicit conjunction declaration"
                (List.exists (fn name => name = "bool$/\\") (!names))
 
+(* LOAD keeps the preceding SAVE even when that name is saved again. *)
+val (rebind,out) = output "hol4"
+val () = PFTWriter.tyop out 0 "min$bool" []
+val () = PFTWriter.var out 0 "p" 0
+val () = PFTWriter.HOL4.assume out 0 0
+val () = PFTWriter.save out "rebind$X" 0
+val () = PFTWriter.load out 1 "rebind$X"
+val () = PFTWriter.save out "rebind$X" 1
+val () = PFTWriter.save out "rebind$RESULT" 1
+val () = finish out
+val () = names := []
+val () = read_commands
+  (merged [rebind] [PFTMerge.ThyThm("rebind","RESULT",false)]) (fn _ => ())
+val () = check "merge resolves LOAD before SAVE rebinding"
+               (!names = ["rebind$RESULT"])
+
 fun preserves_alias options =
   let val alias = temp ()
       val original = bytes conj
