@@ -8,7 +8,7 @@ open Refute
 open refutePersistentTypeTheory
 local open Refute_Rat Refute_Real in end
 
-(* Three deliberate reaches outside the [Refute] signature.  One is a
+(* Four deliberate reaches outside the [Refute] signature.  One is a
    registry entry point with no user outside these tests: the composed
    display callback a registration installs, aliased here.  The second is
    [Refute_QC.strategy_run], called by "an expired deadline never claims
@@ -17,7 +17,9 @@ local open Refute_Rat Refute_Real in end
    theory bracket, called by "a theory bracket leaves the global message
    flags alone": the defect it pins is a process-global flag held flipped
    while a sibling backend of the same call runs, and the only public
-   observer would be a second backend racing the first. *)
+   observer would be a second backend racing the first.  The fourth is
+   [Refute_ModelFinder_Words], the word operation registry, which the
+   model finder does not use yet, so no public route reaches it. *)
 val lookup_term_postprocessor =
   Refute_ModelFinder_Model.lookup_term_postprocessor
 
@@ -4982,6 +4984,159 @@ val _ = mf_level2 "certificates replay at large and structured scopes"
                                     ``ZooNode (ZooLeaf 0) (ZooLeaf 0)``]))
         ``(?t : zoo_tree. t = ZooLeaf 0) ==> !u : zoo_tree. u = ZooLeaf 0``
     end)
+
+(* ------------------------------------------------------------------- *)
+(* Word operation registry: standalone, not used by the model finder yet.    *)
+(* ------------------------------------------------------------------- *)
+
+val _ = section "word operation registry"
+
+(* holdep does not follow the alias below, so the empty open names the
+   dependency. *)
+local open Refute_ModelFinder_Words in end
+
+local
+  structure W = Refute_ModelFinder_Words
+
+  val widths = [1, 8, 32, 256]
+  fun pow2 w = IntInf.pow (2, w)
+
+  (* the boundary values of a width, with one value from the middle *)
+  fun samples w =
+    let
+      val m = pow2 w
+      fun add (v, acc) =
+        if 0 <= v andalso v < m andalso not (List.exists (fn x => x = v) acc)
+        then acc @ [v] else acc
+    in
+      foldl add []
+        [0, 1, 2, m div 2 - 1, m div 2, m div 2 + 1, m - 2, m - 1, m div 3]
+    end
+
+  fun word_type w = wordsSyntax.mk_word_type (fcpSyntax.mk_int_numeric_type w)
+  fun shape_type w W.Word = word_type w
+    | shape_type _ W.Num = numLib.num
+    | shape_type _ W.Bool = Type.bool
+
+  fun arbnum v = Arbnum.fromString (IntInf.toString v)
+  fun literal w W.Word v =
+        wordsSyntax.mk_n2w (numSyntax.mk_numeral (arbnum v),
+                            fcpSyntax.mk_int_numeric_type w)
+    | literal _ W.Num v = numSyntax.mk_numeral (arbnum v)
+    | literal _ W.Bool v = if v = 0 then boolSyntax.F else boolSyntax.T
+
+  fun value_of W.Word t =
+        IntInf.fromString (Arbnum.toString
+          (numSyntax.dest_numeral (#1 (wordsSyntax.dest_n2w t))))
+    | value_of W.Num t =
+        IntInf.fromString (Arbnum.toString (numSyntax.dest_numeral t))
+    | value_of W.Bool t =
+        if Term.aconv t boolSyntax.T then SOME 1
+        else if Term.aconv t boolSyntax.F then SOME 0 else NONE
+
+  fun constant w ({Thy, Name, args, res, ...} : W.row) =
+    Term.mk_thy_const {Thy = Thy, Name = Name,
+      Ty = Lib.itlist (Lib.curry Type.-->) (map (shape_type w) args)
+                      (shape_type w res)}
+
+  fun tuples [] = [[]]
+    | tuples (vs :: rest) =
+        List.concat (map (fn v => map (fn t => v :: t) (tuples rest)) vs)
+
+  val division_rows = ["word_div", "word_mod", "word_quot", "word_rem"]
+  (* HOL leaves a division by 0 unspecified, and only that *)
+  fun unspecified ({Name, ...} : W.row) args =
+    List.exists (fn n => n = Name) division_rows andalso List.last args = 0
+
+  fun ints xs = String.concatWith " " (map IntInf.toString xs)
+
+  (* [row] agrees with EVAL on every tuple of boundary values of [w] *)
+  fun conforms (row : W.row) w =
+    let
+      val c = constant w row
+      fun ok args =
+        let
+          val expected = #sem row w args
+          val applied = Term.list_mk_comb (c,
+            ListPair.map (fn (s, v) => literal w s v) (#args row, args))
+          val agrees =
+            if unspecified row args then not (Option.isSome expected)
+            else
+              (case expected of
+                   NONE => false
+                 | SOME e =>
+                     value_of (#res row) (boolSyntax.rhs
+                       (Thm.concl (bossLib.EVAL applied))) = SOME e)
+        in
+          agrees orelse
+          (print ("\n  " ^ #Name row ^ " at width " ^ Int.toString w ^ " on " ^
+                  ints args ^ " disagrees with EVAL\n"); false)
+        end
+    in
+      List.all ok (tuples (map (fn W.Word => samples w
+                                 | W.Num => [0, 1, 7]
+                                 | W.Bool => [0, 1]) (#args row)))
+    end
+
+  fun raises_bad f = (ignore (f ()); false)
+    handle Refute_ModelFinder_Util.BAD _ => true
+
+  val registry_names = map #Name W.rows
+in
+  val _ = print (W.listing ())
+
+  val _ = test "the registry has one row per constant, none repeated" (fn () =>
+    length W.rows = 20 andalso
+    length (List.filter (fn n => length (List.filter (fn m => m = n)
+                                  registry_names) = 1) registry_names) = 20)
+
+  val _ = test "negation, complement and the signed orders are rows of their own"
+    (fn () =>
+      List.all (fn name => Option.isSome (W.find_row {Thy = "words",
+                                                      Name = name}))
+        ["word_2comp", "word_1comp", "word_lt", "word_le", "word_gt",
+         "word_ge"])
+
+  val _ = app (fn row : W.row =>
+    test ("row " ^ #Name row ^ " agrees with EVAL at widths 1, 8, 32, 256")
+      (fn () => List.all (conforms row) widths)) W.rows
+
+  val _ = test "a table gives a result outside the carrier as unknown" (fn () =>
+    W.build_table (valOf (W.find_row {Thy = "words", Name = "word_add"})) 2
+      {word = [0, 1, 3], num = []} =
+    [([0, 0], SOME 0), ([0, 1], SOME 1), ([0, 2], SOME 2),
+     ([1, 0], SOME 1), ([1, 1], NONE), ([1, 2], SOME 0),
+     ([2, 0], SOME 2), ([2, 1], SOME 0), ([2, 2], NONE)])
+
+  val _ = test "a table gives x // 0w and word_mod x 0w as unknown" (fn () =>
+    let
+      fun table name = W.build_table
+        (valOf (W.find_row {Thy = "words", Name = name})) 8
+        {word = [1, 0, 3], num = []}
+      fun unknown_by_zero t =
+        List.all (fn ([_, z], r) => z <> 1 orelse r = NONE
+                   | _ => false) t
+    in
+      unknown_by_zero (table "word_div") andalso
+      unknown_by_zero (table "word_mod") andalso
+      List.nth (table "word_div", 6) = ([2, 0], SOME 2) andalso
+      List.nth (table "word_mod", 6) = ([2, 0], SOME 1)
+    end)
+
+  val _ = test "a table over a Boolean result needs no carrier for it" (fn () =>
+    W.build_table (valOf (W.find_row {Thy = "words", Name = "word_lo"})) 8
+      {word = [0, 255], num = []} =
+    [([0, 0], SOME 0), ([0, 1], SOME 1), ([1, 0], SOME 0), ([1, 1], SOME 0)])
+
+  val _ = test "a carrier with a repeated or out-of-range value is refused"
+    (fn () =>
+      let val add = valOf (W.find_row {Thy = "words", Name = "word_add"})
+      in
+        raises_bad (fn () => W.build_table add 8 {word = [0, 1, 0], num = []})
+        andalso
+        raises_bad (fn () => W.build_table add 8 {word = [0, 256], num = []})
+      end)
+end
 
 (* ------------------------------------------------------------------- *)
 (* Potential counterexamples and retries.  Registers a restricted       *)
