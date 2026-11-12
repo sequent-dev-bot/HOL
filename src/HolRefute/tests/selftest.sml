@@ -8,7 +8,7 @@ open Refute
 open refutePersistentTypeTheory
 local open Refute_Rat Refute_Real in end
 
-(* Four deliberate reaches outside the [Refute] signature.  One is a
+(* Five deliberate reaches outside the [Refute] signature.  One is a
    registry entry point with no user outside these tests: the composed
    display callback a registration installs, aliased here.  The second is
    [Refute_QC.strategy_run], called by "an expired deadline never claims
@@ -19,7 +19,10 @@ local open Refute_Rat Refute_Real in end
    while a sibling backend of the same call runs, and the only public
    observer would be a second backend racing the first.  The fourth is
    [Refute_ModelFinder_Words], the word operation registry, which the
-   model finder does not use yet, so no public route reaches it. *)
+   model finder does not use yet, so no public route reaches it.  The fifth
+   is [Refute_ModelFinder_Preproc.axioms_max_count], lowered by "a goal over
+   too many definitions is declined, naming the bound": a goal that
+   reaches the real bound needs thousands of definitions. *)
 val lookup_term_postprocessor =
   Refute_ModelFinder_Model.lookup_term_postprocessor
 
@@ -2855,6 +2858,27 @@ val _ = mf_test "the model finder leaves the theory untouched" (fn () =>
        ``zoo_mutual_nonwf_lfp n``]
   end)
 
+(* A goal whose definition closure is larger than the bound is declined at
+   once with the bound named, not left to unfold until its deadline. *)
+val ax_chain0_def = TotalDefn.Define `ax_chain0 (n : num) = n + 1`
+val ax_chain1_def = TotalDefn.Define `ax_chain1 (n : num) = ax_chain0 n + 1`
+val ax_chain2_def = TotalDefn.Define `ax_chain2 (n : num) = ax_chain1 n + 1`
+
+val _ = mf_test "a goal over too many definitions is declined, naming the bound"
+  (fn () =>
+    let
+      val goal = ``ax_chain2 (n : num) = n``
+      val bound = Refute_ModelFinder_Preproc.axioms_max_count
+      val saved = !bound
+      val within = refute mf goal
+      val _ = bound := 2
+      val over = (refute mf goal handle e => (bound := saved; raise e))
+      val _ = bound := saved
+    in
+      genuine within andalso
+      unknown_with "the definitions the goal depends on exceed 2 axioms" over
+    end)
+
 val word_cfg = mf |> upd_timeout 60.0
   |> upd_card [(SOME ``:num``, [8]), (NONE, [1])]
 
@@ -2870,7 +2894,9 @@ val _ = mf_test "word operations are encoded" (fn () =>
      ``(4w : 3 word) < 0w ==> F``, ``(w : 3 word) && 0w <> 0w``,
      ``(w : 3 word) << 5 <> 0w``, ``w2n (7w : 3 word) <> 7``])
 
-val _ = mf_test "unencoded word operations are refused by name" (fn () =>
+(* An operation outside the registry is an
+   unknown value named in the reasons; it was a goal refused by name. *)
+val _ = mf_test "unencoded word operations are unknown values, named" (fn () =>
   unknown_with "word operation words$w2w is not encoded"
     (refute word_cfg ``w2w (w : 3 word) = (0w : 4 word)``) andalso
   unknown_with "word operation words$word_rol is not encoded"
@@ -2892,10 +2918,8 @@ val _ = mf_test "a goal declined as not supported names the phase and counts"
                       "scopes completed 0 of 0 emitted",
                       "problems offered 0, finished 0, rejected 0"] result
       end)
-      [(``w2w (w : 3 word) = (0w : 4 word)``,
-        "word operation words$w2w is not encoded"),
-       (``(w : 3 word) #<< 1 = w``,
-        "word operation words$word_rol is not encoded")])
+      [(``(w : 'a word) = v``, "has no concrete width"),
+       (``(c : ('a, 'b) cart) = d``, "is not encoded; only word types are")])
 
 val carrier = default_config |> quiet |> only [ModelFinder]
   |> upd_timeout 60.0 |> upd_max_threads 1
@@ -5135,6 +5159,131 @@ in
         raises_bad (fn () => W.build_table add 8 {word = [0, 1, 0], num = []})
         andalso
         raises_bad (fn () => W.build_table add 8 {word = [0, 256], num = []})
+      end)
+end
+
+(* ------------------------------------------------------------------- *)
+(* The value-list carrier: a type whose k atoms stand for a list of k   *)
+(* values, every word width on it.                                      *)
+(* ------------------------------------------------------------------- *)
+
+val _ = section "value-list carrier"
+
+local open Refute_ModelFinder_Words in end
+
+local
+  structure W = Refute_ModelFinder_Words
+  structure S = Refute_ModelFinder_Scope
+  val w8 = ``:word8``
+  fun cards n = mf |> upd_card [(SOME w8, [n]), (NONE, [1])]
+  fun word_card ty (c : counterexample) =
+    case #scope c of
+        SOME rows => Option.map #2 (List.find (fn (t, _) => t = ty) rows)
+      | NONE => NONE
+  fun found c = kodkod_genuine c
+  fun mentions needle outcome =
+    List.exists (String.isSubstring needle) (reasons_of outcome)
+in
+  val _ = test "the neighbourhood of a ring is two-sided, nearest first"
+    (fn () =>
+      W.neighbourhood 8 [0] 5 = [0, 1, 255, 2, 254] andalso
+      W.neighbourhood 8 [0, 200] 6 = [0, 200, 1, 255, 201, 199] andalso
+      W.neighbourhood 2 [0] 9 = [0, 1, 3, 2] andalso
+      W.neighbourhood 256 [0] 3 = [0, 1, IntInf.pow (2, 256) - 1])
+
+  val _ = mf_test "a word literal is among the carrier's values, with 0"
+    (fn () =>
+      refute (cards 2) ``(w : word8) <> 200w``
+      |> cex_where (fn c => found c andalso word_card w8 c = SOME 2 andalso
+                            binding_is c ``w : word8`` ``200w : word8``))
+
+  val _ = mf_test "a literal the list lacks is unrepresentable, not a value"
+    (fn () =>
+      (* 200w is absent from the one-value list.  Read as a value it would
+         give a model (w = 0) that the replay rejects; unrepresentable, the
+         scope is searched clean *)
+      bounds_clean (refute (cards 1) ``(w : word8) <> 200w``))
+
+  val _ = mf_test "a 256-bit goal is searched with no 2^256 refusal" (fn () =>
+    refute mf ``(w : 256 word) <> 5w``
+    |> cex_where (fn c => found c andalso
+                          binding_is c ``w : 256 word`` ``5w : 256 word``) andalso
+    not (mentions "atoms" (refute mf ``!a b : 256 word. a + b = b + a``)))
+
+  val _ = mf_test "an explicit upd_card entry for a word type is honoured"
+    (fn () =>
+      refute (cards 3) ``(w : word8) <> 200w``
+      |> cex_where (fn c => word_card w8 c = SOME 3) andalso
+      refute (mf |> upd_card [(SOME ``:256 word``, [2]), (NONE, [1])])
+             ``(w : 256 word) <> 5w``
+      |> cex_where (fn c => word_card ``:256 word`` c = SOME 2))
+
+  val _ = mf_test "cards come from the window, the exact carrier last"
+    (fn () =>
+      refute (mf_wide |> upd_max_threads 1) ``(w : word8) <> 200w``
+      |> cex_where (fn c => word_card w8 c = SOME 2) andalso
+      (* 77 is no neighbour of 0 within ten values, so only the exact
+         carrier, last in the window, finds it *)
+      refute mf_wide ``w2n (a : word8) <> 77``
+      |> cex_where (fn c => found c andalso word_card w8 c = SOME 256))
+
+  val _ = mf_test "a fragment-typed goal never returns no counterexample"
+    (fn () =>
+      bounds_clean (refute (cards 3) ``(w : word8) + 0w = w``) andalso
+      bounds_clean (refute (cards 2) ``!a b : word8. a + b = b + a``) andalso
+      (* the control: a word type whose carrier is its exact size does
+         support it *)
+      refute word_cfg ``(w : 2 word) + 0w = w`` == NoCounterexample)
+
+  val _ = mf_test "an atom prints as its value, not as a name"
+    (fn () =>
+      (* 1w and 255w are neighbours of 0, in neither literal of the goal *)
+      refute (cards 4) ``(a : word8) = 0w \/ a = 200w``
+      |> cex_where (fn c =>
+           found c andalso
+           (case binding c ``a : word8`` of
+                SOME v => List.exists (fn w => Term.aconv v w)
+                                      [``1w : word8``, ``255w : word8``]
+              | NONE => false)))
+
+  val _ = mf_test "a result outside the list is unknown, never a value"
+    (fn () =>
+      (* the list is 0, 200, 1: 200w + 200w = 144w is outside it.  Read as
+         a value (0w) it would give the model a = 200w, which the replay
+         rejects; unknown, the scope is searched clean although a = 56w is
+         a real counterexample *)
+      let val outcome = refute (cards 3) ``(a : word8) + 200w <> 0w``
+      in not (is_cex outcome) andalso bounds_clean outcome end)
+
+  val _ = mf_test "word types of every width sit in the monotonic block"
+    (fn () =>
+      let
+        val words = [``:word8``, ``:256 word``, ``:2 word``, ``:1000000 word``]
+        val (mono, rest) =
+          S.mono_partition_with (fn _ => false) [] (words @ [``:'a``])
+      in
+        length mono = length words andalso rest = [``:'a``] andalso
+        (* a user override still wins over the default *)
+        #2 (S.mono_partition_with (fn _ => false)
+              [(SOME ``:word8``, SOME false)] words) = [``:word8``]
+      end)
+
+  val _ = mf_test "an operation with a row is computed from its table"
+    (fn () =>
+      refute (cards 3) ``(a : word8) + 100w <> 100w``
+      |> cex_where (fn c => found c andalso word_card w8 c = SOME 3 andalso
+                            binding_is c ``a : word8`` ``0w : word8``))
+
+  val _ = mf_test "an operation with no row is an unknown naming its constant"
+    (fn () =>
+      let
+        val w16 = ``:word16``
+        val both = mf |> upd_card [(SOME w8, [3]), (SOME w16, [3]), (NONE, [1])]
+      in
+        unknown_with "words$word_lsl" (refute (cards 3) ``(a : word8) << 1 <> a``)
+        andalso
+        unknown_with "word operation words$w2w is not encoded"
+          (refute both ``w2w (a : word8) <> (b : word16)``)
       end)
 end
 

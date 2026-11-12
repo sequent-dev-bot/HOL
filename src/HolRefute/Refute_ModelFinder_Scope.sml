@@ -5,8 +5,13 @@ structure Refute_ModelFinder_Scope :> Refute_ModelFinder_Scope = struct
   type term = Term.term
   type context = Refute_ModelFinder_HOL.mf_context
 
+  (* holdep records a dependency only from an [open] or a qualified name,
+     not from the right-hand side of a [structure Alias = Target]
+     binding; this empty [local open] makes it see the registry. *)
+  local open Refute_ModelFinder_Words in end
   structure MFH = Refute_ModelFinder_HOL
   structure Util = Refute_ModelFinder_Util
+  structure Words = Refute_ModelFinder_Words
 
   type constr_spec =
     {const : term,
@@ -84,47 +89,51 @@ structure Refute_ModelFinder_Scope :> Refute_ModelFinder_Scope = struct
            SOME spec => spec
          | NONE => constr_spec data_types constructor)
 
-  fun is_complete_type data_types facto ty =
+  fun is_complete_type (scope : scope) facto ty =
     case Lib.total Type.dom_rng ty of
         SOME (domain, range) =>
-          is_concrete_type data_types facto domain andalso
-          is_complete_type data_types facto range
+          is_concrete_type scope facto domain andalso
+          is_complete_type scope facto range
       | NONE =>
           if MFH.is_pair_type ty then
             let val (left, right) = pairSyntax.dest_prod ty
             in
-              is_complete_type data_types facto left andalso
-              is_complete_type data_types facto right
+              is_complete_type scope facto left andalso
+              is_complete_type scope facto right
             end
           else if is_asymmetric_non_data_type ty orelse
                   MFH.is_bitword_type ty then
             false
+          (* A word type below its exact card
+             stands for a list of some of its values: incomplete. *)
+          else if MFH.is_word_fragment (#card_assigns scope) ty then
+            false
           else
-            (case data_type_spec data_types ty of
+            (case data_type_spec (#data_types scope) ty of
                  SOME spec => Util.fun_from_pair (#complete spec) facto
                | NONE => true)
-  and is_concrete_type data_types facto ty =
+  and is_concrete_type (scope : scope) facto ty =
     case Lib.total Type.dom_rng ty of
         SOME (domain, range) =>
-          is_complete_type data_types facto domain andalso
-          is_concrete_type data_types facto range
+          is_complete_type scope facto domain andalso
+          is_concrete_type scope facto range
       | NONE =>
           if MFH.is_pair_type ty then
             let val (left, right) = pairSyntax.dest_prod ty
             in
-              is_concrete_type data_types facto left andalso
-              is_concrete_type data_types facto right
+              is_concrete_type scope facto left andalso
+              is_concrete_type scope facto right
             end
           else if MFH.is_bitword_type ty then
             true
           else
-            (case data_type_spec data_types ty of
+            (case data_type_spec (#data_types scope) ty of
                  SOME spec => Util.fun_from_pair (#concrete spec) facto
                | NONE => true)
 
-  fun is_exact_type data_types facto ty =
-    is_complete_type data_types facto ty andalso
-    is_concrete_type data_types facto ty
+  fun is_exact_type (scope : scope) facto ty =
+    is_complete_type scope facto ty andalso
+    is_concrete_type scope facto ty
 
   fun offset_of_type (offsets, fallback) ty =
     Option.getOpt (Redblackmap.peek (offsets, ty), fallback)
@@ -135,12 +144,39 @@ structure Refute_ModelFinder_Scope :> Refute_ModelFinder_Scope = struct
       handle HOL_ERR _ => ~1),
      offset_of_type ofs ty)
 
-  (* The widest word carrier of a scope, or 0 without one.  Word operations
-     are computed in Kodkod's integers, so this sets the integer width the
-     problem asks for. *)
+  (* The widest exact word carrier of a scope, or 0 without one.  An exact
+     carrier's operations are computed in Kodkod's integers, so this sets
+     the integer width the problem asks for.  A fragment carrier computes in
+     tables and needs no integers. *)
   fun max_word_width ({card_assigns, ...} : scope) =
     List.foldl Int.max 0
-      (List.mapPartial (MFH.word_dimension o #1) card_assigns)
+      (List.mapPartial (fn (ty, _) =>
+         if MFH.is_word_fragment card_assigns ty then NONE
+         else MFH.word_dimension ty) card_assigns)
+
+  (* The values of a fragment word carrier: the
+     two-sided ring neighbourhood of 0 and of the problem's literals of that
+     width, nearest first, as many as the card. *)
+  fun word_values ({hol_ctxt, card_assigns, ...} : scope) ty =
+    case MFH.word_dimension ty of
+        NONE => NONE
+      | SOME width =>
+          if not (MFH.is_word_fragment card_assigns ty) then NONE
+          else
+            let
+              val literals = List.filter (fn value => value <> 0)
+                (MFH.word_literals_of hol_ctxt width)
+            in
+              SOME (Words.neighbourhood width (0 :: literals)
+                (MFH.card_of_type card_assigns ty))
+            end
+
+  fun word_value_index scope ty value =
+    case word_values scope ty of
+        NONE => NONE
+      | SOME values =>
+          Option.map #1 (List.find (fn (_, other) => other = value)
+            (Lib.mapi (fn index => fn other => (index, other)) values))
 
   fun same_card_assigns (left, right) =
     ListPair.allEq (fn ((left_ty, left_card),
@@ -256,25 +292,48 @@ structure Refute_ModelFinder_Scope :> Refute_ModelFinder_Scope = struct
 
   fun bit_card bits = Int.min (max_bits, Int.max (1, bits))
 
-  (* A word carrier is exact and unsearched: width [w] means exactly [2^w]
-     atoms, atom [j] denoting [n2w j].  Materializing them is the whole
-     cost, so an oversized width refuses by name instead of being built. *)
+  (* The candidate cards of a word type, whose
+     atoms stand for a list of its values.  A row of [upd_card] naming the
+     type is taken as given (but no card exceeds the 2^width words there
+     are); otherwise the cards are the default window cut at 2^width, and
+     the exact carrier of 2^width atoms comes last where it fits the cap. *)
   val max_word_atoms = 1024
 
-  fun word_atom_count width =
-    if width <= 30 then Int.toString (Util.reasonable_power 2 width)
-    else "2^" ^ Int.toString width
-
-  fun word_card ty =
+  fun word_cards cards_assigns ty =
     case MFH.word_dimension ty of
-        NONE => raise err "word_card" "not a word type"
+        NONE => raise err "word_cards" "not a word type"
       | SOME width =>
-          if width > 30 orelse
-             Util.reasonable_power 2 width > max_word_atoms then
-            raise Util.NOT_SUPPORTED
-              ("word width " ^ Int.toString width ^ " needs " ^
-               word_atom_count width ^ " atoms")
-          else Util.reasonable_power 2 width
+          let
+            val exact = if width <= 30 then Util.reasonable_power 2 width
+                        else Util.reasonable_power 2 30 + 1
+            fun explicit_row (SOME pattern, candidates) =
+                  if Util.same_type pattern ty then SOME candidates else NONE
+              | explicit_row _ = NONE
+            fun relaxed_row (SOME pattern, candidates) =
+                  if type_matches pattern ty then SOME candidates else NONE
+              | relaxed_row _ = NONE
+            fun distinct [] = []
+              | distinct (card :: rest) =
+                  card :: distinct (List.filter (fn other => other <> card)
+                                      rest)
+            fun cut cards =
+              distinct (map (fn card => Int.min (exact, Int.max (1, card)))
+                          cards)
+          in
+            case (case get_first explicit_row cards_assigns of
+                      SOME candidates => SOME candidates
+                    | NONE => get_first relaxed_row cards_assigns) of
+                SOME candidates => cut candidates
+              | NONE =>
+                  let
+                    val window = cut (lookup_type_ints_assign cards_assigns ty)
+                  in
+                    if width <= 30 andalso exact <= max_word_atoms andalso
+                       not (List.exists (fn card => card = exact) window)
+                    then window @ [exact]
+                    else window
+                  end
+          end
 
   fun block_for_type context binarize cards_assigns maxes_assigns
         iters_assigns bitss bisim_depths ty =
@@ -296,7 +355,7 @@ structure Refute_ModelFinder_Scope :> Refute_ModelFinder_Scope = struct
     else if ty = MFH.signed_bitword_type then
       [(Card ty, lookup_type_ints_assign cards_assigns MFH.int_type)]
     else if MFH.is_word_type ty then
-      [(Card ty, [word_card ty])]
+      [(Card ty, word_cards cards_assigns ty)]
     else if MFH.is_char_type ty then
       (* Like a word carrier: exact, unsearched, atom [j] denoting [CHR j]. *)
       [(Card ty, [MFH.char_card])]

@@ -37,12 +37,18 @@ signature Refute_ModelFinder_Scope = sig
   val type_arguments : hol_type -> hol_type list
   val data_type_spec : data_type_spec list -> hol_type -> data_type_spec option
   val constr_spec : data_type_spec list -> term -> constr_spec
-  val is_complete_type : data_type_spec list -> bool -> hol_type -> bool
-  val is_concrete_type : data_type_spec list -> bool -> hol_type -> bool
-  val is_exact_type : data_type_spec list -> bool -> hol_type -> bool
+  (* these three take the scope: a word type on a value-list carrier
+     is incomplete *)
+  val is_complete_type : scope -> bool -> hol_type -> bool
+  val is_concrete_type : scope -> bool -> hol_type -> bool
+  val is_exact_type : scope -> bool -> hol_type -> bool
   val offset_of_type : ('a, 'b) Redblackmap.dict * 'b -> 'a -> 'b
   val spec_of_type : scope -> hol_type -> int * int
   val max_word_width : scope -> int
+  (* The values the atoms of a fragment word type stand for, atom [j] being
+     the [j]th; NONE for an exact carrier, whose atom [j] is [n2w j]. *)
+  val word_values : scope -> hol_type -> IntInf.int list option
+  val word_value_index : scope -> hol_type -> IntInf.int -> int option
   val scopes_equivalent : scope * scope -> bool
 
   val is_self_recursive_constr_type : hol_type -> bool

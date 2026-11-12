@@ -418,7 +418,8 @@ fun sort_terms pairs =
 fun make_fun (context as {scope, ...} : context) actual_domain_ty
       display_domain_ty display_range_ty pairs =
   let
-    val complete = MFS.is_complete_type (#data_types scope) false
+    (* completeness is of the scope *)
+    val complete = MFS.is_complete_type scope false
       actual_domain_ty
     val origin =
       if complete then FunctionDefault else IncompleteFunctionFallback
@@ -446,8 +447,9 @@ fun make_set (context as {scope, ...} : context) maybe_opt actual_element_ty
       (fn (_, value) =>
         not (Term.aconv value boolSyntax.T) andalso
         not (Term.aconv value boolSyntax.F)) pairs
+    (* completeness is of the scope *)
     val incomplete =
-      not (MFS.is_complete_type (#data_types scope) false actual_element_ty)
+      not (MFS.is_complete_type scope false actual_element_ty)
     val elements =
       if maybe_opt andalso incomplete then
         present @ [fresh_replay_hole context DisplayUnrepresented
@@ -653,10 +655,21 @@ fun reconstruct_term (context as {scope, sel_names, ...} : context)
               intSyntax.term_of_int
                 (Arbint.fromInt (MFP.int_for_atom (card, 0) atom))
             else if MFH.is_word_type ty then
-              (* Atom [j] of a word carrier denotes [n2w j], which prints in
-                 the surface literal form. *)
-              wordsSyntax.mk_n2w
-                (numSyntax.term_of_int atom, wordsSyntax.dest_word_type ty)
+              (* Atom [j] of an exact word carrier denotes [n2w j], which
+                 prints in the surface literal form.
+                 Atom [j] of a fragment carrier
+                 denotes the [j]th value of its list. *)
+              let
+                val value =
+                  case MFS.word_values scope ty of
+                      SOME values => List.nth (values, atom)
+                    | NONE => IntInf.fromInt atom
+              in
+                wordsSyntax.mk_n2w
+                  (numSyntax.mk_numeral (Arbnum.fromString
+                     (IntInf.toString value)),
+                   wordsSyntax.dest_word_type ty)
+              end
             else if MFH.is_char_type ty then
               (* Atom [j] denotes [CHR j], which the printer renders as the
                  character literal. *)

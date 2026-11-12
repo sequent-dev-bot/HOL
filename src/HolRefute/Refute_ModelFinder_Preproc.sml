@@ -13,6 +13,13 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
   val value_var_prefix = MFN.reserved_prefix ^ "v"
   val max_skolem_depth = 3
   val axioms_max_depth = 255
+  (* A bound on how many axioms one problem may
+     collect.  A goal over a large semantics unfolds into thousands of
+     definitions, each unfolded, skolemized and boxed in turn; the work is
+     then bounded only by the goal's deadline, with the heap growing until
+     the process runs out of store.  Such a goal is declined, with this
+     bound named, so it is reported at once instead of exhausting memory. *)
+  val axioms_max_count = ref 2000
   val special_max_depth = 20
   val quantifier_cluster_threshold = 7
   val binary_int_threshold = 3
@@ -1871,6 +1878,13 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
                 (seen, definitions, def_set, nondefinitions, nondef_set)
               else
                 let
+                  val _ =
+                    if length definitions + length nondefinitions >=
+                       !axioms_max_count then
+                      raise Refute_ModelFinder_Util.NOT_SUPPORTED
+                        ("the definitions the goal depends on exceed " ^
+                         Int.toString (!axioms_max_count) ^ " axioms")
+                    else ()
                   val accumulator =
                     if definitional then
                       (seen, normalized :: definitions,

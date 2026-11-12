@@ -230,8 +230,10 @@ fun authenticity_reasons (mf : Refute_Core.mf_config)
       MFM.try_again_reasons options
     end
 
+(* Completeness is a property of the scope: a word type on a
+   value-list carrier is incomplete. *)
 fun exact_totality all_types (scope : MFS.scope) =
-  List.all (MFS.is_exact_type (#data_types scope) true) all_types
+  List.all (MFS.is_exact_type scope true) all_types
 
 fun type_name ty = Parse.type_to_string ty
 
@@ -678,6 +680,9 @@ fun run_instance deadline started (config : Refute_Core.config)
         ([], []) (nondef_us @ def_us @ need_us)
     val (sel_names, nonsel_names) = List.partition
       (MFN.is_sel o MFNT.nickname_of) const_names
+    (* The word literals of the problem are the
+       centres of its fragment word carriers' value lists. *)
+    val _ = MFH.set_word_literals context (nondef_ts @ def_ts @ need_ts)
     val all_types = ground_types context binarize
       (nondef_ts @ def_ts @ need_ts)
     val unique_scope = #card_mode mf = Refute_Core.FixedBound andalso
@@ -1305,7 +1310,8 @@ fun run_instance deadline started (config : Refute_Core.config)
       not (List.exists Type.is_vartype all_types) andalso
       List.exists (fn scope =>
         scope_checked scope andalso
-        List.all (MFS.is_exact_type (#data_types scope) sound_finitizes)
+        (* exactness is of the scope, as in [exact_totality] *)
+        List.all (MFS.is_exact_type scope sound_finitizes)
           all_types) (!generated_scopes)
 
     fun stats donno =
@@ -1320,6 +1326,14 @@ fun run_instance deadline started (config : Refute_Core.config)
        ("donno", donno),
        ("met_potential", !met_potential)]
 
+    (* A word operation with no table row, met at
+       a fragment carrier, was an unknown value: say which. *)
+    fun unknown_op_reasons () =
+      map (fn name =>
+             "word operation " ^ name ^ " is not encoded: it has no table " ^
+             "row, so its value is unknown")
+        (rev (!(#unknown_ops context)))
+
     fun finalize donno outcome =
       let val final_stats = stats donno
       in
@@ -1327,6 +1341,9 @@ fun run_instance deadline started (config : Refute_Core.config)
             Refute_Core.Counterexample cexs =>
               Refute_Core.Counterexample (map
                 (replace_stats final_stats) cexs)
+          (* name the operations that were unknown values *)
+          | Refute_Core.Unknown reasons =>
+              Refute_Core.Unknown (reasons @ unknown_op_reasons ())
           | other => other
       end
 

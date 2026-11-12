@@ -285,7 +285,12 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
      skolems : skolem_info list ref,
      special_funs : special_fun list ref,
      wf_cache : wf_cache ref,
-     constr_cache : (hol_type * term list) list ref}
+     constr_cache : (hol_type * term list) list ref,
+     (* The word literals of the problem by word
+        width, and the word operations that had no table row at a fragment
+        carrier, which became unknown values. *)
+     word_literals : (int * IntInf.int list) list ref,
+     unknown_ops : string list ref}
 
   (* Upstream's ground theorem hash and vestigial unrolled-predicate ref are
      deliberately absent: nothing in this port reads either. *)
@@ -898,12 +903,14 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
        fn () => word_built_in_arity key ty,
        fn () => char_built_in_arity key ty]
 
-  (* Outside the direct tier a word operation is refused by name rather than
-     unfolded: the definitions of width changes, bit fields and rotations run
-     through [fcp] indexing, which no encoder reads, so unfolding them only
+  (* Outside the direct tier a word operation is not unfolded: the
+     definitions of width changes, bit fields and rotations run through
+     [fcp] indexing, which no encoder reads, so unfolding them only
      replaces a precise complaint with an obscure one.  The net is every
-     word-typed constant of the word and fcp theories that the tier omits. *)
-  fun unencoded_word_reason constant =
+     word-typed constant of the word and fcp theories that the tier omits.
+     Such an operation is an unknown value named
+     in the outcome's reasons, not a declined goal; it was refused by name. *)
+  fun unencoded_word_op constant =
     let
       val {Thy, Name, ...} = Term.dest_thy_const constant
       val key = {Thy = Thy, Name = Name}
@@ -913,7 +920,8 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
          Option.isSome (word_op_dimension ty) andalso
          not (List.exists (fn (other, _) => same_key key other)
                 word_built_in_consts) then
-        SOME ("word operation " ^ Thy ^ "$" ^ Name ^ " is not encoded")
+        (* the name only; the reason is worded where it is reported *)
+        SOME (Thy ^ "$" ^ Name)
       else NONE
     end handle HOL_ERR _ => NONE
 
@@ -6073,7 +6081,14 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
                  | NONE =>
                      (case word_dimension ty of
                           SOME width =>
-                            Refute_ModelFinder_Util.reasonable_power 2 width
+                            (* A word type is on a
+                               value-list carrier: its assigned card, which
+                               is below 2^width unless the carrier is exact. *)
+                            (case assignment_lookup assigns ty of
+                                 SOME card => card
+                               | NONE =>
+                                   Refute_ModelFinder_Util.reasonable_power
+                                     2 width)
                         | NONE =>
                             (case cart_type_card ty of
                                  SOME (element, dimension) =>
@@ -6084,6 +6099,63 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
                                         SOME card => card
                                       | NONE => raise err "card_of_type"
                                           "type has no exact cardinality"))))
+
+  (* A word type's atoms stand for a list of
+     concrete values.  The carrier is exact when it holds every word
+     (card = 2^width, atom [j] being [n2w j]) and a fragment below that.  A
+     width above 30 never has an exact card in an int-sized universe. *)
+  fun is_word_fragment assigns ty =
+    case word_dimension ty of
+        NONE => false
+      | SOME width =>
+          width > 30 orelse
+          card_of_type assigns ty <
+            Refute_ModelFinder_Util.reasonable_power 2 width
+
+  fun word_literal_values terms =
+    let
+      fun literal term =
+        case Lib.total wordsSyntax.dest_mod_word_literal term of
+            SOME (value, _) =>
+              (case (word_dimension (Term.type_of term),
+                     IntInf.fromString (Arbnum.toString value)) of
+                   (SOME width, SOME int) => SOME (width, int)
+                 | _ => NONE)
+          | NONE => NONE
+      fun walk term found =
+        case literal term of
+            SOME entry => entry :: found
+          | NONE =>
+              (case Lib.total Term.dest_comb term of
+                   SOME (rator, rand) => walk rand (walk rator found)
+                 | NONE =>
+                     (case Lib.total Term.dest_abs term of
+                          SOME (_, body) => walk body found
+                        | NONE => found))
+      val entries = List.foldl (fn (term, found) => walk term found) [] terms
+      fun add ((width, value), table) =
+        case List.partition (fn (w, _) => w = width) table of
+            ([(_, values)], rest) =>
+              if List.exists (fn v => v = value) values then table
+              else (width, value :: values) :: rest
+          | _ => (width, [value]) :: table
+    in
+      map (fn (width, values) =>
+             (width, Listsort.sort IntInf.compare values))
+        (List.foldl add [] entries)
+    end
+
+  fun set_word_literals ({word_literals, ...} : mf_context) terms =
+    word_literals := word_literal_values terms
+
+  fun word_literals_of ({word_literals, ...} : mf_context) width =
+    case List.find (fn (w, _) => w = width) (!word_literals) of
+        SOME (_, values) => values
+      | NONE => []
+
+  fun note_unknown_op ({unknown_ops, ...} : mf_context) name =
+    if List.exists (fn other => other = name) (!unknown_ops) then ()
+    else unknown_ops := name :: !unknown_ops
 
   fun bounded_power maximum base exponent =
     let
@@ -6442,9 +6514,13 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
         let
           val key = const_key constant
           fun ordinary () =
-            case unencoded_word_reason constant of
-                SOME reason =>
-                  raise Refute_ModelFinder_Util.NOT_SUPPORTED reason
+            case unencoded_word_op constant of
+                SOME name =>
+                  (* An unknown value of the
+                     application's type, with the constant named. *)
+                  (note_unknown_op context name;
+                   unknown_value
+                     (Term.type_of (Term.list_mk_comb (constant, arguments))))
               | NONE =>
             if same_key key {Thy = "relation", Name = "RTC"} orelse
                same_key key {Thy = "relation", Name = "RC"} then
@@ -6802,7 +6878,9 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
        skolems = ref [],
        special_funs = ref [],
        wf_cache = ref [],
-       constr_cache = ref []}
+       constr_cache = ref [],
+       word_literals = ref [],
+       unknown_ops = ref []}
     end
 
   fun registration_api f x =

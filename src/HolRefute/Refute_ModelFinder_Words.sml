@@ -135,6 +135,30 @@ fun build_table (row : row) width ({word, num} : carrier) =
     map entry (tuples (#args row))
   end
 
+fun neighbourhood width centres count =
+  let
+    val m = modulus width
+    val wanted = IntInf.min (IntInf.fromInt count, m)
+    val centres = map (wrap width) centres
+    fun add (v, (found, seen, n)) =
+      if n >= wanted orelse Redblackset.member (seen, v) then (found, seen, n)
+      else (v :: found, Redblackset.add (seen, v), n + 1)
+    (* One round lists, centre by centre, the value d above and d below it. *)
+    fun round d state =
+      let
+        val values =
+          if d = 0 then centres
+          else List.concat (map (fn c => [wrap width (c + d),
+                                          wrap width (c - d)]) centres)
+        val (found, seen, n) = foldl add state values
+      in
+        if n >= wanted then rev found else round (d + 1) (found, seen, n)
+      end
+  in
+    if wanted <= 0 orelse null centres then []
+    else round 0 ([], Redblackset.empty IntInf.compare, 0 : IntInf.int)
+  end
+
 fun shape_name Word = "word"
   | shape_name Num = "num"
   | shape_name Bool = "bool"

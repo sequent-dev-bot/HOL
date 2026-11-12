@@ -16,6 +16,10 @@ open Refute_Forl
 open Portable
 infix |>
 
+(* holdep records a dependency only from an [open] or a qualified name,
+   not from the right-hand side of a [structure Alias = Target] binding;
+   this empty [local open] makes it see the registry. *)
+local open Refute_ModelFinder_Words in end
 structure MFH = Refute_ModelFinder_HOL
 structure MFN = Refute_ModelFinder_Names
 structure MFS = Refute_ModelFinder_Scope
@@ -23,6 +27,7 @@ structure MFP = Refute_ModelFinder_Peephole
 structure MFR = Refute_ModelFinder_Rep
 structure MFNT = Refute_ModelFinder_Nut
 structure Util = Refute_ModelFinder_Util
+structure Words = Refute_ModelFinder_Words
 structure KK = Refute_Forl
 
 type hol_type = Type.hol_type
@@ -2165,6 +2170,42 @@ fun kodkod_formula_from_nut offsets
             to_word_unary_op ty representation (fn integer => integer)
         | MFNT.Cst (MFNT.CharToNat, ty, representation) =>
             to_word_unary_op ty representation (fn integer => integer)
+        (* A registry row's table at a fragment
+           word carrier: the tuples of its defined entries, the argument
+           atoms then the result atom. *)
+        | MFNT.Cst (MFNT.WordTable (name, width, values), _, representation) =>
+            let
+              val row = case Words.find_row {Thy = "words", Name = name} of
+                            SOME row => row
+                          | NONE => raise MFNT.NUT
+                              ("Refute_ModelFinder_Kodkod.to_r (WordTable)",
+                               [candidate])
+              val schema = MFR.atom_schema_of_rep representation
+              val arguments = length (#args row)
+              val _ = check_table_size
+                (Util.reasonable_power (length values) arguments)
+              val table = Words.build_table row width
+                {word = values, num = []}
+              fun atom (position, (_, offset)) = KK.Atom (position + offset)
+              fun tuple (positions, result) =
+                Option.map (fn result =>
+                  case ListPair.mapEq atom (positions @ [result], schema) of
+                      first :: rest =>
+                        List.foldl (fn (next, product) =>
+                          kk_product product next) first rest
+                    | [] => raise MFNT.NUT
+                        ("Refute_ModelFinder_Kodkod.to_r (WordTable)",
+                         [candidate])) result
+              fun union [] = empty_rel_for_rep representation
+                | union [single] = single
+                | union entries =
+                    let val (left, right) =
+                      (List.take (entries, length entries div 2),
+                       List.drop (entries, length entries div 2))
+                    in kk_union (union left) (union right) end
+            in
+              union (List.mapPartial tuple table)
+            end
         | MFNT.Cst (MFNT.WordAnd, ty, representation) =>
             to_word_binary_op ty representation
               (fn left => fn right => KK.BitAnd (left, right))

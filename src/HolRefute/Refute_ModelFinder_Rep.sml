@@ -371,9 +371,10 @@ structure Refute_ModelFinder_Rep :> Refute_ModelFinder_Rep = struct
           end
       | NONE => best_one_rep_for_type scope ty
 
+  (* exactness is of the scope *)
   fun best_set_rep_for_type
-        (scope as {data_types, ...} : scope) ty =
-    (if MFS.is_exact_type data_types true ty then
+        (scope : scope) ty =
+    (if MFS.is_exact_type scope true ty then
        best_non_opt_set_rep_for_type
      else
        best_opt_set_rep_for_type) scope ty

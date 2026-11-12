@@ -15,6 +15,9 @@ signature Refute_ModelFinder_Nut = sig
        direct tier reduces to those. *)
     NatToWord | WordToNat | WordAnd | WordOr | WordXor |
     WordShl | WordShr | WordAsr |
+    (* negation and complement at an exact carrier, and a table over
+       a value list *)
+    WordNeg | WordNot | WordTable of string * int * IntInf.int list |
     (* The two morphisms of the [:char] carrier: the numbering that makes
        atom [j] denote [CHR j], and its inverse. *)
     NatToChar | CharToNat
@@ -23,8 +26,9 @@ signature Refute_ModelFinder_Nut = sig
     Not | Finite | Converse | Closure | SingletonSet | IsUnknown |
     SafeThe | First | Second | Cast
 
+  (* [SignedLess] is the signed order at a value-list carrier *)
   datatype op2 =
-    All | Exist | Or | And | Less | DefEq | Eq | Triad | Composition |
+    All | Exist | Or | And | Less | SignedLess | DefEq | Eq | Triad | Composition |
     Apply | Lambda
 
   datatype op3 = Let | If

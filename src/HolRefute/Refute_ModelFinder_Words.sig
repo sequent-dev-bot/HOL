@@ -30,4 +30,12 @@ sig
 
   (* The registry, one line per row. *)
   val listing : unit -> string
+
+  (* [neighbourhood width centres count]: the first [count] values of the
+     two-sided ring neighbourhood of [centres] in the words of [width] bits,
+     nearest first.  At distance d, each centre in turn contributes its
+     value plus d and then minus d (modulo 2^width); a value already listed
+     is skipped.  Fewer than [count] values come back only when the ring has
+     fewer. *)
+  val neighbourhood : int -> IntInf.int list -> int -> IntInf.int list
 end

@@ -36,6 +36,11 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
        direct tier reduces to those. *)
     NatToWord | WordToNat | WordAnd | WordOr | WordXor |
     WordShl | WordShr | WordAsr |
+    (* Negation and complement of a word, which
+       an exact carrier reads as [0w - x] and [~1w - x]; and the table of a
+       registry row at a fragment word carrier: the row's name, the word
+       width and the values the atoms stand for. *)
+    WordNeg | WordNot | WordTable of string * int * IntInf.int list |
     (* The two morphisms of the [:char] carrier: the numbering that makes
        atom [j] denote [CHR j], and its inverse. *)
     NatToChar | CharToNat
@@ -44,9 +49,10 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
     Not | Finite | Converse | Closure | SingletonSet | IsUnknown |
     SafeThe | First | Second | Cast
 
+  (* [SignedLess] is the signed order at a value-list carrier *)
   datatype op2 =
-    All | Exist | Or | And | Less | DefEq | Eq | Triad | Composition |
-    Apply | Lambda
+    All | Exist | Or | And | Less | SignedLess | DefEq | Eq | Triad |
+    Composition | Apply | Lambda
 
   datatype op3 = Let | If
 
@@ -92,6 +98,11 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
     | string_for_cst WordShl = "WordShl"
     | string_for_cst WordShr = "WordShr"
     | string_for_cst WordAsr = "WordAsr"
+    | string_for_cst WordNeg = "WordNeg"
+    | string_for_cst WordNot = "WordNot"
+    | string_for_cst (WordTable (name, width, values)) =
+        "WordTable " ^ name ^ " " ^ Int.toString width ^ " [" ^
+        String.concatWith "," (map IntInf.toString values) ^ "]"
     | string_for_cst NatToChar = "NatToChar"
     | string_for_cst CharToNat = "CharToNat"
 
@@ -111,6 +122,7 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
     | string_for_op2 Or = "Or"
     | string_for_op2 And = "And"
     | string_for_op2 Less = "Less"
+    | string_for_op2 SignedLess = "SignedLess"
     | string_for_op2 DefEq = "DefEq"
     | string_for_op2 Eq = "Eq"
     | string_for_op2 Triad = "Triad"
@@ -522,15 +534,15 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
         operand)
     end
 
+  (* A signed order is its own operator, read
+     as the unsigned order of operands shifted by the sign bit at an exact
+     carrier and from its table at a fragment one, where it is chosen. *)
   fun word_comparison (signed, swap, negate) left right =
     let
       val (first, second) =
         if swap then (right, left) else (left, right)
-      val (first, second) =
-        if signed then
-          (word_add_sign_bit first, word_add_sign_bit second)
-        else (first, second)
-      val less = Op2 (Less, Type.bool, MFR.Any, first, second)
+      val less = Op2 (if signed then SignedLess else Less, Type.bool,
+                      MFR.Any, first, second)
     in
       if negate then Op1 (Not, Type.bool, MFR.Any, less) else less
     end
@@ -875,13 +887,12 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                 end
               else if null arguments andalso
                       Option.isSome (word_subtract_base_of head) then
-                let
-                  val word_ty = domain_type (Term.type_of head)
-                in
-                  word_subtract_from word_ty
-                    (valOf (word_subtract_base_of head)
-                       (MFH.word_width word_ty))
-                end
+                (* The base is applied where the
+                   carrier is known: [word_subtract_from] at an exact
+                   carrier, a table at a fragment one. *)
+                Cst (if is_named {Thy = "words", Name = "word_2comp"} head
+                     then WordNeg else WordNot,
+                     Term.type_of head, MFR.Any)
               else if null arguments andalso Option.isSome (cst_of head) then
                 cst (valOf (cst_of head)) head
               else if Term.is_const head andalso
@@ -1259,6 +1270,58 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
             ("Refute_ModelFinder_Nut.constructor_for_construct", selectors)
     end
 
+  (* Where a word type is below its exact card
+     its atoms stand for a list of values, and an operation is read from
+     its registry row's table over that list.  A row's operation arrives as
+     a [WordTable] constant; the word operations the registry has no row for
+     become unknown values, remembered by name for the reasons. *)
+  val table_rows =
+    [(Add, "word_add"), (Subtract, "word_sub"), (Multiply, "word_mul"),
+     (WordAnd, "word_and"), (WordOr, "word_or"), (WordXor, "word_xor"),
+     (WordNeg, "word_2comp"), (WordNot, "word_1comp")]
+
+  val rowless_word_csts =
+    [(WordShl, "words$word_lsl"), (WordShr, "words$word_lsr"),
+     (WordAsr, "words$word_asr"), (NatToWord, "words$n2w"),
+     (WordToNat, "words$w2n")]
+
+  fun fragment_word_type card_assigns ty =
+    let val (domains, range) = boolSyntax.strip_fun ty
+    in List.find (MFH.is_word_fragment card_assigns) (domains @ [range]) end
+
+  fun table_constant scope name word_ty ty =
+    case (MFS.word_values scope word_ty, MFH.word_dimension word_ty) of
+        (SOME values, SOME width) =>
+          Cst (WordTable (name, width, values), ty, MFR.Any)
+      | _ => raise NUT ("Refute_ModelFinder_Nut.table_constant", [])
+
+  fun table_apply scope name first second =
+    let
+      val word_ty = type_of first
+      val fun_ty = Type.-->(word_ty, Type.-->(word_ty, Type.bool))
+    in
+      Op2 (Apply, Type.bool, MFR.Any,
+        Op2 (Apply, Type.-->(word_ty, Type.bool), MFR.Any,
+          table_constant scope name word_ty fun_ty, first),
+        second)
+    end
+
+  (* The constant that stands for [constant] at [ty] when a word type in
+     [ty] is a fragment; NONE when no word type of [ty] is. *)
+  fun fragment_replacement (scope as {hol_ctxt, card_assigns, ...} : scope)
+        constant ty =
+    case fragment_word_type card_assigns ty of
+        NONE => NONE
+      | SOME word_ty =>
+          (case AList.lookup (op =) table_rows constant of
+               SOME name => SOME (table_constant scope name word_ty ty)
+             | NONE =>
+                 (case AList.lookup (op =) rowless_word_csts constant of
+                      SOME name =>
+                        (MFH.note_unknown_op hol_ctxt name;
+                         SOME (Cst (Unknown, ty, MFR.Any)))
+                    | NONE => NONE))
+
   fun choose_reps_in_nut
         (scope as {card_assigns, data_types, ofs, ...} : scope)
         unsound table definition nut =
@@ -1309,6 +1372,18 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                          then Num value else Unrep,
                       ty, representation)
                   end
+                else if MFH.is_word_fragment card_assigns ty then
+                  (* A literal is a lookup in the
+                     carrier's list of values, and unrepresentable when
+                     absent. *)
+                  let
+                    val (cardinality, offset) = MFS.spec_of_type scope ty
+                    val atom = MFR.Atom (cardinality, offset)
+                  in
+                    case MFS.word_value_index scope ty (Int.toLarge value) of
+                        SOME index => Cst (Num index, ty, atom)
+                      | NONE => Cst (Unrep, ty, MFR.Opt atom)
+                  end
                 else
                   let
                     val (cardinality, offset) = MFS.spec_of_type scope ty
@@ -1335,13 +1410,49 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                     MFR.Func (atom,
                       MFR.Func (atom, MFR.Opt (MFR.Struct [atom, atom]))))
                 end
+            | Cst (WordTable (name, width, values), ty, _) =>
+                (* The table of a registry row:
+                   argument atoms of the word carrier, and the result an
+                   optional atom of the row's result shape. *)
+                let
+                  val row = Option.valOf
+                    (Refute_ModelFinder_Words.find_row
+                       {Thy = "words", Name = name})
+                  val word_atom =
+                    MFR.Atom (MFS.spec_of_type scope (domain_type ty))
+                  fun atom_of shape =
+                    case shape of
+                        Refute_ModelFinder_Words.Bool => bool_atom
+                      | _ => word_atom
+                  val result = MFR.Opt (atom_of (#res row))
+                in
+                  Cst (WordTable (name, width, values), ty,
+                    List.foldr MFR.Func result
+                      (map atom_of (#args row)))
+                end
             | Cst (constant, ty, _) =>
+                (case fragment_replacement scope constant ty of
+                     SOME replacement => aux table definition polarity
+                       replacement
+                   | NONE =>
                 if constant = Unknown orelse constant = Unrep then
                   if MFH.is_boolean_type ty then
                     unknown_boolean constant ty polarity
                   else
                     Cst (constant, ty,
                       MFR.best_opt_set_rep_for_type scope ty)
+                else if constant = WordNeg orelse constant = WordNot then
+                  (* An exact carrier reads negation and complement as a
+                     subtraction from a base. *)
+                  let
+                    val word_ty = domain_type ty
+                    val width = MFH.word_width word_ty
+                    val base = if constant = WordNeg then 0
+                      else Util.reasonable_power 2 width - 1
+                  in
+                    aux table definition polarity
+                      (word_subtract_from word_ty base)
+                  end
                 else if Lib.mem constant
                     [Add, Subtract, Multiply, Divide, Gcd, Lcm] then
                   let
@@ -1422,7 +1533,8 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                         if total then range else MFR.Opt range))
                   end
                 else
-                  Cst (constant, ty, MFR.best_set_rep_for_type scope ty)
+                  (* closes the case over [fragment_replacement] *)
+                  Cst (constant, ty, MFR.best_set_rep_for_type scope ty))
             | Op1 (Not, ty, _, first) =>
                 (case gsub definition (Util.flip_polarity polarity) first of
                      Op2 (Triad, _, _, positive, negative) =>
@@ -1458,6 +1570,11 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                   else s_op1 operator ty representation first'
                 end
             | Op2 (Less, ty, _, first, second) =>
+                (* at a value-list carrier the order is a table *)
+                if MFH.is_word_fragment card_assigns (type_of first) then
+                  aux table definition polarity
+                    (table_apply scope "word_lo" first second)
+                else
                 let
                   val _ = check_carrier_budget scope false (type_of first)
                   val first' = sub first
@@ -1467,6 +1584,17 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                 in
                   s_op2 Less ty (bool_rep polarity optional) first' second'
                 end
+            | Op2 (SignedLess, ty, _, first, second) =>
+                (* A signed order is read from its
+                   table at a fragment carrier, and as the unsigned order of
+                   operands shifted by the sign bit at an exact one. *)
+                if MFH.is_word_fragment card_assigns (type_of first) then
+                  aux table definition polarity
+                    (table_apply scope "word_lt" first second)
+                else
+                  aux table definition polarity
+                    (Op2 (Less, ty, MFR.Any, word_add_sign_bit first,
+                          word_add_sign_bit second))
             | Op2 (DefEq, ty, _, first, second) =>
                 s_op2 DefEq ty (MFR.Formula Util.Neut)
                   (sub first) (sub second)
@@ -1486,8 +1614,9 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                       s_op2 Eq ty (MFR.Formula Util.Neut) first' second'
                     else opt_opt_case ()
                 in
+                  (* concreteness is of the scope *)
                   if unsound orelse polarity = Util.Neg orelse
-                     MFS.is_concrete_type data_types true (type_of first) then
+                     MFS.is_concrete_type scope true (type_of first) then
                     case (MFR.is_opt_rep (rep_of first'),
                           MFR.is_opt_rep (rep_of second')) of
                         (true, true) => opt_opt_case ()
@@ -1566,10 +1695,11 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                       let
                         val quantified = s_op2 operator ty
                           (MFR.Formula polarity) binder' body'
+                        (* completeness is of the scope *)
                         val omit_guard = definition orelse
                           (unsound andalso
                            ((polarity = Util.Pos) = (operator = All))) orelse
-                          MFS.is_complete_type data_types true
+                          MFS.is_complete_type scope true
                             (type_of binder)
                       in
                         if omit_guard then quantified

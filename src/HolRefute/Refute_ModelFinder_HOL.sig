@@ -85,7 +85,11 @@ signature Refute_ModelFinder_HOL = sig
      skolems : skolem_info list ref,
      special_funs : special_fun list ref,
      wf_cache : wf_cache ref,
-     constr_cache : (hol_type * term list) list ref}
+     constr_cache : (hol_type * term list) list ref,
+     (* the goal's word literals per width, and the operations
+        met as unknown values *)
+     word_literals : (int * IntInf.int list) list ref,
+     unknown_ops : string list ref}
 
   val const_key : term -> {Name : string, Thy : string}
   val same_key : KernelSig.kernelname -> KernelSig.kernelname -> bool
@@ -259,6 +263,11 @@ signature Refute_ModelFinder_HOL = sig
     mf_context -> hol_type list -> int -> int -> (hol_type * int) list ->
     hol_type -> int
   val typical_card_of_type : hol_type -> int
+  (* value-list carriers of words *)
+  val is_word_fragment : (hol_type * int) list -> hol_type -> bool
+  val set_word_literals : mf_context -> term list -> unit
+  val word_literals_of : mf_context -> int -> IntInf.int list
+  val note_unknown_op : mf_context -> string -> unit
   val is_finite_type : mf_context -> hol_type -> bool
   val eta_expand : term -> int -> term
   val unfold_defs_in_term : mf_context -> term -> term
