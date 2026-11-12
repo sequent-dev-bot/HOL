@@ -11,6 +11,8 @@ The suites are `identity`, `oracle`, `export`, `compute-binder`, `term-kind`,
 `mk-abs`, and `closedness`. Each also runs separately in place of `all`.
 Sources load from this checkout; fresh processes check HOL replay. Logs and
 outputs stay in the scratch dir. `compute-binder` needs `cv_computeLib`.
+Identity and oracle also check selected exact sequents after merged HOL
+replay; declarations unused by those targets may be pruned.
 
 Candle replay is separate. First convert its public prerequisites with this
 checkout's [driver](../pft-cli.md):

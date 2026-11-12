@@ -20,6 +20,14 @@ Contents
 
 New features
 ------------
+-   Proof traces can be converted to version 0.1.0 binary PFT for HOL4 or
+    Candle replay, with shared logical and stateful compute preambles for
+    Candle. The `pft.sh` driver converts theory dumps and merges selected
+    exports across their dependencies. Conversion preserves oracle hypotheses and
+    live/retired symbol identities; merging processes one input graph at a
+    time and reuses IDs after their final uses. Raw traces include live-signature
+    and import metadata, so earlier raw traces must be regenerated.
+
 
 -   A new theorem attribute, `datatype_simp`, says how a datatype's induction principle should be phrased.
 
