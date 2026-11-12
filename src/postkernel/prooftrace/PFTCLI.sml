@@ -47,10 +47,11 @@ fun read_order file =
 
 fun target save_defs s =
   case String.fields (fn c => c = #"$") s of
-    [thy, name] =>
+    thy :: names => let val name = String.concatWith "$" names in
       if thy = "" orelse name = "" then
         fail ("invalid --target " ^ s ^ "; expected THEORY$THEOREM")
       else PFTMerge.ThyThm(thy, name, save_defs)
+      end
   | _ => fail ("invalid --target " ^ s ^ "; expected THEORY$THEOREM")
 
 fun ruleset "hol4" = PFTEmit.HOL4
