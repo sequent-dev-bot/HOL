@@ -378,7 +378,8 @@ fun scan_index_file descs_ref file_idx input
             else ()) (#produced meta)
           val () = case #kind meta of
               CmdLoad name => List.app (fn (_, id) =>
-                loads := (file_idx, ci, id, name) :: !loads) (#produced meta)
+                loads := (file_idx, ci, id,
+                  Redblackmap.peek(!save_table, name)) :: !loads) (#produced meta)
             | _ => ()
       in ci_ref := ci + 1; ci end
     fun save (name, th, ci) =
@@ -396,18 +397,18 @@ fun scan_index_file descs_ref file_idx input
 
 (* Unreached bad LOADs remain lazy errors. Valid aliases are resolved in
    forward command order, so their canonical sources need no file graph. *)
-fun index_aliases save_table loads =
+fun index_aliases loads =
   let val aliases = ref (Redblackmap.mkDict pair_compare)
-  in List.app (fn (fi, ci, id, name) =>
-       case Redblackmap.peek(save_table, name) of
+      val sources = ref (Redblackmap.mkDict pair_compare)
+  in List.app (fn (fi, ci, id, saved: save_entry option) =>
+       case saved of
          SOME {file_idx=sfi, cmd_idx=sci, th_id=sth} =>
-           if sfi < fi orelse (sfi = fi andalso sci < ci) then
-             let val (sfi, _, sid) = canonical (!aliases) sfi NS_TH sth
-             in aliases := Redblackmap.insert(!aliases, (fi, id), (sfi, sid))
-             end
-           else ()
+           let val (cfi, _, sid) = canonical (!aliases) sfi NS_TH sth
+           in aliases := Redblackmap.insert(!aliases, (fi, id), (cfi, sid));
+              sources := Redblackmap.insert(!sources, (fi, ci), (sfi, sci))
+           end
        | NONE => ()) loads;
-     !aliases
+     (!aliases, !sources)
   end
 
 (* ========================================================================= *)
@@ -441,6 +442,7 @@ fun resolve_targets (targets: target list)
    preceding graph; only inclusion flags and pending roots span files. *)
 fun compute_reachable ruleset
       (indexes: file_index vector) (read_file: int -> file_state)
+      (load_sources: (int * int, int * int) Redblackmap.dict)
       (save_table: (string, save_entry) Redblackmap.dict)
       (const_introducer: (string, int * int) Redblackmap.dict)
       (type_introducer: (string, int * int) Redblackmap.dict)
@@ -459,17 +461,21 @@ fun compute_reachable ruleset
                 in Vector.sub(visited, fi) := SOME a; a end
     val pending = Vector.tabulate(n_files, fn _ => ref ([] : int list))
 
-    fun enqueue (fi, ci) =
+    (* Bit 1 includes a command; bit 2 also saves its reached definitions. *)
+    fun enqueue mask (fi, ci) =
       let val vis = ensure_visited fi
-      in if Word8Array.sub(vis, ci) <> 0w0 then ()
-         else (Word8Array.update(vis, ci, 0w1);
+          val old = Word8Array.sub(vis, ci)
+          val new = Word8.orb(old, mask)
+      in if new = old then ()
+         else (Word8Array.update(vis, ci, new);
                Vector.sub(pending, fi) := ci :: !(Vector.sub(pending, fi)))
       end
 
-    fun seed (name, _) =
+    fun seed (name, save_defs) =
       case Redblackmap.peek(save_table, name) of
         NONE => raise Fail ("PFTMerge: unknown target: " ^ name)
-      | SOME {file_idx, cmd_idx, ...} => enqueue (file_idx, cmd_idx)
+      | SOME {file_idx, cmd_idx, ...} =>
+          enqueue (if save_defs then 0w3 else 0w1) (file_idx, cmd_idx)
     val () = List.app seed target_saves
 
     (* These rules construct registered connectives without a CONST operand. *)
@@ -507,37 +513,37 @@ fun compute_reachable ruleset
               [] => ()
             | ci :: rest =>
               let val () = worklist := rest
+                  val mask = Word8Array.sub(ensure_visited fi, ci)
               in
                 (* The newest earlier initialization supplies the ambient state. *)
                 (if Metadata.opcode cmds ci =
                       (if ruleset = "hol4" then 0x44 else 0x41) then
                    case List.find (fn loc => pair_compare(loc, (fi, ci)) = LESS)
                                   compute_inits of
-                     SOME loc => enqueue loc
+                     SOME loc => enqueue mask loc
                    | NONE => raise Fail "PFTMerge: COMPUTE before COMPUTE_INIT"
                  else ());
                 (* Follow ID-level dependencies *)
                 Metadata.app_consumed cmds ci (fn (ns, id) =>
-                  enqueue (fi, find_producer fs (ns, id)));
+                  enqueue mask (fi, find_producer fs (ns, id)));
                 (* Follow cross-file LOAD dependencies *)
                 (case Metadata.kind cmds ci of
                    CmdLoad name =>
-                     (case Redblackmap.peek(save_table, name) of
-                        NONE => raise Fail ("PFTMerge: unknown LOAD: " ^ name)
-                      | SOME {file_idx=sfi, cmd_idx=sci, ...} =>
-                        let val () = if sfi < fi orelse
-                                        (sfi = fi andalso sci < ci) then ()
-                                     else raise Fail
-                                       ("PFTMerge: LOAD before SAVE: " ^ name ^
-                                        "; inputs must be in dependency order")
-                        in enqueue (sfi, sci) end)
+                     (case Redblackmap.peek(load_sources, (fi, ci)) of
+                        SOME loc => enqueue mask loc
+                      | NONE =>
+                          if Redblackmap.inDomain(save_table, name) then
+                            raise Fail
+                              ("PFTMerge: LOAD before SAVE: " ^ name ^
+                               "; inputs must be in dependency order")
+                          else raise Fail ("PFTMerge: unknown LOAD: " ^ name))
                  | _ => ());
                 List.app (fn name =>
                   case Redblackmap.peek(const_introducer, name) of
                     NONE => () (* Supplied by the replay environment. *)
                   | SOME (ifi, ici) =>
                       if ifi < fi orelse (ifi = fi andalso ici < ci) then
-                        enqueue (ifi, ici)
+                        enqueue mask (ifi, ici)
                       else raise Fail
                         ("PFTMerge: implicit constant used before " ^
                          "introduction: " ^ name)) (implicit_consts (Metadata.opcode cmds ci));
@@ -550,7 +556,7 @@ fun compute_reachable ruleset
                      in case Redblackmap.peek(table, name) of
                           SOME (ifi, ici) =>
                             if ifi < fi orelse (ifi = fi andalso ici <= ci) then
-                              enqueue (ifi, ici)
+                              enqueue mask (ifi, ici)
                             else raise Fail
                               ("PFTMerge: name used before introduction: " ^
                                name ^ "; inputs must be in dependency order")
@@ -574,6 +580,7 @@ fun compute_reachable ruleset
 fun pass2_emit (indexes: file_index vector)
                (read_file: int -> file_state)
                (aliases: (int * int, int * int) Redblackmap.dict)
+               (load_sources: (int * int, int * int) Redblackmap.dict)
                (save_table: (string, save_entry) Redblackmap.dict)
                (const_introducer: (string, int * int) Redblackmap.dict)
                (type_introducer: (string, int * int) Redblackmap.dict)
@@ -654,7 +661,6 @@ fun pass2_emit (indexes: file_index vector)
       let val (fi, ns, id) = canonical fi ns id
           val a = count_array fi ns
       in IdTable.update(a, id, IdTable.sub(a, id) + 1) end
-    val save_defs = List.exists #2 target_saves
     val defs = Vector.tabulate(n_files, fn _ => ref ([] : (int * int) list))
     fun visit_file (fi, fs: file_state, vis) =
       Metadata.appi (fn ci =>
@@ -663,7 +669,7 @@ fun pass2_emit (indexes: file_index vector)
              Metadata.app_consumed (#cmds fs) ci (fn (ns, id) =>
                if ns = NS_TH then inc_ref fi ns id else ())
            else ();
-           if save_defs then
+           if Word8.andb(Word8Array.sub(vis, ci), 0w2) <> 0w0 then
              case Metadata.kind (#cmds fs) ci of
                CmdDef => Metadata.app_produced (#cmds fs) ci (fn (ns, id) =>
                  if ns = NS_TH then
@@ -671,8 +677,9 @@ fun pass2_emit (indexes: file_index vector)
                  else ())
              | _ => ()
            else ())) (#cmds fs)
-    val included = compute_reachable ruleset indexes read_file save_table
-      const_introducer type_introducer compute_inits target_saves visit_file
+    val included = compute_reachable ruleset indexes read_file load_sources
+      save_table const_introducer type_introducer compute_inits
+      target_saves visit_file
     val def_saves = List.concat
       (Vector.foldr (fn (r, acc) => rev (!r) :: acc) [] defs)
     val () = List.app (fn (name, _) =>
@@ -900,7 +907,7 @@ fun merge {inputs, targets, output, binary} =
     val indexes = Vector.mapi (fn (fi, input) =>
       scan_index_file descs_ref fi input save_table
         const_introducer type_introducer compute_inits loads) input_info
-    val aliases = index_aliases (!save_table) (rev (!loads))
+    val (aliases, load_sources) = index_aliases (rev (!loads))
     val () = loads := []
     fun read_file fi = pass1_read_file descs_ref fi (Vector.sub(input_info, fi))
 
@@ -908,7 +915,7 @@ fun merge {inputs, targets, output, binary} =
     val target_saves = resolve_targets targets (!save_table)
 
     (* Pass 2: re-read and emit *)
-    val () = pass2_emit indexes read_file aliases (!save_table)
+    val () = pass2_emit indexes read_file aliases load_sources (!save_table)
                (!const_introducer) (!type_introducer) (!compute_inits)
                input_info target_saves
                output the_version the_ruleset (!descs_ref)

@@ -72,4 +72,46 @@ fun preserves_alias options =
   in rejected andalso bytes conj = original andalso bytes alias = original end
 val () = merge_test "merge preserves input aliased by its output"
   (fn () => preserves_alias ["-s"] andalso preserves_alias [])
+
+(* A later SAVE must not change what an earlier LOAD imported. *)
+val (rebind,out) = output "hol4"
+val () = PFTWriter.tyop out 0 "min$bool" []
+val () = PFTWriter.var out 0 "p" 0
+val () = PFTWriter.HOL4.assume out 0 0
+val () = PFTWriter.save out "rebind$X" 0
+val () = PFTWriter.load out 1 "rebind$X"
+val () = PFTWriter.save out "rebind$X" 1
+val () = PFTWriter.save out "rebind$RESULT" 1
+val () = finish out
+val () = names := []
+val () = read_commands
+  (merged [rebind] [PFTMerge.ThyThm("rebind","RESULT",false)]) (fn _ => ())
+val () = check "merge keeps the preceding SAVE binding"
+  (List.exists (fn name => name = "rebind$RESULT") (!names))
+
+(* Independent definitions with different per-target SAVE settings. *)
+val (defs,out) = output "hol4"
+val () = PFTWriter.tyop out 0 "min$bool" []
+val () = PFTWriter.tyop out 1 "min$fun" [0,0]
+val () = PFTWriter.tyop out 2 "min$fun" [1,0]
+val () = PFTWriter.tyop out 3 "min$fun" [1,2]
+val () = PFTWriter.const out 0 "min$=" 3
+val () = PFTWriter.var out 1 "x" 0
+val () = PFTWriter.abs out 2 1 1
+val () = List.app (fn (base,th,name) =>
+  (PFTWriter.var out base name 1;
+   PFTWriter.comb out (base+1) 0 base;
+   PFTWriter.comb out (base+2) (base+1) 2;
+   PFTWriter.HOL4.assume out th (base+2);
+   PFTWriter.HOL4.def_spec_gen out (th+1) th ["defs$" ^ name]))
+  [(3,0,"a"),(6,2,"b")]
+val () = PFTWriter.save out "defs$A" 1
+val () = PFTWriter.save out "defs$B" 3
+val () = PFTWriter.closeOut out {n_ty=4,n_tm=9,n_th=4}
+val () = names := []
+val () = read_commands (merged [defs]
+  [PFTMerge.ThyThm("defs","A",true),PFTMerge.ThyThm("defs","B",false)])
+  (fn _ => ())
+val () = check "merge saves only the flagged target's definitions"
+  (length (List.filter (String.isPrefix "def:") (!names)) = 1)
 val () = List.app OS.FileSys.remove (!files)
