@@ -278,6 +278,17 @@ fun find_producer (fs: file_state) (ns, id) =
                 Int.toString id ^ " in file " ^ Int.toString (#file_idx fs))
 
 type save_entry = {file_idx: int, cmd_idx: int, th_id: int}
+type file_index = {commands: int, th_size: int}
+
+fun canonical aliases fi ns id =
+  if ns <> NS_TH then (fi, ns, id)
+  else case Redblackmap.peek(aliases, (fi, id)) of
+         SOME (sfi, sid) => (sfi, ns, sid)
+       | NONE => (fi, ns, id)
+
+fun real_command cmds ci =
+  case Metadata.kind cmds ci of CmdDel => false | CmdSave _ => false
+                             | CmdLoad _ => false | _ => true
 
 (* Both scans use the same command numbering and descriptor decoding. *)
 fun read_commands (descs_ref: (int * opcode_desc) list ref) input add
@@ -356,10 +367,20 @@ fun pass1_read_file descs_ref file_idx input =
 
 fun scan_index_file descs_ref file_idx input
                     (save_table: (string, save_entry) Redblackmap.dict ref)
-                    const_introducer type_introducer compute_inits =
+                    const_introducer type_introducer compute_inits loads =
   let
     val ci_ref = ref 0
-    fun add _ = let val ci = !ci_ref in ci_ref := ci + 1; ci end
+    val max_th = ref 0
+    fun add (meta: cmd_meta) =
+      let val ci = !ci_ref
+          val () = List.app (fn (ns, id) =>
+            if ns = NS_TH then max_th := Int.max(!max_th, id + 1)
+            else ()) (#produced meta)
+          val () = case #kind meta of
+              CmdLoad name => List.app (fn (_, id) =>
+                loads := (file_idx, ci, id, name) :: !loads) (#produced meta)
+            | _ => ()
+      in ci_ref := ci + 1; ci end
     fun save (name, th, ci) =
       save_table := Redblackmap.insert(!save_table, name,
         {file_idx=file_idx, cmd_idx=ci, th_id=th})
@@ -369,7 +390,24 @@ fun scan_index_file descs_ref file_idx input
        {save=save, new_const=introduce const_introducer,
         new_type=introduce type_introducer,
         compute_init=fn ci =>
-          compute_inits := (file_idx, ci) :: !compute_inits}
+          compute_inits := (file_idx, ci) :: !compute_inits};
+     {commands= !ci_ref, th_size=Int.min(!max_th, 1024 + 2 * !ci_ref)}
+  end
+
+(* Unreached bad LOADs remain lazy errors. Valid aliases are resolved in
+   forward command order, so their canonical sources need no file graph. *)
+fun index_aliases save_table loads =
+  let val aliases = ref (Redblackmap.mkDict pair_compare)
+  in List.app (fn (fi, ci, id, name) =>
+       case Redblackmap.peek(save_table, name) of
+         SOME {file_idx=sfi, cmd_idx=sci, th_id=sth} =>
+           if sfi < fi orelse (sfi = fi andalso sci < ci) then
+             let val (sfi, _, sid) = canonical (!aliases) sfi NS_TH sth
+             in aliases := Redblackmap.insert(!aliases, (fi, id), (sfi, sid))
+             end
+           else ()
+       | NONE => ()) loads;
+     !aliases
   end
 
 (* ========================================================================= *)
@@ -399,41 +437,39 @@ fun resolve_targets (targets: target list)
         end
   in List.concat (map resolve targets) end
 
-(* DFS backward from targets to find all reachable commands. *)
+(* Cross-file edges point backwards. Drain each file before loading the
+   preceding graph; only inclusion flags and pending roots span files. *)
 fun compute_reachable ruleset
-      n_files (ensure_file_state: int -> file_state)
+      (indexes: file_index vector) (read_file: int -> file_state)
       (save_table: (string, save_entry) Redblackmap.dict)
       (const_introducer: (string, int * int) Redblackmap.dict)
       (type_introducer: (string, int * int) Redblackmap.dict)
       (compute_inits: (int * int) list)
-      (target_saves: (string * bool) list)
+      (target_saves: (string * bool) list) visit_file
     : Word8Array.array option ref vector =
   let
+    val n_files = Vector.length indexes
     val visited = Vector.tabulate(n_files,
       fn _ => ref NONE : Word8Array.array option ref)
     fun ensure_visited fi =
       case !(Vector.sub(visited, fi)) of
         SOME a => a
-      | NONE => let val fs = ensure_file_state fi
-                    val a = Word8Array.array(Metadata.size (#cmds fs), 0w0)
+      | NONE => let val a = Word8Array.array(
+                       #commands (Vector.sub(indexes, fi)), 0w0)
                 in Vector.sub(visited, fi) := SOME a; a end
-    val worklist = ref [] : (int * int) list ref
+    val pending = Vector.tabulate(n_files, fn _ => ref ([] : int list))
 
     fun enqueue (fi, ci) =
       let val vis = ensure_visited fi
       in if Word8Array.sub(vis, ci) <> 0w0 then ()
          else (Word8Array.update(vis, ci, 0w1);
-               worklist := (fi, ci) :: !worklist)
+               Vector.sub(pending, fi) := ci :: !(Vector.sub(pending, fi)))
       end
 
     fun seed (name, _) =
       case Redblackmap.peek(save_table, name) of
         NONE => raise Fail ("PFTMerge: unknown target: " ^ name)
-      | SOME {file_idx, cmd_idx, th_id} =>
-        (enqueue (file_idx, cmd_idx);
-         enqueue (file_idx,
-                  find_producer (ensure_file_state file_idx)
-                                (NS_TH, th_id)))
+      | SOME {file_idx, cmd_idx, ...} => enqueue (file_idx, cmd_idx)
     val () = List.app seed target_saves
 
     (* These rules construct registered connectives without a CONST operand. *)
@@ -462,79 +498,82 @@ fun compute_reachable ruleset
           | "CCONTR" => ["bool$~", "bool$F"]
           | _ => []
 
-    fun process () =
-      case !worklist of
-        [] => ()
-      | (fi, ci) :: rest =>
-        let val () = worklist := rest
-            val fs = ensure_file_state fi
-            val cmds = #cmds fs
-        in
-          (* Input order determines the ambient initialization. The index is
-             newest first; full metadata remains lazy for unused init files. *)
-          (if Metadata.opcode cmds ci =
-                (if ruleset = "hol4" then 0x44 else 0x41) then
-             case List.find (fn loc => pair_compare(loc, (fi, ci)) = LESS)
-                            compute_inits of
-               SOME loc => enqueue loc
-             | NONE => raise Fail "PFTMerge: COMPUTE before COMPUTE_INIT"
-           else ());
-          (* Follow ID-level dependencies *)
-          Metadata.app_consumed cmds ci (fn (ns, id) =>
-            enqueue (fi, find_producer fs (ns, id)));
-          (* Follow cross-file LOAD dependencies *)
-          (case Metadata.kind cmds ci of
-             CmdLoad name =>
-               (case Redblackmap.peek(save_table, name) of
-                  NONE => raise Fail ("PFTMerge: unknown LOAD: " ^ name)
-                | SOME {file_idx=sfi, cmd_idx=sci, th_id=sth} =>
-                  let val sfs = ensure_file_state sfi
-                      val () = if sfi < fi orelse
-                                  (sfi = fi andalso sci < ci) then ()
-                               else raise Fail
-                                 ("PFTMerge: LOAD before SAVE: " ^ name ^
-                                  "; inputs must be in dependency order")
-                  in enqueue (sfi, sci);
-                     enqueue (sfi, find_producer sfs (NS_TH, sth))
-                  end)
-           | _ => ());
-          List.app (fn name =>
-            case Redblackmap.peek(const_introducer, name) of
-              NONE => () (* Supplied by the replay environment. *)
-            | SOME (ifi, ici) =>
-                if ifi < fi orelse (ifi = fi andalso ici < ci) then
-                  enqueue (ifi, ici)
-                else raise Fail
-                  ("PFTMerge: implicit constant used before introduction: " ^
-                   name)) (implicit_consts (Metadata.opcode cmds ci));
-          (* Follow name-level dependencies: CONST/TYOP → introducer *)
-          (case Metadata.ref_name cmds ci of
-             SOME name =>
-               let val table = if Metadata.opcode cmds ci = 0x04
-                               then const_introducer
-                               else type_introducer
-               in case Redblackmap.peek(table, name) of
-                    SOME (ifi, ici) =>
-                      if ifi < fi orelse (ifi = fi andalso ici <= ci) then
+    fun process_file fi =
+      let val fs = read_file fi
+          val cmds = #cmds fs
+          val worklist = Vector.sub(pending, fi)
+          fun process () =
+            case !worklist of
+              [] => ()
+            | ci :: rest =>
+              let val () = worklist := rest
+              in
+                (* The newest earlier initialization supplies the ambient state. *)
+                (if Metadata.opcode cmds ci =
+                      (if ruleset = "hol4" then 0x44 else 0x41) then
+                   case List.find (fn loc => pair_compare(loc, (fi, ci)) = LESS)
+                                  compute_inits of
+                     SOME loc => enqueue loc
+                   | NONE => raise Fail "PFTMerge: COMPUTE before COMPUTE_INIT"
+                 else ());
+                (* Follow ID-level dependencies *)
+                Metadata.app_consumed cmds ci (fn (ns, id) =>
+                  enqueue (fi, find_producer fs (ns, id)));
+                (* Follow cross-file LOAD dependencies *)
+                (case Metadata.kind cmds ci of
+                   CmdLoad name =>
+                     (case Redblackmap.peek(save_table, name) of
+                        NONE => raise Fail ("PFTMerge: unknown LOAD: " ^ name)
+                      | SOME {file_idx=sfi, cmd_idx=sci, ...} =>
+                        let val () = if sfi < fi orelse
+                                        (sfi = fi andalso sci < ci) then ()
+                                     else raise Fail
+                                       ("PFTMerge: LOAD before SAVE: " ^ name ^
+                                        "; inputs must be in dependency order")
+                        in enqueue (sfi, sci) end)
+                 | _ => ());
+                List.app (fn name =>
+                  case Redblackmap.peek(const_introducer, name) of
+                    NONE => () (* Supplied by the replay environment. *)
+                  | SOME (ifi, ici) =>
+                      if ifi < fi orelse (ifi = fi andalso ici < ci) then
                         enqueue (ifi, ici)
                       else raise Fail
-                        ("PFTMerge: name used before introduction: " ^ name ^
-                         "; inputs must be in dependency order")
-                  | NONE => () (* primitive — no introducer *)
-               end
-           | NONE => ());
-          process ()
-        end
-    val () = process ()
-
+                        ("PFTMerge: implicit constant used before " ^
+                         "introduction: " ^ name)) (implicit_consts (Metadata.opcode cmds ci));
+                (* Follow name-level dependencies: CONST/TYOP → introducer *)
+                (case Metadata.ref_name cmds ci of
+                   SOME name =>
+                     let val table = if Metadata.opcode cmds ci = 0x04
+                                     then const_introducer
+                                     else type_introducer
+                     in case Redblackmap.peek(table, name) of
+                          SOME (ifi, ici) =>
+                            if ifi < fi orelse (ifi = fi andalso ici <= ci) then
+                              enqueue (ifi, ici)
+                            else raise Fail
+                              ("PFTMerge: name used before introduction: " ^
+                               name ^ "; inputs must be in dependency order")
+                        | NONE => () (* primitive — no introducer *)
+                     end
+                 | NONE => ());
+                process ()
+              end
+          val () = process ()
+      in visit_file (fi, fs, ensure_visited fi) end
+    fun files fi = if fi < 0 then () else
+      (if null (!(Vector.sub(pending, fi))) then () else process_file fi;
+       files (fi - 1))
+    val () = files (n_files - 1)
   in visited end
 
 (* ========================================================================= *)
 (* Pass 2: Re-read and emit with renumbered IDs                              *)
 (* ========================================================================= *)
 
-fun pass2_emit (file_states: file_state option ref vector)
-               (ensure_file_state: int -> file_state)
+fun pass2_emit (indexes: file_index vector)
+               (read_file: int -> file_state)
+               (aliases: (int * int, int * int) Redblackmap.dict)
                (save_table: (string, save_entry) Redblackmap.dict)
                (const_introducer: (string, int * int) Redblackmap.dict)
                (type_introducer: (string, int * int) Redblackmap.dict)
@@ -545,18 +584,10 @@ fun pass2_emit (file_states: file_state option ref vector)
                (version: string) (ruleset: string)
                (descs: (int * opcode_desc) list) =
   let
-    val n_files = Vector.length file_states
-    val included = compute_reachable ruleset n_files ensure_file_state save_table
-                     const_introducer type_introducer compute_inits target_saves
-    val () = Vector.app (fn fs_ref => case !fs_ref of
-      NONE => () | SOME fs => Producers.discard (#producers fs)) file_states
-    fun app_included f =
-      Vector.appi (fn (fi, fs_ref) =>
-        case (!(Vector.sub(included, fi)), !fs_ref) of
-          (SOME vis, SOME fs) => f (fi, fs, vis)
-        | _ => ()) file_states
-    fun loaded_file fi =
-      case !(Vector.sub(file_states, fi)) of
+    val n_files = Vector.length indexes
+    val current_state = ref NONE : file_state option ref
+    fun loaded_file () =
+      case !current_state of
         SOME fs => fs
       | NONE => raise Fail "PFTMerge: pass2 on unloaded file"
 
@@ -564,52 +595,32 @@ fun pass2_emit (file_states: file_state option ref vector)
     val allocators = Vector.tabulate(NUM_NS, fn _ => IdAlloc.new ())
     fun alloc_id ns = IdAlloc.alloc (Vector.sub(allocators, ns))
 
-    (* Renaming tables: per-file, per-namespace, old_id -> new_id *)
-    val rename_tables =
-      Vector.tabulate(n_files, fn fi =>
-        case !(Vector.sub(file_states, fi)) of
-          NONE => Vector.tabulate(NUM_NS,
-                    fn _ => ref (IdTable.new 0 ~1))
-        | SOME fs =>
-        let val maxes = Array.array(NUM_NS, 0)
-            val () = Metadata.appi (fn ci =>
-              Metadata.app_produced (#cmds fs) ci (fn (ns, id) =>
-                if id >= Array.sub(maxes, ns)
-                then Array.update(maxes, ns, id + 1) else ())) (#cmds fs)
-        in Vector.tabulate(NUM_NS, fn ns =>
-             ref (IdTable.new
-               (Int.min(Array.sub(maxes, ns),
-                        1024 + 2 * Metadata.size (#cmds fs))) ~1))
-        end)
-
+    (* Only theorem identities cross files. Count their uses during
+       reachability; local tables exist only for the current emission file. *)
+    val th_renames = Vector.tabulate(n_files,
+      fn _ => ref NONE : IdTable.t option ref)
+    val th_counts = Vector.tabulate(n_files,
+      fn _ => ref NONE : IdTable.t option ref)
+    fun theorem_table tables default fi =
+      case !(Vector.sub(tables, fi)) of
+        SOME a => a
+      | NONE => let val a = IdTable.new (#th_size (Vector.sub(indexes, fi)))
+                                       default
+                in Vector.sub(tables, fi) := SOME a; a end
+    val local_renames = Vector.tabulate(NS_TH, fn _ => ref (IdTable.new 0 ~1))
+    val local_counts = Vector.tabulate(NS_TH, fn _ => ref (IdTable.new 0 0))
+    fun rename_array fi ns =
+      if ns = NS_TH then theorem_table th_renames ~1 fi
+      else !(Vector.sub(local_renames, ns))
+    fun count_array fi ns =
+      if ns = NS_TH then theorem_table th_counts 0 fi
+      else !(Vector.sub(local_counts, ns))
     fun lookup_save name =
       case Redblackmap.peek(save_table, name) of
         SOME e => e
       | NONE => raise Fail ("PFTMerge: unknown SAVE: " ^ name)
+    val canonical = canonical aliases
 
-    (* LOADs own no slot. Store their canonical source before metadata is
-       released, so later uses never reload an already emitted file. *)
-    val aliases = ref (Redblackmap.mkDict pair_compare)
-    fun canonical fi ns id =
-      if ns <> NS_TH then (fi, ns, id)
-      else case Redblackmap.peek(!aliases, (fi, id)) of
-             SOME (sfi, sid) => (sfi, ns, sid)
-           | NONE => (fi, ns, id)
-    val () = app_included (fn (fi, fs, vis) =>
-      Metadata.appi (fn ci =>
-        if Word8Array.sub(vis, ci) = 0w0 then ()
-        else case Metadata.kind (#cmds fs) ci of
-          CmdLoad name =>
-            let val {file_idx, th_id, ...} = lookup_save name
-                val (sfi, _, sid) = canonical file_idx NS_TH th_id
-            in Metadata.app_produced (#cmds fs) ci (fn (_, id) =>
-                 aliases := Redblackmap.insert(!aliases, (fi, id),
-                                               (sfi, sid)))
-            end
-        | _ => ()) (#cmds fs))
-
-    fun rename_array fi ns =
-      !(Vector.sub(Vector.sub(rename_tables, fi), ns))
     fun set_rename fi ns old_id new_id =
       IdTable.update(rename_array fi ns, old_id, new_id)
     fun get_rename fi ns old_id =
@@ -621,7 +632,7 @@ fun pass2_emit (file_states: file_state option ref vector)
       end
 
     fun allocate fi ci =
-      let val cmds = #cmds (loaded_file fi)
+      let val cmds = #cmds (loaded_file ())
           val n = Metadata.prod_count cmds ci
           val same_ns = ref true
           val ns = if n = 0 then NS_TY else Metadata.first_prod_ns cmds ci
@@ -639,35 +650,31 @@ fun pass2_emit (file_states: file_state option ref vector)
       end
 
     (* Counts belong to old identities, including uses through LOAD aliases. *)
-    val refcounts = Vector.map (Vector.map
-      (fn a => ref (IdTable.new (IdTable.size (!a)) 0))) rename_tables
-    fun count_array fi ns = !(Vector.sub(Vector.sub(refcounts, fi), ns))
     fun inc_ref fi ns id =
       let val (fi, ns, id) = canonical fi ns id
           val a = count_array fi ns
       in IdTable.update(a, id, IdTable.sub(a, id) + 1) end
-    fun real_command cmds ci =
-      case Metadata.kind cmds ci of CmdDel => false | CmdSave _ => false
-                                 | CmdLoad _ => false | _ => true
-    val () = app_included (fn (fi, fs, vis) =>
+    val save_defs = List.exists #2 target_saves
+    val defs = Vector.tabulate(n_files, fn _ => ref ([] : (int * int) list))
+    fun visit_file (fi, fs: file_state, vis) =
       Metadata.appi (fn ci =>
-        if Word8Array.sub(vis, ci) <> 0w0 andalso real_command (#cmds fs) ci then
-          Metadata.app_consumed (#cmds fs) ci (fn (ns, id) => inc_ref fi ns id)
-        else ()) (#cmds fs))
-
-    val def_saves =
-      if not (List.exists #2 target_saves) then []
-      else let val acc = ref [] : (int * int) list ref
-      in app_included (fn (fi, fs, vis) =>
-           Metadata.appi (fn ci =>
-             if Word8Array.sub(vis, ci) <> 0w0 then
-               case Metadata.kind (#cmds fs) ci of
-                 CmdDef => Metadata.app_produced (#cmds fs) ci (fn (ns, id) =>
-                   if ns = NS_TH then acc := (fi, id) :: !acc else ())
-               | _ => ()
-             else ()) (#cmds fs));
-         List.rev (!acc)
-      end
+        if Word8Array.sub(vis, ci) = 0w0 then () else
+          (if real_command (#cmds fs) ci then
+             Metadata.app_consumed (#cmds fs) ci (fn (ns, id) =>
+               if ns = NS_TH then inc_ref fi ns id else ())
+           else ();
+           if save_defs then
+             case Metadata.kind (#cmds fs) ci of
+               CmdDef => Metadata.app_produced (#cmds fs) ci (fn (ns, id) =>
+                 if ns = NS_TH then
+                   Vector.sub(defs, fi) := (fi, id) :: !(Vector.sub(defs, fi))
+                 else ())
+             | _ => ()
+           else ())) (#cmds fs)
+    val included = compute_reachable ruleset indexes read_file save_table
+      const_introducer type_introducer compute_inits target_saves visit_file
+    val def_saves = List.concat
+      (Vector.foldr (fn (r, acc) => rev (!r) :: acc) [] defs)
     val () = List.app (fn (name, _) =>
       let val {file_idx, th_id, ...} = lookup_save name
       in inc_ref file_idx NS_TH th_id end) target_saves
@@ -699,7 +706,7 @@ fun pass2_emit (file_states: file_state option ref vector)
     fun ren ns id = get_rename (!current_fi) ns id
     fun finish_command ci =
       let val fi = !current_fi
-          val cmds = #cmds (loaded_file fi)
+          val cmds = #cmds (loaded_file ())
       in Metadata.app_consumed cmds ci (fn (ns, id) => dec_ref fi ns id);
          Metadata.app_produced cmds ci (fn (ns, id) =>
            if IdTable.sub(count_array fi ns, id) = 0 then release fi ns id
@@ -790,24 +797,42 @@ fun pass2_emit (file_states: file_state option ref vector)
 
     val (fh, rh, reset_ci) = make_handlers ()
 
-    (* Process each input file *)
+    (* Rebuild one graph and its local tables, then release them at EOF. *)
+    fun emit_file fi input vis =
+      let val fs = read_file fi
+          val cmds = #cmds fs
+          val () = Producers.discard (#producers fs)
+          val maxes = Array.array(NS_TH, 0)
+          val () = Metadata.appi (fn ci =>
+            Metadata.app_produced cmds ci (fn (ns, id) =>
+              if ns < NS_TH then
+                Array.update(maxes, ns, Int.max(Array.sub(maxes, ns), id + 1))
+              else ())) cmds
+          val () = Vector.appi (fn (ns, r) =>
+            let val n = Int.min(Array.sub(maxes, ns),
+                                1024 + 2 * Metadata.size cmds)
+            in r := IdTable.new n ~1;
+               Vector.sub(local_counts, ns) := IdTable.new n 0 end)
+            local_renames
+          val () = Metadata.appi (fn ci =>
+            if Word8Array.sub(vis, ci) <> 0w0 andalso real_command cmds ci then
+              Metadata.app_consumed cmds ci (fn (ns, id) =>
+                if ns < NS_TH then inc_ref fi ns id else ())
+            else ()) cmds
+          val () = current_state := SOME fs
+          val () = current_fi := fi
+          val () = reset_ci ()
+          val () = ignore (PFTReader.read_input {input=input,
+                             format_handler=fh, ruleset_handler=rh})
+      in current_state := NONE;
+         Vector.app (fn r => r := IdTable.new 0 ~1) local_renames;
+         Vector.app (fn r => r := IdTable.new 0 0) local_counts;
+         Vector.sub(included, fi) := NONE
+      end
     val () = Vector.appi (fn (fi, input) =>
-      ((case !(Vector.sub(file_states, fi)) of
-          NONE => ()
-        | SOME _ =>
-            (current_fi := fi; reset_ci ();
-             ignore (PFTReader.read_input {input=input,
-                                    format_handler=fh, ruleset_handler=rh});
-             (* Only theorem identities can be referenced by later files or
-                the final target/definition SAVEs. *)
-             List.app (fn ns =>
-               (Vector.sub(Vector.sub(rename_tables, fi), ns) :=
-                  IdTable.new 0 ~1;
-                Vector.sub(Vector.sub(refcounts, fi), ns) :=
-                  IdTable.new 0 0)) [NS_TY, NS_TM];
-             Vector.sub(file_states, fi) := NONE;
-             Vector.sub(included, fi) := NONE));
-       ())) inputs
+      case !(Vector.sub(included, fi)) of
+        NONE => ()
+      | SOME vis => emit_file fi input vis) inputs
 
     (* Emit target SAVEs *)
     val () = List.app (fn (name, _) =>
@@ -869,24 +894,21 @@ fun merge {inputs, targets, output, binary} =
     val const_introducer = ref (Redblackmap.mkDict String.compare)
     val type_introducer = ref (Redblackmap.mkDict String.compare)
     val compute_inits = ref []
+    val loads = ref []
 
-    (* Index global names, retaining full metadata only for reached files. *)
-    val () = Vector.appi (fn (fi, input) =>
+    (* Index global names and theorem aliases without retaining file graphs. *)
+    val indexes = Vector.mapi (fn (fi, input) =>
       scan_index_file descs_ref fi input save_table
-        const_introducer type_introducer compute_inits) input_info
-    val file_states : file_state option ref vector =
-      Vector.tabulate(length inputs, fn _ => ref NONE)
-    fun ensure_file_state fi =
-      case !(Vector.sub(file_states, fi)) of
-        SOME fs => fs
-      | NONE => let val fs = pass1_read_file descs_ref fi (Vector.sub(input_info, fi))
-                in Vector.sub(file_states, fi) := SOME fs; fs end
+        const_introducer type_introducer compute_inits loads) input_info
+    val aliases = index_aliases (!save_table) (rev (!loads))
+    val () = loads := []
+    fun read_file fi = pass1_read_file descs_ref fi (Vector.sub(input_info, fi))
 
     (* Pass 1.5: resolve targets *)
     val target_saves = resolve_targets targets (!save_table)
 
     (* Pass 2: re-read and emit *)
-    val () = pass2_emit file_states ensure_file_state (!save_table)
+    val () = pass2_emit indexes read_file aliases (!save_table)
                (!const_introducer) (!type_introducer) (!compute_inits)
                input_info target_saves
                output the_version the_ruleset (!descs_ref)
