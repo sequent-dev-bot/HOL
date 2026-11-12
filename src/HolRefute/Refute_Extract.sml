@@ -4023,9 +4023,8 @@ structure Refute_Extract :> Refute_Extract = struct
 
       (* The shape says whether an id denotes the same value at every
          depth; only a shape that disclaims it needs the depth in the
-         key.  Keying the rest on the id alone is what keeps a [char]
-         window of eleven depths at 256 reconstruction arms rather than
-         2816.  A type with no exact entries at all keys on the id. *)
+         key.  The other exact carriers share one arm per id across
+         every depth.  A type with no exact entries keys on the id. *)
       fun exact_key_has_depth ty =
         List.exists (fn (_, stable, _) => not stable) (exact_entries_of ty)
       fun conv_name ty = "narrow_conv_" ^ integer (type_index ty)
@@ -4126,6 +4125,8 @@ structure Refute_Extract :> Refute_Extract = struct
         in
           case spec_of ty of
             Refute_Gen.GenEnum _ => exact ()
+          | Refute_Gen.GenNum Refute_Gen.Char =>
+              "Refute_EvalSML.char_term (Char.chr constructor)"
           | Refute_Gen.GenNum _ => exact ()
           | Refute_Gen.GenDatatype {constrs, ...} =>
               let

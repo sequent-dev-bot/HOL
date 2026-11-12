@@ -1673,11 +1673,9 @@ val _ = test "finite_functions false refuses function domains" (fn () =>
 val _ = test "narrowing reaches MEM" (fn () =>
   genuine (refute narrowing ``!l : num list. MEM 0 l``))
 
-(* An alternative id denotes the same character at every depth, so the
-   generated program needs one reconstruction arm per character, not one
-   per (depth, character).  Emitting the depth-indexed form instead makes
-   a [char] carrier cost 256 arms and 256 shape entries at every depth of
-   the window, and compiling that program alone outruns the budget. *)
+(* An alternative id denotes the same character at every depth.  Primitive
+   reconstruction and compact shapes keep char/string programs from
+   emitting 256 case arms and shape entries at every depth. *)
 val _ = test "narrowing refutes char and string goals" (fn () =>
   refute narrowing ``!c : char. c <> #"z"``
     |> single_cex_where (fn c => binding_is c ``c : char`` ``#"z"``)
