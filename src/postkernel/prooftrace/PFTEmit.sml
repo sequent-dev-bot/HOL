@@ -312,18 +312,15 @@ in let
 
   (* --- Pointer memos ----------------------------------------------------- *)
 
-  val tm_memo = Array.array(heapSize heap, ~1)
-                (* heap ptr -> PFT term ID; hot path, flat array *)
-  val ty_memo : int PIntMap.t ref = ref PIntMap.empty
-  val th_memo : int PIntMap.t ref = ref PIntMap.empty
+  (* Types, terms and theorems occupy disjoint heap objects, so their
+     pointer memos can share one array even after heap data sharing. *)
+  val ptr_memo = Array.array(heapSize heap, ~1)
   val hol4_compute_init_key = ref ~1
 
-  fun ty_memo_get k = PIntMap.find k (!ty_memo)
-                      handle PIntMap.NotFound => ~1
-  fun ty_memo_set k v = ty_memo := PIntMap.add k v (!ty_memo)
-  fun th_memo_get k = PIntMap.find k (!th_memo)
-                      handle PIntMap.NotFound => ~1
-  fun th_memo_set k v = th_memo := PIntMap.add k v (!th_memo)
+  fun ty_memo_get k = Array.sub(ptr_memo, k)
+  fun ty_memo_set k v = Array.update(ptr_memo, k, v)
+  fun th_memo_get k = Array.sub(ptr_memo, k)
+  fun th_memo_set k v = Array.update(ptr_memo, k, v)
 
   (* --- Structural hash-cons tables -------------------------------------- *)
 
@@ -630,7 +627,7 @@ in let
   and emit_term (tm_ptr : Term.term ptr) : int =
     if not (isPtr tm_ptr) then raise Fail "emit_term: not a ptr"
     else let val k = ptr tm_ptr
-             val cached = Array.sub(tm_memo, k)
+             val cached = Array.sub(ptr_memo, k)
     in if cached >= 0 then cached
        else emit_term_sub Subst.id tm_ptr
     end
@@ -641,12 +638,12 @@ in let
 
   and emit_term_closed (tm_ptr : Term.term ptr) : int = let
     val k = ptr tm_ptr
-    val cached = Array.sub(tm_memo, k)
+    val cached = Array.sub(ptr_memo, k)
   in if cached >= 0 then cached
      else let
        val id = emit_term_core Subst.id tm_ptr
      in
-       Array.update(tm_memo, k, id);
+       Array.update(ptr_memo, k, id);
        id
      end
   end
