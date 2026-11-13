@@ -39,6 +39,13 @@ type ancestor_memo = string HOLset.set Symtab.table
 val memo_sets = ref 0
 val memo_elems = ref 0
 fun memo_stats () = {sets = !memo_sets, elems = !memo_elems}
+val memo_getters : (string * (unit -> string HOLset.set Symtab.table)) list ref = ref []
+fun memo_sizes () =
+    let
+      val each = map (fn (tag, g) => let val m = g () in
+                        (tag, Symtab.size m, PolyML.objSize m) end) (!memo_getters)
+      val all = PolyML.objSize (map (fn (_, g) => g ()) (!memo_getters))
+    in (each, all) end
 
 fun proper_parents parents thy =
     List.filter (fn p => p <> thy) (parents {thyname = thy})
@@ -347,6 +354,7 @@ fun make {info : ('delta,'value)adata_info, get_deltas, delta_side_effects} =
                   apply_delta = apply_delta,
                   parents = parents, ancestors = ancestors, fixed = fixed}
       val _ = info_ref := SOME info
+      val _ = memo_getters := (tag, fn () => Context.Data.get ancestors (Context.snapshot ())) :: !memo_getters
       fun set_ancestry sl =
           let
             val _ = parent_export (List $ map String sl)
@@ -502,6 +510,7 @@ fun fullmake {adinfo:('delta,'value)adata_info, sexps, globinfo,
            apply_delta = apply_delta, tag = tag, parents = get_parents,
            ancestors = ancestors, fixed = fixed}
       val _ = info_ref := SOME info
+      val _ = memo_getters := (tag, fn () => Context.Data.get ancestors (Context.snapshot ())) :: !memo_getters
       fun set_ancestry sl =
           let
             val _ = set_raw_deltas (List [])
