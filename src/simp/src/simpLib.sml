@@ -653,9 +653,11 @@ fun getlimit (SS ss) = #limit ss
                   | _ => mk_rewrs'
    val crewrs = map (fn (nmopt,th) => (nmopt, dest_tagged_rewrite th)) rewrs
    val rewrs' : (thname option * controlled_thm) list =
-       flatten (map (mk_named_rewrs mk_rewrs') (ac_rewrites ac @ crewrs))
-   val newconvdata = convs @ List.mapPartial mk_rewr_convdata rewrs'
-   val net = net_add_convs initial_net newconvdata
+       Theory.load_phase "simp:mk_rewrs"
+         (fn () => flatten (map (mk_named_rewrs mk_rewrs') (ac_rewrites ac @ crewrs))) ()
+   val newconvdata = Theory.load_phase "simp:convdata"
+         (fn () => convs @ List.mapPartial mk_rewr_convdata rewrs') ()
+   val net = Theory.load_phase "simp:net" (net_add_convs initial_net) newconvdata
    fun travrel (TRAVRULES{relations,...}) = relations
    val sset_rels = travrel travrules
    (* give the existing dprocs the rewrs as additional context -

@@ -1,6 +1,7 @@
 signature AncestryData =
 sig
   val memo_stats : unit -> {sets : int, elems : int}
+  val memo_sizes : unit -> (string * int * int) list * int
   type ('delta,'value) adata_info = {
     tag : string, initial_values : (string * 'value) list,
     apply_delta : 'delta -> 'value -> 'value

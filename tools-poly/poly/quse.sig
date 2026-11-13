@@ -18,4 +18,9 @@ val hadError : unit -> bool
    abort the whole session. *)
 val failOnError : bool ref
 
+(* bench-only *)
+val split_timing : bool ref
+val compile_time : Time.time ref
+val run_time : Time.time ref
+
 end
