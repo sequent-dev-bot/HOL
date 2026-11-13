@@ -295,6 +295,7 @@ signature Parse = sig
   val merge_grammars : string list ->
                        type_grammar.grammar * term_grammar.grammar
   val current_grammars : unit -> type_grammar.grammar * term_grammar.grammar
+  val lazy_grammar_stats : unit -> {queued : int, applied : int}
 
   structure Unicode : sig
     val unicode_version : {u:string,tmnm:string} -> unit

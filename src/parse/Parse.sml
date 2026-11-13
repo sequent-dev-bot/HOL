@@ -66,15 +66,28 @@ val Infixr       = fn i => Infix(RIGHT, i)
    type parse after any term-grammar change --- an overload_on, say --- pay
    for a term parser it may never use.  So a term-grammar adjustment
    refreshes only the term-derived slot. *)
+(* The grammar slots hold suspensions, so that a theory load can queue its
+   grammar deltas on the global grammars (the lazy_upd functions), to be applied when a
+   grammar is first read; set_grammar_ancestry replaces the global grammars,
+   dropping deltas nobody read. *)
+val lazy_queued = ref 0
+val lazy_applied = ref 0
+fun lazy_grammar_stats () = {queued = !lazy_queued, applied = !lazy_applied}
 local
-  val type_grammar_slot : type_grammar.grammar Context.Data.slot =
+  fun now v = Susp.delay (fn () => v)
+  val type_grammar_slot : type_grammar.grammar Susp.susp Context.Data.slot =
       Context.Data.new {name = "parse.type_grammar",
-                        empty = type_grammar.min_grammar,
+                        empty = now type_grammar.min_grammar,
                         pp = fn _ => "<type_grammar>"}
-  val term_grammar_slot : term_grammar.grammar Context.Data.slot =
+  val term_grammar_slot : term_grammar.grammar Susp.susp Context.Data.slot =
       Context.Data.new {name = "parse.term_grammar",
-                        empty = term_grammar.min_grammar,
+                        empty = now term_grammar.min_grammar,
                         pp = fn _ => "<term_grammar>"}
+  fun get slot c = Susp.force (Context.Data.get slot c)
+  fun queued f s =
+      (lazy_queued := !lazy_queued + 1;
+       Susp.delay (fn () => (lazy_applied := !lazy_applied + 1;
+                             f (Susp.force s))))
   fun derive_ty tyG =
       let open parse_type Pretype
       in
@@ -84,16 +97,17 @@ local
   fun derive_tm (tyG, tmG) =
       {term_printer = term_pp.pp_term tmG tyG,
        absyn_parser = TermParse.absyn tmG tyG}
-  fun suspend_ty tyG = Susp.delay (fn () => derive_ty tyG)
-  fun suspend_tm gs = Susp.delay (fn () => derive_tm gs)
+  fun suspend_ty tyS = Susp.delay (fn () => derive_ty (Susp.force tyS))
+  fun suspend_tm (tyS, tmS) =
+      Susp.delay (fn () => derive_tm (Susp.force tyS, Susp.force tmS))
   val ty_derived_slot =
       Context.Data.new {name = "parse.derived.type",
-                        empty = suspend_ty type_grammar.min_grammar,
+                        empty = suspend_ty (now type_grammar.min_grammar),
                         pp = fn _ => "<parse.derived.type>"}
   val tm_derived_slot =
       Context.Data.new {name = "parse.derived.term",
-                        empty = suspend_tm (type_grammar.min_grammar,
-                                            term_grammar.min_grammar),
+                        empty = suspend_tm (now type_grammar.min_grammar,
+                                            now term_grammar.min_grammar),
                         pp = fn _ => "<parse.derived.term>"}
   fun rederive_tm c =
       Context.Data.put tm_derived_slot
@@ -107,17 +121,25 @@ local
   fun adjusting_ty f = Context.update (fn c => rederive_ty (f c))
   fun adjusting_tm f = Context.update (fn c => rederive_tm (f c))
 in
-  fun get_type_grammar ctxt = Context.Data.get type_grammar_slot ctxt
+  fun get_type_grammar ctxt = get type_grammar_slot ctxt
   fun type_grammar () = get_type_grammar (Context.snapshot())
-  fun put_type_grammar g = adjusting_ty (Context.Data.put type_grammar_slot g)
+  fun put_type_grammar g =
+      adjusting_ty (Context.Data.put type_grammar_slot (now g))
   fun upd_type_grammar f =
-      adjusting_ty (Context.Data.update type_grammar_slot f)
+      adjusting_ty (Context.Data.update type_grammar_slot
+                                        (fn s => now (f (Susp.force s))))
+  fun lazy_upd_type_grammar f =
+      adjusting_ty (Context.Data.update type_grammar_slot (queued f))
 
-  fun get_term_grammar ctxt = Context.Data.get term_grammar_slot ctxt
+  fun get_term_grammar ctxt = get term_grammar_slot ctxt
   fun term_grammar () = get_term_grammar (Context.snapshot())
-  fun put_term_grammar g = adjusting_tm (Context.Data.put term_grammar_slot g)
+  fun put_term_grammar g =
+      adjusting_tm (Context.Data.put term_grammar_slot (now g))
   fun upd_term_grammar f =
-      adjusting_tm (Context.Data.update term_grammar_slot f)
+      adjusting_tm (Context.Data.update term_grammar_slot
+                                        (fn s => now (f (Susp.force s))))
+  fun lazy_upd_term_grammar f =
+      adjusting_tm (Context.Data.update term_grammar_slot (queued f))
 
   fun get_ty_fns ctxt = Susp.force (Context.Data.get ty_derived_slot ctxt)
   fun get_tm_fns ctxt = Susp.force (Context.Data.get tm_derived_slot ctxt)
@@ -1069,13 +1091,10 @@ val {merge = merge_grammars0, set_parents = set_grammar_ancestry0,
       open GrammarDeltas
       fun apply (TYD tyd) (tyG, tmG) = (type_grammar.apply_delta tyd tyG, tmG)
         | apply (TMD tmd) (tyG, tmG) = (tyG, term_grammar.add_delta tmd tmG)
-      fun side_effect delta =
-          let
-            val (tyG, tmG) = apply delta (type_grammar(), term_grammar())
-          in
-            put_type_grammar tyG;
-            put_term_grammar tmG
-          end
+      fun side_effect (TYD tyd) =
+            lazy_upd_type_grammar (type_grammar.apply_delta tyd)
+        | side_effect (TMD tmd) =
+            lazy_upd_term_grammar (term_grammar.add_delta tmd)
     in
       AncestryData.make {
         info = {tag = "grammar",
