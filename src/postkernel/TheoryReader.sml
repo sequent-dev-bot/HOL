@@ -88,7 +88,11 @@ fun bind_data ({thyname,strings,terms,theorems,thydata,...} : decoded) =
      else Theory.load_phase "D" (DB.bindl thyname) theorems;
      if Theory.load_skipped "E" then ()
      else Theory.load_phase "E"
-            (app (temp_encoded_update (strings, terms) thyname)) thydata;
+            (app (fn d as {ty, ...} =>
+                     if Theory.load_skipped ("E:" ^ ty) then ()
+                     else Theory.load_phase ("E:" ^ ty)
+                            (temp_encoded_update (strings, terms) thyname) d))
+            thydata;
      theorems)
 
 val capture = ref false
