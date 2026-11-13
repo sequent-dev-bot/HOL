@@ -38,9 +38,11 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
     WordShl | WordShr | WordAsr |
     (* Negation and complement of a word, which
        an exact carrier reads as [0w - x] and [~1w - x]; and the table of a
-       registry row at a fragment word carrier: the row's name, the word
-       width and the values the atoms stand for. *)
-    WordNeg | WordNot | WordTable of string * int * IntInf.int list |
+       registry row: the operation of a row with no encoding of its own
+       ([WordRow], by name), and its table, the row's name and the values
+       each position's atoms stand for. *)
+    WordNeg | WordNot | WordRow of string |
+    WordTable of string * Refute_ModelFinder_Words.column list |
     (* The two morphisms of the [:char] carrier: the numbering that makes
        atom [j] denote [CHR j], and its inverse. *)
     NatToChar | CharToNat
@@ -100,9 +102,14 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
     | string_for_cst WordAsr = "WordAsr"
     | string_for_cst WordNeg = "WordNeg"
     | string_for_cst WordNot = "WordNot"
-    | string_for_cst (WordTable (name, width, values)) =
-        "WordTable " ^ name ^ " " ^ Int.toString width ^ " [" ^
-        String.concatWith "," (map IntInf.toString values) ^ "]"
+    | string_for_cst (WordRow name) = "WordRow " ^ name
+    | string_for_cst (WordTable (name, columns)) =
+        "WordTable " ^ name ^ " " ^
+        String.concatWith " "
+          (map (fn ({width, values} : Refute_ModelFinder_Words.column) =>
+                  Int.toString width ^ "[" ^
+                  String.concatWith "," (map IntInf.toString values) ^ "]")
+             columns)
     | string_for_cst NatToChar = "NatToChar"
     | string_for_cst CharToNat = "CharToNat"
 
@@ -512,6 +519,21 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
       fn width => Util.reasonable_power 2 width - 1)]
   val word_subtract_base_of = word_key_lookup word_subtract_bases
 
+  (* The registry's other rows reach the encoder
+     as [WordRow] constants, to be read from their tables once the carriers
+     are known. *)
+  val word_row_csts =
+    List.mapPartial (fn (row : Refute_ModelFinder_Words.row) =>
+      let val key = {Thy = #Thy row, Name = #Name row}
+      in
+        if List.exists (fn (other, _) => other = key)
+             (map (fn (key, _) => (key, ())) word_csts @
+              map (fn (key, _) => (key, ())) word_subtract_bases @
+              map (fn (key, _) => (key, ())) word_orders)
+        then NONE else SOME (key, #Name row)
+      end) Refute_ModelFinder_Words.rows
+  val word_row_of = word_key_lookup word_row_csts
+
   (* [value - x] at a word type: complementation is [~1w - x] and
      negation is [0w - x], neither needing a primitive of its own. *)
   fun word_subtract_from word_ty value =
@@ -573,9 +595,10 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
         length expected = length actual andalso
         List.all (fn row => Lib.mem row actual) expected
     in
+      (* the registry's rows are built in too *)
       if same_rows MFH.word_built_in_consts
            (rows 0 word_csts @ rows 0 word_subtract_bases @
-            rows 2 word_orders) andalso
+            rows 0 word_row_csts @ rows 2 word_orders) andalso
          same_rows MFH.char_built_in_consts
            (rows 0 char_csts @ rows 2 char_orders)
       then ()
@@ -893,6 +916,10 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                 Cst (if is_named {Thy = "words", Name = "word_2comp"} head
                      then WordNeg else WordNot,
                      Term.type_of head, MFR.Any)
+              else if null arguments andalso Option.isSome (word_row_of head)
+              then
+                (* a registry row's operation *)
+                cst (WordRow (valOf (word_row_of head))) head
               else if null arguments andalso Option.isSome (cst_of head) then
                 cst (valOf (cst_of head)) head
               else if Term.is_const head andalso
@@ -1274,26 +1301,58 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
      its atoms stand for a list of values, and an operation is read from
      its registry row's table over that list.  A row's operation arrives as
      a [WordTable] constant; the word operations the registry has no row for
-     become unknown values, remembered by name for the reasons. *)
+     are unknown values, remembered by name for the reasons when they are
+     met (in [Refute_ModelFinder_HOL]). *)
   val table_rows =
     [(Add, "word_add"), (Subtract, "word_sub"), (Multiply, "word_mul"),
      (WordAnd, "word_and"), (WordOr, "word_or"), (WordXor, "word_xor"),
-     (WordNeg, "word_2comp"), (WordNot, "word_1comp")]
-
-  val rowless_word_csts =
-    [(WordShl, "words$word_lsl"), (WordShr, "words$word_lsr"),
-     (WordAsr, "words$word_asr"), (NatToWord, "words$n2w"),
-     (WordToNat, "words$w2n")]
+     (WordNeg, "word_2comp"), (WordNot, "word_1comp"),
+     (WordShl, "word_lsl"), (WordShr, "word_lsr"), (WordAsr, "word_asr"),
+     (NatToWord, "n2w"), (WordToNat, "w2n")]
 
   fun fragment_word_type card_assigns ty =
     let val (domains, range) = boolSyntax.strip_fun ty
     in List.find (MFH.is_word_fragment card_assigns) (domains @ [range]) end
 
-  fun table_constant scope name word_ty ty =
-    case (MFS.word_values scope word_ty, MFH.word_dimension word_ty) of
-        (SOME values, SOME width) =>
-          Cst (WordTable (name, width, values), ty, MFR.Any)
-      | _ => raise NUT ("Refute_ModelFinder_Nut.table_constant", [])
+  (* The table of a row at [ty], the operation's type: for each position the
+     values its atoms stand for.  A word position holds its carrier's values
+     (every word of its width where the carrier is exact), a natural number
+     its atoms' indices, a Boolean false and true. *)
+  fun table_constant (scope : scope) name ty =
+    let
+      val who = "Refute_ModelFinder_Nut.table_constant"
+      val row = case Refute_ModelFinder_Words.find_row
+                       {Thy = "words", Name = name} of
+                    SOME row => row
+                  | NONE => raise NUT (who, [])
+      val (domains, range) = boolSyntax.strip_fun ty
+      fun column (Refute_ModelFinder_Words.Word, position_ty) =
+            (case MFH.word_dimension position_ty of
+                 SOME width =>
+                   {width = width,
+                    values =
+                      case MFS.word_values scope position_ty of
+                          SOME values => values
+                        | NONE => List.tabulate
+                            (#1 (MFS.spec_of_type scope position_ty),
+                             IntInf.fromInt)}
+               | NONE => raise NUT (who, []))
+        | column (Refute_ModelFinder_Words.Num, position_ty) =
+            if #binarize scope then
+              raise Util.NOT_SUPPORTED
+                "word operations are not encoded with binary integers"
+            else
+              {width = 0,
+               values = List.tabulate
+                 (#1 (MFS.spec_of_type scope position_ty), IntInf.fromInt)}
+        | column (Refute_ModelFinder_Words.Bool, _) =
+            {width = 0, values = [0, 1]}
+      val columns = map column
+        (ListPair.zipEq (#args row @ [#res row], domains @ [range]))
+        handle ListPair.UnequalLengths => raise NUT (who, [])
+    in
+      Cst (WordTable (name, columns), ty, MFR.Any)
+    end
 
   fun table_apply scope name first second =
     let
@@ -1302,25 +1361,21 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
     in
       Op2 (Apply, Type.bool, MFR.Any,
         Op2 (Apply, Type.-->(word_ty, Type.bool), MFR.Any,
-          table_constant scope name word_ty fun_ty, first),
+          table_constant scope name fun_ty, first),
         second)
     end
 
-  (* The constant that stands for [constant] at [ty] when a word type in
-     [ty] is a fragment; NONE when no word type of [ty] is. *)
-  fun fragment_replacement (scope as {hol_ctxt, card_assigns, ...} : scope)
+  (* The constant that stands for [constant] at
+     [ty] when a word type in [ty] is a fragment; NONE when no word type of
+     [ty] is. *)
+  fun fragment_replacement (scope as {card_assigns, ...} : scope)
         constant ty =
     case fragment_word_type card_assigns ty of
         NONE => NONE
-      | SOME word_ty =>
+      | SOME _ =>
           (case AList.lookup (op =) table_rows constant of
-               SOME name => SOME (table_constant scope name word_ty ty)
-             | NONE =>
-                 (case AList.lookup (op =) rowless_word_csts constant of
-                      SOME name =>
-                        (MFH.note_unknown_op hol_ctxt name;
-                         SOME (Cst (Unknown, ty, MFR.Any)))
-                    | NONE => NONE))
+               SOME name => SOME (table_constant scope name ty)
+             | NONE => NONE)
 
   fun choose_reps_in_nut
         (scope as {card_assigns, data_types, ofs, ...} : scope)
@@ -1410,25 +1465,28 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                     MFR.Func (atom,
                       MFR.Func (atom, MFR.Opt (MFR.Struct [atom, atom]))))
                 end
-            | Cst (WordTable (name, width, values), ty, _) =>
+            | Cst (WordRow name, ty, _) =>
+                (* a registry row's operation,
+                   read from its table *)
+                aux table definition polarity (table_constant scope name ty)
+            | Cst (WordTable (name, columns), ty, _) =>
                 (* The table of a registry row:
-                   argument atoms of the word carrier, and the result an
-                   optional atom of the row's result shape. *)
+                   argument atoms of the positions' carriers, and the result
+                   an optional atom of the result's. *)
                 let
                   val row = Option.valOf
                     (Refute_ModelFinder_Words.find_row
                        {Thy = "words", Name = name})
-                  val word_atom =
-                    MFR.Atom (MFS.spec_of_type scope (domain_type ty))
-                  fun atom_of shape =
+                  val (domains, range) = boolSyntax.strip_fun ty
+                  fun atom_of (shape, position_ty) =
                     case shape of
                         Refute_ModelFinder_Words.Bool => bool_atom
-                      | _ => word_atom
-                  val result = MFR.Opt (atom_of (#res row))
+                      | _ => MFR.Atom (MFS.spec_of_type scope position_ty)
+                  val result = MFR.Opt (atom_of (#res row, range))
                 in
-                  Cst (WordTable (name, width, values), ty,
+                  Cst (WordTable (name, columns), ty,
                     List.foldr MFR.Func result
-                      (map atom_of (#args row)))
+                      (map atom_of (ListPair.zipEq (#args row, domains))))
                 end
             | Cst (constant, ty, _) =>
                 (case fragment_replacement scope constant ty of

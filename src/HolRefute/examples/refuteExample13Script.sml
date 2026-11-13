@@ -61,12 +61,13 @@ Proof
   blastLib.BBLAST_TAC
 QED
 
-(* Operations that change a word's width, and the bit-permuting
-   remainder, are not encoded.  The search names the operation instead
-   of guessing, so an inconclusive report is never evidence that the
-   conjecture holds. *)
+(* Operations that change a word's width, pick
+   bits out of it or move them are encoded too, each from a table over
+   the carrier's values.  An operation with no table is an unknown
+   value, and the search names it, so an inconclusive report is never
+   evidence that the conjecture holds. *)
 
-Theorem widening_a_word_is_not_encoded:
+Theorem widening_a_word_never_gives_zero:
   w2w (w : word3) = (0w : word4)
 Proof
   MODEL_REFUTE_TAC >> cheat

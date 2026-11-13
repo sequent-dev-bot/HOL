@@ -833,7 +833,7 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
      direct tier of D4: literals through [n2w]/[w2n], the modular ring, the
      unsigned and signed orders, and the bitwise/shift group.  Everything else
      at a word type is refused by name in [unfold_defs_in_term]. *)
-  val word_built_in_consts =
+  val word_tier_consts =
     [({Thy = "words", Name = "n2w"}, 0),
      ({Thy = "words", Name = "w2n"}, 0),
      ({Thy = "words", Name = "word_add"}, 0),
@@ -855,6 +855,19 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
      ({Thy = "words", Name = "word_le"}, 2),
      ({Thy = "words", Name = "word_gt"}, 2),
      ({Thy = "words", Name = "word_ge"}, 2)]
+
+  (* Every row of the word operation registry is
+     built in too: an operation with a row is encoded from its table, not
+     unfolded and not an unknown value. *)
+  val word_built_in_consts =
+    word_tier_consts @
+    List.mapPartial (fn (row : Refute_ModelFinder_Words.row) =>
+      let val key = {Thy = #Thy row, Name = #Name row}
+      in
+        if List.exists (fn (other, _) => same_key key other)
+             word_tier_consts then NONE
+        else SOME (key, 0)
+      end) Refute_ModelFinder_Words.rows
 
   (* The direct tier at [:char]: the two morphisms, which are the carrier's
      numbering, and the four orders, which are that numbering's order.

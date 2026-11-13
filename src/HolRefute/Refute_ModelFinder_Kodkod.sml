@@ -2173,7 +2173,7 @@ fun kodkod_formula_from_nut offsets
         (* A registry row's table at a fragment
            word carrier: the tuples of its defined entries, the argument
            atoms then the result atom. *)
-        | MFNT.Cst (MFNT.WordTable (name, width, values), _, representation) =>
+        | MFNT.Cst (MFNT.WordTable (name, columns), _, representation) =>
             let
               val row = case Words.find_row {Thy = "words", Name = name} of
                             SOME row => row
@@ -2181,11 +2181,12 @@ fun kodkod_formula_from_nut offsets
                               ("Refute_ModelFinder_Kodkod.to_r (WordTable)",
                                [candidate])
               val schema = MFR.atom_schema_of_rep representation
-              val arguments = length (#args row)
-              val _ = check_table_size
-                (Util.reasonable_power (length values) arguments)
-              val table = Words.build_table row width
-                {word = values, num = []}
+              (* the number of argument tuples, cut off past the limit *)
+              val tuples = List.foldl (fn ({values, ...} : Words.column, count) =>
+                  Int.min (count * length values, max_table_size + 1))
+                1 (List.take (columns, length (#args row)))
+              val _ = check_table_size tuples
+              val table = Words.build_table row columns
               fun atom (position, (_, offset)) = KK.Atom (position + offset)
               fun tuple (positions, result) =
                 Option.map (fn result =>

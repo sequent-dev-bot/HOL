@@ -18,8 +18,8 @@ local open Refute_Rat Refute_Real in end
    flags alone": the defect it pins is a process-global flag held flipped
    while a sibling backend of the same call runs, and the only public
    observer would be a second backend racing the first.  The fourth is
-   [Refute_ModelFinder_Words], the word operation registry, which the
-   model finder does not use yet, so no public route reaches it.  The fifth
+   [Refute_ModelFinder_Words], the word operation registry, whose rows
+   and table builder no public route reaches one at a time.  The fifth
    is [Refute_ModelFinder_Preproc.axioms_max_count], lowered by "a goal over
    too many definitions is declined, naming the bound": a goal that
    reaches the real bound needs thousands of definitions. *)
@@ -2894,16 +2894,23 @@ val _ = mf_test "word operations are encoded" (fn () =>
      ``(4w : 3 word) < 0w ==> F``, ``(w : 3 word) && 0w <> 0w``,
      ``(w : 3 word) << 5 <> 0w``, ``w2n (7w : 3 word) <> 7``])
 
-(* An operation outside the registry is an
-   unknown value named in the reasons; it was a goal refused by name. *)
+(* An operation outside the registry (here one
+   that takes a function, and one of another theory's constants) is an
+   unknown value named in the reasons, not a goal refused by name; one with
+   a row is computed from its table. *)
 val _ = mf_test "unencoded word operations are unknown values, named" (fn () =>
-  unknown_with "word operation words$w2w is not encoded"
-    (refute word_cfg ``w2w (w : 3 word) = (0w : 4 word)``) andalso
-  unknown_with "word operation words$word_rol is not encoded"
-    (refute word_cfg ``(w : 3 word) #<< 1 = w``) andalso
+  unknown_with "word operation words$word_modify is not encoded"
+    (refute word_cfg ``word_modify (\i b. ~b) (w : 3 word) = w``) andalso
   unknown_with "word operations are not encoded with binary integers"
     (refute (word_cfg |> upd_binary_ints (SOME true) |> upd_bits [4])
             ``(w : 3 word) * 2w <> w + w``))
+
+val _ = mf_test "word operations of the registry are encoded exactly" (fn () =>
+  List.all (fn goal => refute word_cfg goal |> cex_where kodkod_genuine)
+    [``w2w (w : 3 word) = (0w : 4 word)``, ``(w : 3 word) #<< 1 <> w``,
+     ``word_msb (w : 3 word) = F``, ``(w : 3 word) ** 2w <> 1w``,
+     ``((2 >< 1) (w : 3 word) : 2 word) <> 0w``, ``word_reverse (w : 3 word) <> w``,
+     ``(((w : 3 word) @@ (v : 3 word)) : 6 word) <> 0w``])
 
 (* A goal declined through [NOT_SUPPORTED] (the path every real
    unencoded-operation decline takes) names the phase and the counts. *)
@@ -5010,7 +5017,7 @@ val _ = mf_level2 "certificates replay at large and structured scopes"
     end)
 
 (* ------------------------------------------------------------------- *)
-(* Word operation registry: standalone, not used by the model finder yet.    *)
+(* Word operation registry.                                            *)
 (* ------------------------------------------------------------------- *)
 
 val _ = section "word operation registry"
@@ -5021,12 +5028,12 @@ local open Refute_ModelFinder_Words in end
 
 local
   structure W = Refute_ModelFinder_Words
+  structure H = Refute_ModelFinder_HOL
 
-  val widths = [1, 8, 32, 256]
   fun pow2 w = IntInf.pow (2, w)
 
-  (* the boundary values of a width, with one value from the middle *)
-  fun samples w =
+  (* The boundary values of a width, with one value from the middle. *)
+  fun boundary w =
     let
       val m = pow2 w
       fun add (v, acc) =
@@ -5037,82 +5044,181 @@ local
         [0, 1, 2, m div 2 - 1, m div 2, m div 2 + 1, m - 2, m - 1, m div 3]
     end
 
-  fun word_type w = wordsSyntax.mk_word_type (fcpSyntax.mk_int_numeric_type w)
-  fun shape_type w W.Word = word_type w
-    | shape_type _ W.Num = numLib.num
-    | shape_type _ W.Bool = Type.bool
+  (* Rows of three or more arguments get fewer samples per position. *)
+  fun word_samples arity w =
+    if arity <= 2 then boundary w
+    else List.filter (fn v => List.exists (fn x => x = v) (boundary w))
+           [0, 1, pow2 w div 2, pow2 w - 1]
+  fun num_samples arity =
+    if arity <= 1 then [0, 1, 2, 7, 8, 9, 31, 32, 33, 255, 256, 257]
+    else if arity = 2 then [0, 1, 7, 8, 9]
+    else [0, 1, 7, 9]
+
+  (* The widths the row's type variables are instantiated with, in the order
+     the variables occur in the constant's type. *)
+  fun instances k =
+    case k of
+        0 => [[]]
+      | 1 => [[1], [8], [32], [256]]
+      | 2 => [[1, 8], [8, 1], [8, 8], [32, 8], [8, 32], [256, 8], [8, 256]]
+      | _ => [[8, 8, 8], [1, 8, 32], [32, 1, 8], [8, 32, 256], [256, 8, 1]]
+
+  fun generic_constant ({Thy, Name, ...} : W.row) =
+    Term.prim_mk_const {Thy = Thy, Name = Name}
+
+  fun instantiate (row : W.row) widths =
+    let
+      val generic = generic_constant row
+      val vars = Type.type_vars (Term.type_of generic)
+    in
+      Term.inst (ListPair.map (fn (v, w) =>
+                   {redex = v, residue = fcpSyntax.mk_int_numeric_type w})
+                 (vars, widths)) generic
+    end
+
+  fun positions c =
+    let val (domains, range) = boolSyntax.strip_fun (Term.type_of c)
+    in domains @ [range] end
 
   fun arbnum v = Arbnum.fromString (IntInf.toString v)
-  fun literal w W.Word v =
+
+  fun literal ty W.Word v =
         wordsSyntax.mk_n2w (numSyntax.mk_numeral (arbnum v),
-                            fcpSyntax.mk_int_numeric_type w)
+                            wordsSyntax.dest_word_type ty)
     | literal _ W.Num v = numSyntax.mk_numeral (arbnum v)
     | literal _ W.Bool v = if v = 0 then boolSyntax.F else boolSyntax.T
 
+  (* NONE where the term is not a value of the shape: a result HOL leaves
+     unspecified stays an unevaluated term *)
   fun value_of W.Word t =
-        IntInf.fromString (Arbnum.toString
-          (numSyntax.dest_numeral (#1 (wordsSyntax.dest_n2w t))))
+        (case Lib.total wordsSyntax.dest_n2w t of
+             SOME (n, _) =>
+               Option.mapPartial (fn n => IntInf.fromString (Arbnum.toString n))
+                 (Lib.total numSyntax.dest_numeral n)
+           | NONE => NONE)
     | value_of W.Num t =
-        IntInf.fromString (Arbnum.toString (numSyntax.dest_numeral t))
+        Option.mapPartial (fn n => IntInf.fromString (Arbnum.toString n))
+          (Lib.total numSyntax.dest_numeral t)
     | value_of W.Bool t =
         if Term.aconv t boolSyntax.T then SOME 1
         else if Term.aconv t boolSyntax.F then SOME 0 else NONE
-
-  fun constant w ({Thy, Name, args, res, ...} : W.row) =
-    Term.mk_thy_const {Thy = Thy, Name = Name,
-      Ty = Lib.itlist (Lib.curry Type.-->) (map (shape_type w) args)
-                      (shape_type w res)}
 
   fun tuples [] = [[]]
     | tuples (vs :: rest) =
         List.concat (map (fn v => map (fn t => v :: t) (tuples rest)) vs)
 
-  val division_rows = ["word_div", "word_mod", "word_quot", "word_rem"]
-  (* HOL leaves a division by 0 unspecified, and only that *)
-  fun unspecified ({Name, ...} : W.row) args =
-    List.exists (fn n => n = Name) division_rows andalso List.last args = 0
-
   fun ints xs = String.concatWith " " (map IntInf.toString xs)
 
-  (* [row] agrees with EVAL on every tuple of boundary values of [w] *)
-  fun conforms (row : W.row) w =
+  fun shape_name W.Word = "word" | shape_name W.Num = "num"
+    | shape_name W.Bool = "bool"
+
+  (* an exponent HOL would compute in full, which the row leaves unknown *)
+  fun over_bound ({Name, ...} : W.row) args =
+    (Name = "word_exp" orelse Name = "word_exp_tailrec") andalso
+    List.nth (args, 1) > W.exp_bound
+
+  (* EVAL leaves [word_replicate 0 w] as it is (its compute rule starts at
+     one copy), though the definition gives the zero word: the row follows
+     the definition, so that tuple has no EVAL value to compare with *)
+  fun eval_stuck ({Name, ...} : W.row) args =
+    Name = "word_replicate" andalso List.hd args = 0
+
+  (* A quotient by the zero word is an unknown value in the row.  EVAL
+     leaves [x // 0w] as [n2w (x DIV 0)] but gives [0w] for [0w // 0w] in this session, so no EVAL value is
+     compared there. *)
+  fun by_zero ({Name, ...} : W.row) args =
+    (Name = "word_div" orelse Name = "word_quot") andalso List.nth (args, 1) = 0
+
+  (* [row] agrees with EVAL on every tuple of samples at one instance *)
+  fun conforms (row : W.row) widths =
     let
-      val c = constant w row
+      val c = instantiate row widths
+      val types = positions c
+      val arity = length (#args row)
+      val word_widths = List.mapPartial (fn (W.Word, ty) => H.word_dimension ty
+                                          | _ => NONE)
+                          (ListPair.zip (#args row @ [#res row], types))
+      val argument_samples = ListPair.map (fn (shape, ty) =>
+        case shape of
+            W.Word => word_samples arity (valOf (H.word_dimension ty))
+          | W.Num => num_samples arity
+          | W.Bool => [0, 1]) (#args row, List.take (types, arity))
       fun ok args =
         let
-          val expected = #sem row w args
+          val expected = #sem row word_widths args
           val applied = Term.list_mk_comb (c,
-            ListPair.map (fn (s, v) => literal w s v) (#args row, args))
+            ListPair.map (fn ((s, ty), v) => literal ty s v)
+              (ListPair.zip (#args row, List.take (types, arity)), args))
           val agrees =
-            if unspecified row args then not (Option.isSome expected)
+            if over_bound row args then expected = NONE
+            else if eval_stuck row args then expected = SOME 0
+            else if by_zero row args then expected = NONE
             else
-              (case expected of
-                   NONE => false
-                 | SOME e =>
-                     value_of (#res row) (boolSyntax.rhs
-                       (Thm.concl (bossLib.EVAL applied))) = SOME e)
+              (* EVAL leaves a numeral above the width as it is ([2w] at
+                 one bit), so a word result is compared modulo 2^width *)
+              Option.map (fn v => if #res row = W.Word
+                                  then IntInf.mod (v, pow2 (List.last word_widths))
+                                  else v)
+                (value_of (#res row)
+                   (boolSyntax.rhs (Thm.concl (bossLib.EVAL applied)))) = expected
         in
           agrees orelse
-          (print ("\n  " ^ #Name row ^ " at width " ^ Int.toString w ^ " on " ^
-                  ints args ^ " disagrees with EVAL\n"); false)
+          (print ("\n  " ^ #Name row ^ " at widths " ^ ints (map IntInf.fromInt widths) ^
+                  " on " ^ ints args ^ " disagrees with EVAL: the row gives " ^
+                  (case expected of SOME v => IntInf.toString v | NONE => "unknown") ^
+                  ", EVAL gives " ^
+                  Parse.term_to_string
+                    (boolSyntax.rhs (Thm.concl (bossLib.EVAL applied))) ^ "\n");
+           false)
         end
     in
-      List.all ok (tuples (map (fn W.Word => samples w
-                                 | W.Num => [0, 1, 7]
-                                 | W.Bool => [0, 1]) (#args row)))
+      List.all ok (tuples argument_samples)
+    end
+
+  (* EVAL does not terminate on [word_exp] at width 1: it cannot decide
+     [word_mod e 2w] there ([2w] is [0w] in one bit) and unrolls the
+     recursion for ever.  The row is compared with the definition's
+     arithmetic at the other widths. *)
+  fun row_instances (row : W.row) =
+    let
+      val all = instances
+        (length (Type.type_vars (Term.type_of (generic_constant row))))
+    in
+      if #Name row = "word_exp" orelse #Name row = "word_exp_tailrec" then
+        List.filter (fn widths => not (List.exists (fn w => w = 1) widths)) all
+      else all
     end
 
   fun raises_bad f = (ignore (f ()); false)
     handle Refute_ModelFinder_Util.BAD _ => true
 
   val registry_names = map #Name W.rows
+
+  (* The value-level constants of wordsTheory: argument and result types
+     all among words, num and bool. *)
+  fun component_shape ty =
+    if wordsSyntax.is_word_type ty then SOME W.Word
+    else if ty = numSyntax.num then SOME W.Num
+    else if ty = Type.bool then SOME W.Bool
+    else NONE
+  fun value_level c =
+    List.all (Option.isSome o component_shape) (positions c)
+  val words_constants = Theory.constants "words"
+  val value_constants = List.filter value_level words_constants
+  fun name_of c = #Name (Term.dest_thy_const c)
+
+  (* A value-level constant without a row, and why. *)
+  val exclusions =
+    [("BIT_SET",
+      "no word in its type: a recursive definition over num that the \
+      \definitional closure unfolds like any other, so there is no word \
+      \operation to tabulate")]
 in
   val _ = print (W.listing ())
 
   val _ = test "the registry has one row per constant, none repeated" (fn () =>
-    length W.rows = 20 andalso
-    length (List.filter (fn n => length (List.filter (fn m => m = n)
-                                  registry_names) = 1) registry_names) = 20)
+    List.all (fn n => length (List.filter (fn m => m = n) registry_names) = 1)
+      registry_names)
 
   val _ = test "negation, complement and the signed orders are rows of their own"
     (fn () =>
@@ -5123,20 +5229,68 @@ in
 
   val _ = app (fn row : W.row =>
     test ("row " ^ #Name row ^ " agrees with EVAL at widths 1, 8, 32, 256")
-      (fn () => List.all (conforms row) widths)) W.rows
+      (fn () => List.all (conforms row) (row_instances row))) W.rows
+
+  val _ = test "an exponent past the bound is unknown, never computed" (fn () =>
+    let
+      val exp = valOf (W.find_row {Thy = "words", Name = "word_exp"})
+      val big = pow2 255
+    in
+      #sem exp [256, 256, 256] [3, big] = NONE andalso
+      #sem exp [256, 256, 256] [3, W.exp_bound + 1] = NONE andalso
+      #sem exp [256, 256, 256] [3, W.exp_bound] <> NONE
+    end)
+
+  val _ = test "every row names a constant of wordsTheory with its shapes"
+    (fn () =>
+      List.all (fn (row : W.row) =>
+        case List.find (fn c => name_of c = #Name row) words_constants of
+            NONE => (print ("\n  " ^ #Name row ^ " is not in wordsTheory\n");
+                     false)
+          | SOME c =>
+              map component_shape (positions c) =
+              map SOME (#args row @ [#res row])
+              orelse (print ("\n  " ^ #Name row ^ " has other shapes than " ^
+                             String.concatWith " -> "
+                               (map shape_name (#args row @ [#res row])) ^
+                             "\n"); false)) W.rows)
+
+  val _ = test "every value-level constant of wordsTheory has a row or a reason"
+    (fn () =>
+      let
+        fun covered c =
+          Option.isSome (W.find_row {Thy = "words", Name = name_of c}) orelse
+          List.exists (fn (n, _) => n = name_of c) exclusions
+        val missing = List.filter (not o covered) value_constants
+        val stale = List.filter (fn (n, _) =>
+          Option.isSome (W.find_row {Thy = "words", Name = n}) orelse
+          not (List.exists (fn c => name_of c = n) value_constants)) exclusions
+      in
+        print ("\n  " ^ Int.toString (length value_constants) ^
+               " value-level constants, " ^ Int.toString (length W.rows) ^
+               " rows, " ^ Int.toString (length exclusions) ^ " excluded\n");
+        app (fn c => print ("  no row and no reason: " ^ name_of c ^ "\n"))
+          missing;
+        app (fn (n, _) => print ("  stale exclusion: " ^ n ^ "\n")) stale;
+        null missing andalso null stale
+      end)
 
   val _ = test "a table gives a result outside the carrier as unknown" (fn () =>
-    W.build_table (valOf (W.find_row {Thy = "words", Name = "word_add"})) 2
-      {word = [0, 1, 3], num = []} =
-    [([0, 0], SOME 0), ([0, 1], SOME 1), ([0, 2], SOME 2),
-     ([1, 0], SOME 1), ([1, 1], NONE), ([1, 2], SOME 0),
-     ([2, 0], SOME 2), ([2, 1], SOME 0), ([2, 2], NONE)])
+    let val carrier = {width = 2, values = [0, 1, 3]}
+    in
+      W.build_table (valOf (W.find_row {Thy = "words", Name = "word_add"}))
+        [carrier, carrier, carrier] =
+      [([0, 0], SOME 0), ([0, 1], SOME 1), ([0, 2], SOME 2),
+       ([1, 0], SOME 1), ([1, 1], NONE), ([1, 2], SOME 0),
+       ([2, 0], SOME 2), ([2, 1], SOME 0), ([2, 2], NONE)]
+    end)
 
   val _ = test "a table gives x // 0w and word_mod x 0w as unknown" (fn () =>
     let
+      val carrier = {width = 8, values = [1, 0, 3]}
       fun table name = W.build_table
-        (valOf (W.find_row {Thy = "words", Name = name})) 8
-        {word = [1, 0, 3], num = []}
+        (valOf (W.find_row {Thy = "words", Name = name}))
+        [carrier, carrier, carrier]
       fun unknown_by_zero t =
         List.all (fn ([_, z], r) => z <> 1 orelse r = NONE
                    | _ => false) t
@@ -5148,17 +5302,32 @@ in
     end)
 
   val _ = test "a table over a Boolean result needs no carrier for it" (fn () =>
-    W.build_table (valOf (W.find_row {Thy = "words", Name = "word_lo"})) 8
-      {word = [0, 255], num = []} =
-    [([0, 0], SOME 0), ([0, 1], SOME 1), ([1, 0], SOME 0), ([1, 1], SOME 0)])
+    let val carrier = {width = 8, values = [0, 255]}
+    in
+      W.build_table (valOf (W.find_row {Thy = "words", Name = "word_lo"}))
+        [carrier, carrier, {width = 0, values = [0, 1]}] =
+      [([0, 0], SOME 0), ([0, 1], SOME 1), ([1, 0], SOME 0), ([1, 1], SOME 0)]
+    end)
+
+  val _ = test "a table mixes widths and natural numbers" (fn () =>
+    W.build_table (valOf (W.find_row {Thy = "words", Name = "w2w"}))
+      [{width = 8, values = [0, 5, 255]}, {width = 2, values = [0, 1, 3]}] =
+    [([0], SOME 0), ([1], SOME 1), ([2], SOME 2)] andalso
+    (* word_lsl by a count column: 3w << 1 is 6w, 3w << 2 is outside the list *)
+    W.build_table (valOf (W.find_row {Thy = "words", Name = "word_lsl"}))
+      [{width = 3, values = [3]}, {width = 0, values = [0, 1, 2]},
+       {width = 3, values = [3, 6]}] =
+    [([0, 0], SOME 0), ([0, 1], SOME 1), ([0, 2], NONE)])
 
   val _ = test "a carrier with a repeated or out-of-range value is refused"
     (fn () =>
       let val add = valOf (W.find_row {Thy = "words", Name = "word_add"})
+          fun table values = W.build_table add (List.tabulate (3, fn _ =>
+            {width = 8, values = values}))
       in
-        raises_bad (fn () => W.build_table add 8 {word = [0, 1, 0], num = []})
-        andalso
-        raises_bad (fn () => W.build_table add 8 {word = [0, 256], num = []})
+        raises_bad (fn () => table [0, 1, 0]) andalso
+        raises_bad (fn () => table [0, 256]) andalso
+        raises_bad (fn () => W.build_table add [])
       end)
 end
 
@@ -5274,17 +5443,45 @@ in
       |> cex_where (fn c => found c andalso word_card w8 c = SOME 3 andalso
                             binding_is c ``a : word8`` ``0w : word8``))
 
-  val _ = mf_test "an operation with no row is an unknown naming its constant"
+  val _ = mf_test "an operation with a row is computed at a fragment carrier"
     (fn () =>
       let
         val w16 = ``:word16``
-        val both = mf |> upd_card [(SOME w8, [3]), (SOME w16, [3]), (NONE, [1])]
+        val both = mf |> upd_card [(SOME w8, [3]), (SOME w16, [3]),
+                             (SOME ``:num``, [2]), (NONE, [1])]
+        fun finds goal var value =
+          let
+            val outcome = refute both goal
+            fun show (Counterexample (c :: _)) =
+                  String.concatWith ", "
+                    (map (fn (v, t) => Parse.term_to_string v ^ " = " ^
+                                       Parse.term_to_string t) (#bindings c))
+              | show (Unknown rs) = "unknown: " ^ String.concatWith "; " rs
+              | show _ = "no counterexample"
+          in
+            cex_where (fn c => found c andalso binding_is c var value) outcome
+            orelse (print ("\n  got: " ^ show outcome); false)
+          end
       in
-        unknown_with "words$word_lsl" (refute (cards 3) ``(a : word8) << 1 <> a``)
-        andalso
-        unknown_with "word operation words$w2w is not encoded"
-          (refute both ``w2w (a : word8) <> (b : word16)``)
+        (* the shift, the conversion, the bit selection and the exponent
+           each read from their table; none is an unknown value *)
+        List.all (fn (name, ok) =>
+          ok orelse (print ("\n  failed: " ^ name ^ "\n"); false))
+          [("shift", finds ``(a : word8) << 1 <> 2w`` ``a : word8`` ``1w : word8``),
+           ("conversion", finds ``(w2w (a : word8) : word16) + 1w <> 1w``
+              ``a : word8`` ``0w : word8``),
+           ("msb", finds ``word_msb (a : word8) ==> a <> 255w``
+              ``a : word8`` ``255w : word8``),
+           ("exponent", finds ``(a : word8) ** 2w <> 4w``
+              ``a : word8`` ``2w : word8``),
+           ("no unknown", not (mentions "word operation words$w2w"
+               (refute both ``w2w (a : word8) <> (b : word16)``)))]
       end)
+
+  val _ = mf_test "an operation with no row is an unknown naming its constant"
+    (fn () =>
+      unknown_with "word operation words$word_modify is not encoded"
+        (refute (cards 3) ``word_modify (\i b. ~b) (a : word8) <> a``))
 end
 
 (* ------------------------------------------------------------------- *)

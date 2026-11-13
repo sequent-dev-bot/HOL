@@ -147,7 +147,8 @@ fits 1024 atoms; an explicit `upd_card` entry is honoured as given.  A
 literal outside the list is unrepresentable; an operation with a row in
 `Refute_ModelFinder_Words` is computed from its table, and one without
 (or a result outside the list) is an unknown value, named in the
-reasons.  A carrier below `2^w` atoms never supports `NoCounterexample`.
+reasons.  So is `word_exp` with an exponent above 1024, never computed.
+A carrier below `2^w` atoms never supports `NoCounterexample`.
 A typedef over `:num` or `:int` also disables smart binarization.
 
 Only the equations a user wrote are harvested for a function: HOL4

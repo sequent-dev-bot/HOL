@@ -15,9 +15,11 @@ signature Refute_ModelFinder_Nut = sig
        direct tier reduces to those. *)
     NatToWord | WordToNat | WordAnd | WordOr | WordXor |
     WordShl | WordShr | WordAsr |
-    (* negation and complement at an exact carrier, and a table over
-       a value list *)
-    WordNeg | WordNot | WordTable of string * int * IntInf.int list |
+    (* negation and complement at an exact carrier,
+       the operation of a registry row ([WordRow], by name) and its table
+       over the value lists of the carriers *)
+    WordNeg | WordNot | WordRow of string |
+    WordTable of string * Refute_ModelFinder_Words.column list |
     (* The two morphisms of the [:char] carrier: the numbering that makes
        atom [j] denote [CHR j], and its inverse. *)
     NatToChar | CharToNat
