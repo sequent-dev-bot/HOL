@@ -526,7 +526,8 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
     List.mapPartial (fn (row : Refute_ModelFinder_Words.row) =>
       let val key = {Thy = #Thy row, Name = #Name row}
       in
-        if List.exists (fn (other, _) => other = key)
+        if #Thy row <> "words" orelse
+           List.exists (fn (other, _) => other = key)
              (map (fn (key, _) => (key, ())) word_csts @
               map (fn (key, _) => (key, ())) word_subtract_bases @
               map (fn (key, _) => (key, ())) word_orders)
@@ -1308,7 +1309,8 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
      (WordAnd, "word_and"), (WordOr, "word_or"), (WordXor, "word_xor"),
      (WordNeg, "word_2comp"), (WordNot, "word_1comp"),
      (WordShl, "word_lsl"), (WordShr, "word_lsr"), (WordAsr, "word_asr"),
-     (NatToWord, "n2w"), (WordToNat, "w2n")]
+     (NatToWord, "n2w"), (WordToNat, "w2n"),
+     (NatToChar, "CHR"), (CharToNat, "ORD")]
 
   fun fragment_word_type card_assigns ty =
     let val (domains, range) = boolSyntax.strip_fun ty
@@ -1321,8 +1323,7 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
   fun table_constant (scope : scope) name ty =
     let
       val who = "Refute_ModelFinder_Nut.table_constant"
-      val row = case Refute_ModelFinder_Words.find_row
-                       {Thy = "words", Name = name} of
+      val row = case Refute_ModelFinder_Words.find_named name of
                     SOME row => row
                   | NONE => raise NUT (who, [])
       val (domains, range) = boolSyntax.strip_fun ty
@@ -1337,6 +1338,14 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                             (#1 (MFS.spec_of_type scope position_ty),
                              IntInf.fromInt)}
                | NONE => raise NUT (who, []))
+        | column (Refute_ModelFinder_Words.Char, position_ty) =
+            {width = 8,
+             values =
+               case MFS.word_values scope position_ty of
+                   SOME values => values
+                 | NONE => List.tabulate
+                     (#1 (MFS.spec_of_type scope position_ty),
+                      IntInf.fromInt)}
         | column (Refute_ModelFinder_Words.Num, position_ty) =
             if #binarize scope then
               raise Util.NOT_SUPPORTED
@@ -1475,8 +1484,7 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                    an optional atom of the result's. *)
                 let
                   val row = Option.valOf
-                    (Refute_ModelFinder_Words.find_row
-                       {Thy = "words", Name = name})
+                    (Refute_ModelFinder_Words.find_named name)
                   val (domains, range) = boolSyntax.strip_fun ty
                   fun atom_of (shape, position_ty) =
                     case shape of
@@ -1631,7 +1639,9 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                 (* at a value-list carrier the order is a table *)
                 if MFH.is_word_fragment card_assigns (type_of first) then
                   aux table definition polarity
-                    (table_apply scope "word_lo" first second)
+                    (table_apply scope
+                       (if MFH.is_char_type (type_of first) then "char_lt"
+                        else "word_lo") first second)
                 else
                 let
                   val _ = check_carrier_budget scope false (type_of first)

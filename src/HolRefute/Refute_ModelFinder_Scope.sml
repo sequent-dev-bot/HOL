@@ -158,14 +158,14 @@ structure Refute_ModelFinder_Scope :> Refute_ModelFinder_Scope = struct
      two-sided ring neighbourhood of 0 and of the problem's literals of that
      width, nearest first, as many as the card. *)
   fun word_values ({hol_ctxt, card_assigns, ...} : scope) ty =
-    case MFH.word_dimension ty of
+    case MFH.carrier_width ty of
         NONE => NONE
       | SOME width =>
           if not (MFH.is_word_fragment card_assigns ty) then NONE
           else
             let
               val literals = List.filter (fn value => value <> 0)
-                (MFH.word_literals_of hol_ctxt width)
+                (MFH.word_literals_of hol_ctxt ty)
             in
               SOME (Words.neighbourhood width (0 :: literals)
                 (MFH.card_of_type card_assigns ty))
@@ -300,8 +300,8 @@ structure Refute_ModelFinder_Scope :> Refute_ModelFinder_Scope = struct
   val max_word_atoms = 1024
 
   fun word_cards cards_assigns ty =
-    case MFH.word_dimension ty of
-        NONE => raise err "word_cards" "not a word type"
+    case MFH.carrier_width ty of
+        NONE => raise err "word_cards" "not a word or char type"
       | SOME width =>
           let
             val exact = if width <= 30 then Util.reasonable_power 2 width
@@ -354,11 +354,10 @@ structure Refute_ModelFinder_Scope :> Refute_ModelFinder_Scope = struct
       [(Card ty, lookup_type_ints_assign cards_assigns MFH.num_type)]
     else if ty = MFH.signed_bitword_type then
       [(Card ty, lookup_type_ints_assign cards_assigns MFH.int_type)]
-    else if MFH.is_word_type ty then
+    else if MFH.is_word_type ty orelse MFH.is_char_type ty then
+      (* A word carrier, and [:char] as one of width 8: searched cards, the
+         exact carrier last. *)
       [(Card ty, word_cards cards_assigns ty)]
-    else if MFH.is_char_type ty then
-      (* Like a word carrier: exact, unsearched, atom [j] denoting [CHR j]. *)
-      [(Card ty, [MFH.char_card])]
     else
       (Card ty, lookup_type_ints_assign cards_assigns ty) ::
       (case MFH.binarized_and_boxed_data_type_constrs context binarize ty of

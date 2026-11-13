@@ -2931,9 +2931,9 @@ val _ = mf_test "a goal declined as not supported names the phase and counts"
 val carrier = default_config |> quiet |> only [ModelFinder]
   |> upd_timeout 60.0 |> upd_max_threads 1
 
-val _ = mf_test "chars are an exact carrier of 256 literals" (fn () =>
+val _ = mf_test "chars are refuted, and proved on the exact carrier" (fn () =>
   refute carrier ``(c : char) = c'`` |> cex_where (fn c =>
-    scope_of c ``:char`` = SOME 256 andalso scope_of c ``:num`` = NONE andalso
+    (case scope_of c ``:char`` of SOME k => k < 256 | NONE => false) andalso
     not (null (#bindings c)) andalso
     List.all (fn (_, v) => String.isPrefix "#\"" (Parse.term_to_string v))
       (#bindings c)) andalso
@@ -5086,6 +5086,7 @@ local
         wordsSyntax.mk_n2w (numSyntax.mk_numeral (arbnum v),
                             wordsSyntax.dest_word_type ty)
     | literal _ W.Num v = numSyntax.mk_numeral (arbnum v)
+    | literal _ W.Char v = stringSyntax.mk_chr (numSyntax.mk_numeral (arbnum v))
     | literal _ W.Bool v = if v = 0 then boolSyntax.F else boolSyntax.T
 
   (* NONE where the term is not a value of the shape: a result HOL leaves
@@ -5096,6 +5097,7 @@ local
                Option.mapPartial (fn n => IntInf.fromString (Arbnum.toString n))
                  (Lib.total numSyntax.dest_numeral n)
            | NONE => NONE)
+    | value_of W.Char t = Option.map IntInf.fromInt (H.char_literal_code t)
     | value_of W.Num t =
         Option.mapPartial (fn n => IntInf.fromString (Arbnum.toString n))
           (Lib.total numSyntax.dest_numeral t)
@@ -5110,7 +5112,7 @@ local
   fun ints xs = String.concatWith " " (map IntInf.toString xs)
 
   fun shape_name W.Word = "word" | shape_name W.Num = "num"
-    | shape_name W.Bool = "bool"
+    | shape_name W.Char = "char" | shape_name W.Bool = "bool"
 
   (* an exponent HOL would compute in full, which the row leaves unknown *)
   fun over_bound ({Name, ...} : W.row) args =
@@ -5136,11 +5138,13 @@ local
       val types = positions c
       val arity = length (#args row)
       val word_widths = List.mapPartial (fn (W.Word, ty) => H.word_dimension ty
+                                          | (W.Char, _) => SOME 8
                                           | _ => NONE)
                           (ListPair.zip (#args row @ [#res row], types))
       val argument_samples = ListPair.map (fn (shape, ty) =>
         case shape of
             W.Word => word_samples arity (valOf (H.word_dimension ty))
+          | W.Char => word_samples arity 8
           | W.Num => num_samples arity
           | W.Bool => [0, 1]) (#args row, List.take (types, arity))
       fun ok args =
@@ -5198,6 +5202,7 @@ local
      all among words, num and bool. *)
   fun component_shape ty =
     if wordsSyntax.is_word_type ty then SOME W.Word
+    else if H.is_char_type ty then SOME W.Char
     else if ty = numSyntax.num then SOME W.Num
     else if ty = Type.bool then SOME W.Bool
     else NONE
@@ -5228,7 +5233,9 @@ in
          "word_ge"])
 
   val _ = app (fn row : W.row =>
-    test ("row " ^ #Name row ^ " agrees with EVAL at widths 1, 8, 32, 256")
+    test ("row " ^ #Name row ^ " agrees with EVAL" ^
+          (if #Thy row = "words" then " at widths 1, 8, 32, 256"
+           else " on the codes of " ^ #Thy row ^ " characters"))
       (fn () => List.all (conforms row) (row_instances row))) W.rows
 
   val _ = test "an exponent past the bound is unknown, never computed" (fn () =>
@@ -5244,6 +5251,7 @@ in
   val _ = test "every row names a constant of wordsTheory with its shapes"
     (fn () =>
       List.all (fn (row : W.row) =>
+        #Thy row <> "words" orelse
         case List.find (fn c => name_of c = #Name row) words_constants of
             NONE => (print ("\n  " ^ #Name row ^ " is not in wordsTheory\n");
                      false)
@@ -5254,6 +5262,30 @@ in
                              String.concatWith " -> "
                                (map shape_name (#args row @ [#res row])) ^
                              "\n"); false)) W.rows)
+
+  (* The char rows: the encoder's direct tier at
+     [:char] is exactly the rows of stringTheory, each with the shapes of
+     its constant. *)
+  val string_rows = List.filter (fn (row : W.row) => #Thy row = "string") W.rows
+
+  val _ = test "ORD, CHR and the orders on char are registry rows" (fn () =>
+    length string_rows = length H.char_built_in_consts andalso
+    List.all (fn ({Thy, Name}, _) =>
+      Option.isSome (W.find_row {Thy = Thy, Name = Name}) andalso
+      Thy = "string") H.char_built_in_consts)
+
+  val _ = test "every char row names a constant of stringTheory with its shapes"
+    (fn () =>
+      List.all (fn (row : W.row) =>
+        case Lib.total (fn () =>
+               Term.prim_mk_const {Thy = "string", Name = #Name row}) () of
+            NONE => (print ("\n  " ^ #Name row ^ " is not in stringTheory\n");
+                     false)
+          | SOME c =>
+              map component_shape (positions c) =
+              map SOME (#args row @ [#res row])
+              orelse (print ("\n  " ^ #Name row ^ " has other shapes\n"); false))
+        string_rows)
 
   val _ = test "every value-level constant of wordsTheory has a row or a reason"
     (fn () =>
@@ -5267,8 +5299,9 @@ in
           not (List.exists (fn c => name_of c = n) value_constants)) exclusions
       in
         print ("\n  " ^ Int.toString (length value_constants) ^
-               " value-level constants, " ^ Int.toString (length W.rows) ^
-               " rows, " ^ Int.toString (length exclusions) ^ " excluded\n");
+               " value-level constants, " ^
+               Int.toString (length (List.filter (fn (row : W.row) =>
+                 #Thy row = "words") W.rows)) ^ " rows, " ^ Int.toString (length exclusions) ^ " excluded\n");
         app (fn c => print ("  no row and no reason: " ^ name_of c ^ "\n"))
           missing;
         app (fn (n, _) => print ("  stale exclusion: " ^ n ^ "\n")) stale;
@@ -5482,6 +5515,76 @@ in
     (fn () =>
       unknown_with "word operation words$word_modify is not encoded"
         (refute (cards 3) ``word_modify (\i b. ~b) (a : word8) <> a``))
+
+  (* [:char] is the second instance of the
+     carrier: the values around code 0 and the goal's character literals,
+     the exact carrier of 256 last. *)
+  val chr_ty = ``:char``
+  fun chars n = mf |> upd_card [(SOME chr_ty, [n]), (NONE, [3])]
+  fun chr_code n = stringSyntax.mk_chr (numSyntax.term_of_int n)
+
+  val _ = mf_test "a char literal is among the carrier's values, with code 0"
+    (fn () =>
+      refute (chars 2) ``(c : char) <> #"a"``
+      |> cex_where (fn c => found c andalso scope_of c chr_ty = SOME 2 andalso
+                            binding_is c ``c : char`` ``#"a"``))
+
+  val _ = mf_test "a char literal the list lacks is unrepresentable, not a value"
+    (fn () =>
+      (* #"a" is absent from the one-value list: read as a value it would
+         give a model that the replay rejects *)
+      bounds_clean (refute (chars 1) ``(c : char) <> #"a"``))
+
+  val _ = mf_test "a char carrier is searched, the explicit card honoured"
+    (fn () =>
+      refute (chars 3) ``(c : char) <> #"a"``
+      |> cex_where (fn c => scope_of c chr_ty = SOME 3) andalso
+      refute (mf_wide |> upd_max_threads 1) ``(c : char) <> #"a"``
+      |> cex_where (fn c => scope_of c chr_ty = SOME 2) andalso
+      (* 77 is no neighbour of 0 within ten values, so only the exact
+         carrier, last in the window, holds the character with code 77 *)
+      refute mf_wide ``ORD (c : char) <> 77``
+      |> cex_where (fn c => found c andalso scope_of c chr_ty = SOME 256))
+
+  val _ = mf_test "a goal with a char fragment never returns no counterexample"
+    (fn () =>
+      bounds_clean (refute (chars 3) ``char_lt (CHR 1) (CHR 2)``) andalso
+      bounds_clean (refute (chars 2) ``!c : char. char_le c c``) andalso
+      (* the control: the exact carrier does support it *)
+      refute (chars 256) ``char_le (c : char) c`` == NoCounterexample)
+
+  val _ = mf_test "a char atom prints as its value, not as a name"
+    (fn () =>
+      (* codes 1 and 255 are neighbours of 0, in no literal of the goal *)
+      refute (chars 4) ``(c : char) = #"a" \/ c = #"b"``
+      |> cex_where (fn c =>
+           found c andalso
+           (case binding c ``c : char`` of
+                SOME v => List.exists (fn w => Term.aconv v w)
+                            [chr_code 1, chr_code 255]
+              | NONE => false)))
+
+  val _ = mf_test "ORD, CHR and the orders on char are read from their tables"
+    (fn () =>
+      List.all (fn (goal, var, value) =>
+        refute (chars 3) goal
+        |> cex_where (fn c => found c andalso binding_is c var value))
+        [(``ORD (c : char) <> 0``, ``c : char``, chr_code 0),
+         (``CHR (n : num) <> #"\001"``, ``n : num``, ``1n``),
+         (``char_le (c : char) (CHR 1) ==> c = CHR 1``, ``c : char``,
+          chr_code 0),
+         (``char_gt (CHR 1) (c : char) ==> c = CHR 1``, ``c : char``,
+          chr_code 0)] andalso
+      (* the list is 0, 97: CHR 1 and CHR 2 are outside it.  Read as a value
+         (the atom 97, say) CHR 1 = #"a" would give a model that the replay
+         rejects; unknown, the scope is searched clean *)
+      bounds_clean (refute (chars 2) ``CHR (n : num) <> #"a"``))
+
+  val _ = mf_test "a char is in the monotonic block with the words"
+    (fn () =>
+      let val (mono, rest) =
+        S.mono_partition_with (fn _ => false) [] [chr_ty, ``:word8``, ``:'a``]
+      in length mono = 2 andalso rest = [``:'a``] end)
 end
 
 (* ------------------------------------------------------------------- *)

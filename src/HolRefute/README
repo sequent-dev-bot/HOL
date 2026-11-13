@@ -137,18 +137,21 @@ and deadline results include each distinct reason with its rejection
 count. Successful searches print these summaries at verbosity 2;
 counterexample statistics include `problems_rejected`.
 
-Native carriers: `:char` has exactly 256 atoms; it is exact, never
-scope-searched, and turns smart binarization off (forcing it refuses by
-name).  A word of concrete width `w` is on a value-list carrier: `k`
-atoms stand for the `k` values nearest 0 and the goal's word literals of
-that type on the two-sided ring, nearest first.  `k` comes from the card
+Native carriers: a word of concrete width `w` is on a value-list
+carrier: `k` atoms stand for the `k` values nearest 0 and the goal's word
+literals of that type on the two-sided ring, nearest first.  `:char` is
+the same carrier at width 8 (values around code 0 and the goal's
+character literals), and turns smart binarization off (forcing it
+refuses by name).  `k` comes from the card
 window (1 to 10 by default), with the exact `2^w` carrier last where it
-fits 1024 atoms; an explicit `upd_card` entry is honoured as given.  A
+fits 1024 atoms (256 for `:char`); an explicit `upd_card` entry is
+honoured as given.  A
 literal outside the list is unrepresentable; an operation with a row in
-`Refute_ModelFinder_Words` is computed from its table, and one without
+`Refute_ModelFinder_Words` (`ORD`, `CHR` and the character orders
+included) is computed from its table, and one without
 (or a result outside the list) is an unknown value, named in the
 reasons.  So is `word_exp` with an exponent above 1024, never computed.
-A carrier below `2^w` atoms never supports `NoCounterexample`.
+A carrier below its exact size never supports `NoCounterexample`.
 A typedef over `:num` or `:int` also disables smart binarization.
 
 Only the equations a user wrote are harvested for a function: HOL4

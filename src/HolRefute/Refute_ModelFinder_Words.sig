@@ -1,8 +1,9 @@
 signature Refute_ModelFinder_Words =
 sig
   (* The shapes a value-level word operation's arguments and result have:
-     a word of some width, a natural number, a Boolean. *)
-  datatype shape = Word | Num | Bool
+     a word of some width, a natural number, a Boolean, a character (its
+     value is its code, below 256, and its width is 8). *)
+  datatype shape = Word | Num | Bool | Char
 
   (* One row per constant.  [sem widths arguments] is the operation on the
      arguments' values: [widths] holds the width of each word-shaped
@@ -17,6 +18,8 @@ sig
 
   val rows : row list
   val find_row : {Thy : string, Name : string} -> row option
+  (* the row of that name in any theory; names are distinct *)
+  val find_named : string -> row option
 
   (* HOL computes a power in full before reducing it, so a replay would not
      terminate on a huge exponent: above this bound [word_exp] is unknown. *)

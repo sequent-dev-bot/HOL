@@ -671,9 +671,16 @@ fun reconstruct_term (context as {scope, sel_names, ...} : context)
                    wordsSyntax.dest_word_type ty)
               end
             else if MFH.is_char_type ty then
-              (* Atom [j] denotes [CHR j], which the printer renders as the
-                 character literal. *)
-              stringSyntax.mk_chr (numSyntax.term_of_int atom)
+              (* Atom [j] of an exact carrier denotes [CHR j], which the
+                 printer renders as the character literal.
+                 Atom [j] of a fragment carrier
+                 denotes the [j]th value of its list. *)
+              stringSyntax.mk_chr
+                (numSyntax.mk_numeral (Arbnum.fromString
+                   (IntInf.toString
+                      (case MFS.word_values scope ty of
+                           SOME values => List.nth (values, atom)
+                         | NONE => IntInf.fromInt atom))))
             else
               case MFS.data_type_spec data_types ty of
                   SOME spec =>

@@ -2175,7 +2175,7 @@ fun kodkod_formula_from_nut offsets
            atoms then the result atom. *)
         | MFNT.Cst (MFNT.WordTable (name, columns), _, representation) =>
             let
-              val row = case Words.find_row {Thy = "words", Name = name} of
+              val row = case Words.find_named name of
                             SOME row => row
                           | NONE => raise MFNT.NUT
                               ("Refute_ModelFinder_Kodkod.to_r (WordTable)",

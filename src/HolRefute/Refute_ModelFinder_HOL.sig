@@ -88,7 +88,7 @@ signature Refute_ModelFinder_HOL = sig
      constr_cache : (hol_type * term list) list ref,
      (* the goal's word literals per width, and the operations
         met as unknown values *)
-     word_literals : (int * IntInf.int list) list ref,
+     word_literals : (hol_type * IntInf.int list) list ref,
      unknown_ops : string list ref}
 
   val const_key : term -> {Name : string, Thy : string}
@@ -118,6 +118,9 @@ signature Refute_ModelFinder_HOL = sig
   val is_exact_carrier_type : hol_type -> bool
   val is_char_literal : term -> bool
   val is_char_op_type : hol_type -> bool
+  (* width of a value-list carrier: a word's, 8 for char *)
+  val carrier_width : hol_type -> int option
+  val char_literal_code : term -> int option
   val order_consts : (KernelSig.kernelname * hol_type * bool) list
   val order_const_names : string list
   val word_built_in_consts : (KernelSig.kernelname * int) list
@@ -266,7 +269,7 @@ signature Refute_ModelFinder_HOL = sig
   (* value-list carriers of words *)
   val is_word_fragment : (hol_type * int) list -> hol_type -> bool
   val set_word_literals : mf_context -> term list -> unit
-  val word_literals_of : mf_context -> int -> IntInf.int list
+  val word_literals_of : mf_context -> hol_type -> IntInf.int list
   val note_unknown_op : mf_context -> string -> unit
   val is_finite_type : mf_context -> hol_type -> bool
   val eta_expand : term -> int -> term

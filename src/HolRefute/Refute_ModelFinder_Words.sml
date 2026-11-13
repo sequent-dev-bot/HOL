@@ -3,14 +3,15 @@
 Registry of the value-level operations of HOL4's wordsTheory, with each
 operation's semantics in ML integer arithmetic, and the table builder that
 turns a row into a table over a list of concrete values.  Rows say, per
-position, whether it is a word, a natural number or a Boolean; a row's
-semantics gets the widths of its word positions.
+position, whether it is a word, a natural number, a Boolean or a character
+(a word of width 8 in its code); a row's semantics gets the widths of its word
+and character positions.
 *)
 
 structure Refute_ModelFinder_Words :> Refute_ModelFinder_Words =
 struct
 
-datatype shape = Word | Num | Bool
+datatype shape = Word | Num | Bool | Char
 
 type row =
   {Thy : string, Name : string, args : shape list, res : shape,
@@ -49,7 +50,7 @@ fun signed_division unsigned_op negate_when width a b =
                         then two_comp width r else r) result
   end
 
-fun count_of_shape Word = 1 | count_of_shape _ = 0
+fun count_of_shape Word = 1 | count_of_shape Char = 1 | count_of_shape _ = 0
 
 (* [checked args res f]: the widths of the word-shaped positions and the
    argument values arrive as lists of the right length, or the caller's
@@ -71,9 +72,11 @@ fun checked args res f =
       else f (widths, values)
   end
 
-fun make name args res f =
-  {Thy = "words", Name = name, args = args, res = res,
+fun make_in thy name args res f =
+  {Thy = thy, Name = name, args = args, res = res,
    sem = checked args res f} : row
+
+fun make name args res f = make_in "words" name args res f
 
 (* Rows at one width: every word-shaped position has that width. *)
 fun w_w name f = make name [Word] Word
@@ -354,7 +357,24 @@ val rows : row list =
    make "word_exp_tailrec" [Word, Word, Word] Word
      (fn ([w, _, _, _], [b, e, a]) =>
         if e > exp_bound then NONE else SOME (wrap w (a * power_mod w b e))
-       | _ => raise Match)]
+       | _ => raise Match),
+   (* The rows of [:char], whose values are the codes below 256: the two
+      morphisms of its typedef (CHR is unspecified from 256) and its four
+      orders, which are the orders of the codes. *)
+   make_in "string" "ORD" [Char] Num (fn (_, [a]) => SOME a | _ => raise Match),
+   make_in "string" "CHR" [Num] Char
+     (fn (_, [n]) => if n < 256 then SOME n else NONE | _ => raise Match),
+   make_in "string" "char_lt" [Char, Char] Bool
+     (fn (_, [a, b]) => SOME (of_bool (a < b)) | _ => raise Match),
+   make_in "string" "char_le" [Char, Char] Bool
+     (fn (_, [a, b]) => SOME (of_bool (a <= b)) | _ => raise Match),
+   make_in "string" "char_gt" [Char, Char] Bool
+     (fn (_, [a, b]) => SOME (of_bool (a > b)) | _ => raise Match),
+   make_in "string" "char_ge" [Char, Char] Bool
+     (fn (_, [a, b]) => SOME (of_bool (a >= b)) | _ => raise Match)]
+
+fun find_named name =
+  List.find (fn (row : row) => #Name row = name) rows
 
 fun find_row {Thy, Name} =
   List.find (fn (row : row) => #Thy row = Thy andalso #Name row = Name) rows
@@ -382,7 +402,10 @@ fun build_table (row : row) (columns : column list) =
       else raise Refute_ModelFinder_Util.BAD (who,
              "expected " ^ Int.toString (length shapes) ^ " columns, got " ^
              Int.toString (length columns))
-    fun check (Word, {width, values}) =
+    fun check (Char, {width, values}) =
+          check_values who "char" (fn v => 0 <= v andalso v < modulus width)
+            values
+      | check (Word, {width, values}) =
           check_values who "word" (fn v => 0 <= v andalso v < modulus width)
             values
       | check (Num, {values, ...}) =
@@ -391,6 +414,7 @@ fun build_table (row : row) (columns : column list) =
           check_values who "Boolean" (fn v => v = 0 orelse v = 1) values
     val () = ListPair.app check (shapes, columns)
     val widths = List.mapPartial (fn (Word, {width, ...} : column) => SOME width
+                                   | (Char, {width, ...} : column) => SOME width
                                    | _ => NONE) (ListPair.zip (shapes, columns))
     val argument_values = map #values (List.take (columns, length (#args row)))
     val result_values = #values (List.last columns)
@@ -437,6 +461,7 @@ fun neighbourhood width centres count =
 fun shape_name Word = "word"
   | shape_name Num = "num"
   | shape_name Bool = "bool"
+  | shape_name Char = "char"
 
 fun listing () =
   String.concat (map (fn (row : row) =>

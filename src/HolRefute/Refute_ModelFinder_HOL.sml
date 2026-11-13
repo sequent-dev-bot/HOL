@@ -286,10 +286,10 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
      special_funs : special_fun list ref,
      wf_cache : wf_cache ref,
      constr_cache : (hol_type * term list) list ref,
-     (* The word literals of the problem by word
-        width, and the word operations that had no table row at a fragment
+     (* The word and char literals of the problem by
+        type, and the word operations that had no table row at a fragment
         carrier, which became unknown values. *)
-     word_literals : (int * IntInf.int list) list ref,
+     word_literals : (hol_type * IntInf.int list) list ref,
      unknown_ops : string list ref}
 
   (* Upstream's ground theorem hash and vestigial unrolled-predicate ref are
@@ -789,6 +789,19 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
     let val (domains, range) = boolSyntax.strip_fun ty
     in List.exists is_char_type (domains @ [range]) end
 
+  (* The width of a value-list carrier: a word
+     type's own, and 8 for [:char], whose values are the codes below 256. *)
+  fun carrier_width ty =
+    case word_dimension ty of
+        SOME width => SOME width
+      | NONE => if is_char_type ty then SOME 8 else NONE
+
+  (* The value a char literal stands for. *)
+  fun char_literal_code term =
+    if is_char_literal term then
+      Lib.total numSyntax.int_of_term (#2 (Term.dest_comb term))
+    else NONE
+
   (* The built-in orders on [num] and [int], with their carrier and
      whether they are strict. *)
   val order_consts =
@@ -864,7 +877,8 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
     List.mapPartial (fn (row : Refute_ModelFinder_Words.row) =>
       let val key = {Thy = #Thy row, Name = #Name row}
       in
-        if List.exists (fn (other, _) => same_key key other)
+        if #Thy row <> "words" orelse
+           List.exists (fn (other, _) => same_key key other)
              word_tier_consts then NONE
         else SOME (key, 0)
       end) Refute_ModelFinder_Words.rows
@@ -6069,7 +6083,10 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
   fun card_of_type assigns ty =
     if is_boolean_type ty then 2
     else if is_itself_type ty then 1
-    else if is_char_type ty then char_card
+    (* [:char] is on a value-list carrier like a
+       word: its assigned card, which is below 256 unless it is exact. *)
+    else if is_char_type ty then
+      Option.getOpt (assignment_lookup assigns ty, char_card)
     else
       case Lib.total Type.dom_rng ty of
           SOME (domain, range) =>
@@ -6118,13 +6135,15 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
      (card = 2^width, atom [j] being [n2w j]) and a fragment below that.  A
      width above 30 never has an exact card in an int-sized universe. *)
   fun is_word_fragment assigns ty =
-    case word_dimension ty of
+    case carrier_width ty of
         NONE => false
       | SOME width =>
           width > 30 orelse
           card_of_type assigns ty <
             Refute_ModelFinder_Util.reasonable_power 2 width
 
+  (* The word and char literals of the terms, by type: the centres of a
+     carrier's value list. *)
   fun word_literal_values terms =
     let
       fun literal term =
@@ -6132,9 +6151,11 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
             SOME (value, _) =>
               (case (word_dimension (Term.type_of term),
                      IntInf.fromString (Arbnum.toString value)) of
-                   (SOME width, SOME int) => SOME (width, int)
+                   (SOME _, SOME int) => SOME (Term.type_of term, int)
                  | _ => NONE)
-          | NONE => NONE
+          | NONE =>
+              Option.map (fn code => (Term.type_of term, IntInf.fromInt code))
+                (char_literal_code term)
       fun walk term found =
         case literal term of
             SOME entry => entry :: found
@@ -6146,23 +6167,25 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
                           SOME (_, body) => walk body found
                         | NONE => found))
       val entries = List.foldl (fn (term, found) => walk term found) [] terms
-      fun add ((width, value), table) =
-        case List.partition (fn (w, _) => w = width) table of
+      fun add ((ty, value), table) =
+        case List.partition (fn (other, _) => Type.compare (other, ty) = EQUAL)
+                table of
             ([(_, values)], rest) =>
               if List.exists (fn v => v = value) values then table
-              else (width, value :: values) :: rest
-          | _ => (width, [value]) :: table
+              else (ty, value :: values) :: rest
+          | _ => (ty, [value]) :: table
     in
-      map (fn (width, values) =>
-             (width, Listsort.sort IntInf.compare values))
+      map (fn (ty, values) =>
+             (ty, Listsort.sort IntInf.compare values))
         (List.foldl add [] entries)
     end
 
   fun set_word_literals ({word_literals, ...} : mf_context) terms =
     word_literals := word_literal_values terms
 
-  fun word_literals_of ({word_literals, ...} : mf_context) width =
-    case List.find (fn (w, _) => w = width) (!word_literals) of
+  fun word_literals_of ({word_literals, ...} : mf_context) ty =
+    case List.find (fn (other, _) => Type.compare (other, ty) = EQUAL)
+           (!word_literals) of
         SOME (_, values) => values
       | NONE => []
 
