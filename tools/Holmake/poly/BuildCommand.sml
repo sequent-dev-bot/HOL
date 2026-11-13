@@ -476,6 +476,10 @@ fun make_build_command (buildinfo : HM_Cline.t buildinfo_t) = let
                  peeknode g)
                 nodes
             end
+            (* A cached theory cannot supply auxiliary script outputs. *)
+            val cache_dir =
+                if List.all HM_CacheFetch.is_theory_output cache_filenames
+                then cache_dir else NONE
             fun write_cache () =
                 case cache_dir of
                     SOME url =>

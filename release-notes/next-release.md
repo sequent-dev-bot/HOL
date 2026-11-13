@@ -132,6 +132,9 @@ New features
 Bugs fixed
 ----------
 
+-   `Holmake` no longer restores theory-only cache entries for scripts
+    with declared auxiliary outputs, so those outputs are regenerated.
+
 -   Omega's model reconstruction no longer fails when eliminating a variable
     leaves a single constrained variable and another unconstrained variable.
 

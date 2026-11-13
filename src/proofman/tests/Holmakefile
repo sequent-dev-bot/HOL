@@ -8,8 +8,11 @@ all: selftest.exe $(DEFAULT_TARGETS)
 selftest.exe: selftest.uo gh725
 	$(HOLMOSMLC) -o $@ $<
 
-gh725: gh725Theory.dat gh725_expected.html $(HOLDIR)/tools/cmp/cmp.exe
+gh725: gh725Theory.dat gh725Theory.html gh725_expected.html \
+       $(HOLDIR)/tools/cmp/cmp.exe
 	$(protect $(HOLDIR)/tools/cmp/cmp.exe) gh725_expected.html gh725Theory.html
+
+gh725Theory.html: *gh725Script.sml
 
 minstate-selftest.exe: minstate-selftest.uo $(dprot $(SIGOBJ)/testutils.uo)
 	$(HOLMOSMLC) -o $@ $<

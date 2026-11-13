@@ -240,11 +240,62 @@ val _ =
     then OK()
     else die ("Cross-directory cache hit broke dependent build: " ^ out9)
 
+(* A script can acquire a declared coproduct after its theory-only
+   outputs have already been cached. The matching old entry cannot
+   replace a script run that must also produce that coproduct. *)
+val _ = HOLFileSys.chDir sibling
+val _ = write_file "sideScript.sml"
+    "Theory side[bare]\nAncestors bool\n\
+    \Theorem side_thm = TRUTH\n\
+    \val out = TextIO.openOut \"side.txt\"\n\
+    \val _ = TextIO.output (out, \"script output\\n\")\n\
+    \val _ = TextIO.closeOut out\n"
+val _ = write_file "Holmakefile" "EXTRA_CLEANS = side.txt\n"
+val cache_side = fresh_cache ()
+val side_args = ["--use-cache", "--cache-dir", cache_side]
+val _ = tprint "Warm a theory-only cache before requesting its coproduct"
+val (res10, out10) = run_holmake_out (side_args @ ["sideTheory"])
+val _ =
+    if OS.Process.isSuccess res10 andalso
+       read_all "side.txt" = "script output\n"
+    then OK()
+    else die ("Initial coproduct script build failed: " ^ out10)
+val _ = run_holmake ["cleanAll"]
+val (res11, out11) = run_holmake_out (side_args @ ["sideTheory"])
+val _ = tprint "Theory-only cache hit does not contain the auxiliary output"
+val _ =
+    if OS.Process.isSuccess res11 andalso
+       String.isSubstring "CACHED" out11 andalso
+       not (OS.FileSys.access ("side.txt", []))
+    then OK()
+    else die ("Expected a theory-only cache hit: " ^ out11)
+val _ = write_file "Holmakefile"
+    "side.txt: *sideScript.sml\nEXTRA_CLEANS = side.txt\n"
+
+fun check_coproduct args =
+    let
+      val _ = run_holmake ["cleanAll"]
+      val _ = tprint ("Declared coproduct survives a warm cache: " ^
+                      String.concatWith " " args)
+      val (res, out) = run_holmake_out (side_args @ args @ ["side.txt"])
+    in
+      if OS.Process.isSuccess res andalso
+         read_all "side.txt" = "script output\n" andalso
+         not (String.isSubstring "CACHED" out)
+      then OK()
+      else die ("Cached build omitted a declared coproduct: " ^ out)
+    end
+
+val _ = List.app check_coproduct
+                [["-j1"], ["-j2"], ["--no-cache"]]
+val _ = HOLFileSys.chDir ".."
+val _ = HOLFileSys.chDir "subdir"
+
 (* ------------------------------------------------------------ *)
 (* Cleanup                                                       *)
 (* ------------------------------------------------------------ *)
 val _ = run_holmake ["cleanAll"]
 val _ = List.app (fn c => rm_rf c handle _ => ())
         [cache_populates, cache_corrupt, cache_nodata, cache_partial,
-         cache_empty, cache_nocache, cache_dep, cache_crossdir]
+         cache_empty, cache_nocache, cache_dep, cache_crossdir, cache_side]
 val _ = rm_rf sibling handle _ => ()
