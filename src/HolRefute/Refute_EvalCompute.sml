@@ -207,14 +207,28 @@ structure Refute_EvalCompute :> Refute_EvalCompute = struct
 
   exception EnumInvalid = Refute_EvalEnum.Invalid
 
+  (* A generator list holds every value of its type up to the entry's size,
+     as one HOL term the enumerator is then evaluated on, so its length is
+     the search's memory. Past this many values the entry gives up instead
+     of exhausting the heap: the count multiplies with each size, so one
+     size can go from a few megabytes to more than the whole heap. *)
+  val exhaustive_term_cap = 100000
+
   fun exhaustive_terms ty size =
     case Refute_Gen.enumerate ty of
         SOME values => values
       | NONE =>
           let
             val values = ref []
-            val _ = exhaustive_values (Refute_Gen.spec_of ty) size
-              (fn value => (values := value :: !values; Continue))
+            val count = ref 0
+            fun add value =
+              if !count >= exhaustive_term_cap then
+                raise Fail ("generator for " ^ Parse.type_to_string ty ^
+                  " at size " ^ Int.toString size ^ " exceeds " ^
+                  Int.toString exhaustive_term_cap ^ " values")
+              else (count := !count + 1; values := value :: !values;
+                    Continue)
+            val _ = exhaustive_values (Refute_Gen.spec_of ty) size add
           in
             rev (!values)
           end
@@ -424,11 +438,18 @@ structure Refute_EvalCompute :> Refute_EvalCompute = struct
   fun exhaustive_compile (config : Refute_Core.config) plans programs =
     let
       val last_stats = ref []
+      (* Only the current size's generator lists are kept: an earlier size's
+         would stay live while a larger one is built. [overflow] is the
+         first size whose lists passed [exhaustive_term_cap]; every larger
+         size holds those values too, so it gives up at once with the same
+         reason. *)
       val enum_cache =
-        ref ([] :
-          (int * (Refute_EvalEnum.definition * term list)) list)
+        ref (NONE :
+          (int * (Refute_EvalEnum.definition * term list)) option)
+      val overflow = ref (NONE : (int * string) option)
       val active : Refute_EvalEnum.definition Refute_EvalEnum.held_bracket =
-        Refute_EvalEnum.held_bracket (fn () => enum_cache := [])
+        Refute_EvalEnum.held_bracket (fn () =>
+          (enum_cache := NONE; overflow := NONE))
       fun close () = Refute_EvalEnum.close_held_bracket active
 
       fun start () = Refute_EvalEnum.start_held_bracket active (fn () =>
@@ -436,23 +457,34 @@ structure Refute_EvalCompute :> Refute_EvalCompute = struct
           {prefix = Refute_EvalEnum.fresh_prefix "refute_compute_enum_",
            programs = programs, after_define = fn _ => ()})
 
+      and build_generators size =
+        let
+          val _ = enum_cache := NONE
+          val data = start ()
+          val generators = map (fn ty =>
+            listSyntax.mk_list (exhaustive_terms ty size, ty))
+            (#generator_types data)
+            handle Fail reason =>
+              (overflow := SOME (size, reason); raise Fail reason)
+          val cached = (data, generators)
+          val _ = enum_cache := SOME (size, cached)
+        in
+          cached
+        end
+
       fun enum_values size program inputs =
         let
+          val _ =
+            case !overflow of
+                SOME (first, reason) =>
+                  if size >= first then raise Fail reason else ()
+              | NONE => ()
           val (data, generators) =
-            case List.find (fn (cached_size, _) => cached_size = size)
-                (!enum_cache) of
-                SOME (_, cached) => cached
-              | NONE =>
-                  let
-                    val data = start ()
-                    val generators = map (fn ty =>
-                      listSyntax.mk_list (exhaustive_terms ty size, ty))
-                      (#generator_types data)
-                    val cached = (data, generators)
-                    val _ = enum_cache := (size, cached) :: !enum_cache
-                  in
-                    cached
-                  end
+            case !enum_cache of
+                SOME (cached_size, cached) =>
+                  if cached_size = size then cached
+                  else build_generators size
+              | NONE => build_generators size
           val enumerator = Refute_EvalEnum.enumerator_for
             (#enumerators data) (#relation program) (#mode program)
           val application = Refute_EvalEnum.application enumerator

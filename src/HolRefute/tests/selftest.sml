@@ -1806,6 +1806,28 @@ val _ = test "smart_generators false reports the gate" (fn () =>
     String.isSubstring "QC backends excluded: not executable" text
   end)
 
+(* A generator list past its cap: 2^17 values of [:cap_wide] at size 2. The
+   search stops at the last complete size instead of growing the list until
+   the heap is exhausted, or spinning on the failing size until the
+   deadline. *)
+val _ = Datatype.Datatype
+  `cap_wide = CapWide num num num num num num num num num num num num num
+                      num num num num`
+val (cap_any_rules, _, _) = IndDefLib.Hol_reln `!w:cap_wide. cap_any [w]`
+
+val _ = test "an oversized generator list gives up at its size" (fn () =>
+  let
+    val start = Time.now ()
+    val outcome =
+      refute (exhaustive |> upd_substrate Compute |> upd_timeout 60.0)
+             ``cap_any (l : cap_wide list) ==> LENGTH l = 1``
+  in
+    unknown_with "generator for :cap_wide at size 2 exceeds 100000 values"
+      outcome andalso
+    unknown_with "exhaustive: searched up to size 1" outcome andalso
+    Time.toReal (Time.- (Time.now (), start)) < 30.0
+  end)
+
 val _ = test "a Horn premise is enumerated" (fn () =>
   let
     val goal = ``ALL_DISTINCT (xs : bool list) ==> LENGTH xs < 1``

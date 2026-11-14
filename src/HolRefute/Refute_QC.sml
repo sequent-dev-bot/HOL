@@ -1006,6 +1006,14 @@ structure Refute_QC :> Refute_QC = struct
         SOME (entry, AdaptiveSchedule ([],
           insert_entry (card, size + 1) frontier))
 
+  (* The schedule without [card]'s entries. *)
+  fun drop_card card (FixedSchedule entries) =
+        FixedSchedule (List.filter (fn (c, _) => c <> card) entries)
+    | drop_card card (AdaptiveSchedule (entries, frontier)) =
+        AdaptiveSchedule
+          (List.filter (fn (c, _) => c <> card) entries,
+           List.filter (fn (c, _) => c <> card) frontier)
+
   fun case_tree_incomplete Refute_Eval.CaseLeaf = false
     | case_tree_incomplete
         (Refute_Eval.CaseUniversal
@@ -1719,6 +1727,7 @@ structure Refute_QC :> Refute_QC = struct
               val discarded = ref 0
               val gave_up = ref []
               val frontier = ref (NONE : (int * int) option)
+              val entry_gave_up = ref false
               val counters = new_counter_totals ()
               fun instance_for card = List.nth (instances, card - 1)
               val stats_for = stats_for_entry (#decorate counters)
@@ -1745,7 +1754,8 @@ structure Refute_QC :> Refute_QC = struct
                       Exhausted {complete = entry_complete} =>
                         complete := (!complete andalso entry_complete)
                     | GaveUp reason =>
-                        (complete := false; add_reason reason gave_up)
+                        (complete := false; entry_gave_up := true;
+                         add_reason reason gave_up)
                     | CexFound
                         {env, ground_env, case_tree, genuine, ...} =>
                         let
@@ -1794,6 +1804,7 @@ structure Refute_QC :> Refute_QC = struct
                 end
               fun run_entry entry =
                 let
+                  val _ = entry_gave_up := false
                   val started = Time.now ()
                   val total = bounded_size (#iterations (#qc config))
                   val target = Int.max (1, #max_counterexamples config)
@@ -1824,7 +1835,9 @@ structure Refute_QC :> Refute_QC = struct
                   val _ = say_schedule_entry (strategy_name strategy)
                     substrate entry (elapsed_msec started)
                 in
-                  frontier := SOME entry
+                  (* An entry that gave up is not searched, so it is not the
+                     frontier. *)
+                  if !entry_gave_up then () else frontier := SOME entry
                 end
               (* Only running out of schedule entries leaves the search
                  exhaustive.  Every early stop -- an expired deadline
@@ -1839,7 +1852,18 @@ structure Refute_QC :> Refute_QC = struct
                            Int.max (1, #max_counterexamples config) orelse
                          Refute_Core.search_expired config
                       then complete := false
-                      else (run_entry entry; search rest)
+                      else
+                        (run_entry entry;
+                         (* An exhaustive entry that gave up (an evaluator
+                            failure, a generator past its cap) would give up
+                            again at the larger sizes of its card, whose
+                            values include its own, so the card leaves the
+                            schedule rather than iterative deepening
+                            retrying it until the deadline. Random draws
+                            give up per draw and keep their schedule. *)
+                         if !entry_gave_up andalso not (is_random strategy)
+                         then search (drop_card (#1 entry) rest)
+                         else search rest)
               val _ = search cursor
               (* The frontier names the diagonally largest completed
                  schedule entry.  Type-variable cardinality only reaches
