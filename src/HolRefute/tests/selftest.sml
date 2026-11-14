@@ -2536,9 +2536,12 @@ fun iterator_card (c : counterexample) =
 val mf_num2 = mf |> upd_card [(SOME ``:num``, [2]), (NONE, [1])]
 val mf_num3 = mf |> upd_card [(SOME ``:num``, [3]), (NONE, [1])]
 
+(* The suite's own budget, not a tight one: the refusal precedes any solver
+   work, so a short budget only adds a way for a host stall to replace the
+   checked reason with a timeout. *)
 val _ = test "unregistered typedefs are reported without kodkodi" (fn () =>
   List.all (fn goal =>
-    case refute (mf |> upd_timeout 2.0) goal of
+    case refute mf goal of
         Unknown [reason] =>
           String.isSuffix
             "unregistered typedef zoo_unharvested: register with \
