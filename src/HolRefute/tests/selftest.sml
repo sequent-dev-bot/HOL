@@ -831,7 +831,8 @@ val _ = test "show_config prints every field" (fn () =>
       "mf.atoms = [NONE => []]", "mf.format = [NONE => [1]]",
       "mf.show_types = false", "mf.show_skolems = true",
       "mf.show_consts = false", "mf.debug = false", "mf.overlord = false",
-      "mf.max_threads = 0", "mf.tac_timeout = 0.5", "mf.specialize = true",
+      "mf.max_threads = 0", "mf.max_file_size = 1024",
+      "mf.tac_timeout = 0.5", "mf.specialize = true",
       "mf.box = [NONE => NONE]", "mf.binary_ints = NONE",
       "mf.bits = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]",
       "mf.star_linear_preds = true",
@@ -873,6 +874,10 @@ val _ = test "malformed updates are rejected with a message" (fn () =>
        "wf: row key must be a constant or variable; got: ZooLeaf 0"),
       (fn () => upd_iter [(leaf, [1])] default_config,
        "iter: row key must be a constant or variable; got: ZooLeaf 0"),
+      (fn () => upd_max_file_size 0 default_config,
+       "max_file_size: must be at least 1 MiB; got 0"),
+      (fn () => upd_max_file_size ~1 default_config,
+       "max_file_size: must be at least 1 MiB; got ~1"),
       (fn () => upd_max_genuine 0 default_config,
        "max_genuine: must be at least 1"),
       (fn () => upd_max_potential ~1 default_config,
@@ -5649,6 +5654,226 @@ in
       bounds_clean (refute (mf |> upd_binary_ints (SOME true) |> upd_bits [3])
                            ``100 < (n : num) ==> n <> 2``))
 end
+
+(* ------------------------------------------------------------------- *)
+(* Solver sessions: the search loop sees the   *)
+(* solver only through submit / events / cancel / close.                 *)
+(* ------------------------------------------------------------------- *)
+
+val _ = section "solver sessions"
+
+structure KK = Refute_Forl
+
+(* A scripted solver: it hands out [events] one per [next], then calls
+   [after] for every further [next] (which may block until the request's
+   deadline, as a solver stuck on a hard problem does).  [calls] records
+   what the search did to the session, in order. *)
+fun scripted calls events after (req : KK.request) : KK.session =
+  let
+    val pending = ref (events req)
+    val _ = calls := !calls @ ["submit " ^ Int.toString (length (#problems req))]
+    fun note text = calls := !calls @ [text]
+  in
+    {next = fn () =>
+       case !pending of
+           event :: rest => (pending := rest; note "next"; event)
+         | [] => (note "next"; after req),
+     cancel = fn () => note "cancel",
+     close = fn () => (note "close"; 0)}
+  end
+
+fun until_deadline (req : KK.request) =
+  let
+    fun wait () =
+      if Time.< (Time.now (), #deadline req) then
+        (OS.Process.sleep (Time.fromMilliseconds 20); wait ())
+      else ()
+  in
+    wait ();
+    KK.Ended {ending = KK.Cut, message = "", errors = []}
+  end
+
+val true_goal = ``(n : num) < 3 ==> n <> 5``
+val model_goal = ``(n : num) <> 2``
+
+(* The session of a real solver, with its events and the search's calls
+   to it logged. *)
+fun spied log (req : KK.request) : KK.session =
+  let
+    val {next, cancel, close} = KK.kodkodi_session req
+    fun note text = log := !log @ [text]
+    val _ = note ("submit " ^ Int.toString (length (#problems req)))
+  in
+    {next = fn () =>
+       let val event = next ()
+       in
+         note (case event of
+                   KK.Sat (i, _) => "sat " ^ Int.toString i
+                 | KK.Unsat i => "unsat " ^ Int.toString i
+                 | KK.Ended _ => "ended");
+         event
+       end,
+     cancel = fn () => (note "cancel"; cancel ()),
+     close = fn () => (note "close"; close ())}
+  end
+
+val _ = mf_test "a model event stops the search and cancels the session"
+  (fn () =>
+    let
+      val log = ref []
+      val result = KK.with_backend (spied log) (fn () =>
+        refute mf model_goal)
+      val tail = List.rev (List.take (List.rev (!log), 3))
+    in
+      result |> cex_where (fn c => kodkod_genuine c andalso
+        binding_is c ``n : num`` ``2n``) andalso
+      (case tail of
+           [sat, "cancel", "close"] => String.isPrefix "sat " sat
+         | _ => false) andalso
+      length (List.filter (fn call => call = "close") (!log)) = 1
+    end)
+
+val _ = mf_test "unsat events complete their scopes"
+  (fn () =>
+    let
+      val log = ref []
+      val result = KK.with_backend (spied log) (fn () =>
+        refute mf true_goal)
+    in
+      bounds_clean result andalso
+      progress_has ["scopes completed 10 of 10 emitted",
+                    "problems offered 10, finished 10",
+                    "finished but unused 0", "batches starved 0"] result andalso
+      not (List.exists (fn call => call = "cancel") (!log)) andalso
+      (case List.filter (fn call => String.isPrefix "unsat " call) (!log) of
+           unsats => length unsats = 10)
+    end)
+
+val _ = mf_test "a finished problem is used before the deadline"
+  (fn () =>
+    let
+      val calls = ref []
+      val result = KK.with_backend
+        (scripted calls (fn _ => [KK.Unsat 0]) until_deadline) (fn () =>
+        refute (mf |> upd_timeout 4.0) true_goal)
+    in
+      unknown_with "timed out" result andalso
+      progress_has ["scopes completed 1 of", "problems offered 8, finished 1",
+                    "finished but unused 0"] result andalso
+      (* the first result is delivered by the first [next]; the second
+         blocks until the deadline, after which the session is cancelled,
+         drained and closed *)
+      List.take (!calls, 3) = ["submit 8", "next", "next"] andalso
+      List.exists (fn call => call = "cancel") (!calls) andalso
+      List.last (!calls) = "close"
+    end)
+
+val _ = mf_test "a batch where a stuck problem starves the rest is reported"
+  (fn () =>
+    let
+      val calls = ref []
+      val result = KK.with_backend
+        (scripted calls (fn _ => [KK.Unsat 0]) until_deadline) (fn () =>
+        refute (mf |> upd_timeout 4.0) true_goal)
+    in
+      (* eight problems, one finished, one thread: the other six never
+         started *)
+      progress_has ["batches starved 1 (problems never started 6)"] result
+    end)
+
+val _ = mf_test "an unnumbered solver error is counted and tied to the problems"
+  (fn () =>
+    let
+      val calls = ref []
+      val ended = KK.Ended {ending = KK.Finished, message = "",
+                            errors = [("boom", 2)]}
+      val submits = ref 0
+      (* the first batch ends with the error, later ones finish cleanly *)
+      fun events (req : KK.request) =
+        (submits := !submits + 1;
+         if !submits = 1 then [KK.Unsat 0, ended]
+         else List.tabulate (length (#problems req), KK.Unsat) @
+              [KK.Ended {ending = KK.Finished, message = "", errors = []}])
+      val result = KK.with_backend (scripted calls events (fn _ => ended))
+        (fn () => refute mf true_goal)
+    in
+      is_unknown result andalso
+      unknown_with "solver error (2 times): boom" result andalso
+      unknown_with "7 problems ended with no result" result andalso
+      progress_has ["solver errors 2"] result andalso
+      not (bounds_clean result)
+    end)
+
+(* A model the solver finished just before the deadline: its replay has no
+   time left, so it is kept as Genuine with no certificate.  It must not be
+   replayed up to the call's own timer, which fires at the deadline and
+   would lose it. *)
+val _ = mf_test "a model finished at the deadline is kept, not lost"
+  (fn () =>
+    let
+      val captured = ref NONE
+      fun capture (req : KK.request) : KK.session =
+        let
+          val {next, cancel, close} = KK.kodkodi_session req
+          fun next' () =
+            let val event = next ()
+            in
+              (case (event, !captured) of
+                   (KK.Sat _, NONE) => captured := SOME event
+                 | _ => ());
+              event
+            end
+        in {next = next', cancel = cancel, close = close} end
+      val first = KK.with_backend capture (fn () =>
+        refute (mf |> upd_timeout 4.0) model_goal)
+      fun late event (req : KK.request) : KK.session =
+        let
+          val delivered = ref false
+          fun until_just_before () =
+            if Time.< (Time.now (),
+                       Time.- (#deadline req, Time.fromMilliseconds 100))
+            then (OS.Process.sleep (Time.fromMilliseconds 10);
+                  until_just_before ())
+            else ()
+        in
+          {next = fn () =>
+             if !delivered then until_deadline req
+             else (until_just_before (); delivered := true; event),
+           cancel = fn () => (),
+           close = fn () => 0}
+        end
+    in
+      cex_where (fn c => kodkod_genuine c andalso
+                         binding_is c ``n : num`` ``2n``) first andalso
+      (case !captured of
+           NONE => false
+         | SOME event =>
+             let
+               val result = KK.with_backend (late event) (fn () =>
+                 refute (mf |> upd_timeout 4.0) model_goal)
+             in
+               result |> cex_where (fn c =>
+                 kodkod_genuine c andalso uncertified c andalso
+                 binding_is c ``n : num`` ``2n``)
+             end)
+    end)
+
+val _ = mf_test "a fake session sees submit, events and close in order"
+  (fn () =>
+    let
+      val calls = ref []
+      fun events (req : KK.request) =
+        List.tabulate (length (#problems req), KK.Unsat) @
+        [KK.Ended {ending = KK.Finished, message = "", errors = []}]
+      val result = KK.with_backend (scripted calls events until_deadline)
+        (fn () => refute mf true_goal)
+    in
+      bounds_clean result andalso
+      hd (!calls) = "submit 8" andalso
+      List.exists (fn call => call = "submit 2") (!calls) andalso
+      List.last (!calls) = "close" andalso
+      not (List.exists (fn call => call = "cancel") (!calls))
+    end)
 
 (* ------------------------------------------------------------------- *)
 (* Potential counterexamples and retries.  Registers a restricted       *)

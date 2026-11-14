@@ -927,9 +927,8 @@ structure Refute_Forl :> Refute_Forl = struct
   val outcome_marker = "---OUTCOME---\n"
   val instance_marker = "---INSTANCE---\n"
 
-  (* Solver output is unbounded (the [ulimit -f] cap below is 16 MB) and
-     is not ours to quote at length.  A diagnostic that embeds any of it
-     shows an excerpt only. *)
+  (* Solver output is not ours to quote at length. A diagnostic that
+     embeds any of it shows an excerpt only. *)
   val max_quoted_output = 80
 
   fun quote_output text =
@@ -956,10 +955,12 @@ structure Refute_Forl :> Refute_Forl = struct
       else Substring.string text
     end
 
-  fun read_next_instance input =
+  fun read_next_instance input_truncated input =
     let val section = #2 (Substring.position instance_marker input)
     in
-      if Substring.isEmpty section then
+      if Substring.isEmpty section andalso input_truncated then
+        raise Truncated
+      else if Substring.isEmpty section then
         raise SYNTAX
           ("Refute_Forl.read_next_instance",
            "expected \"INSTANCE\" marker")
@@ -967,14 +968,20 @@ structure Refute_Forl :> Refute_Forl = struct
         extract_instance (read_section_body instance_marker section)
     end
 
-  fun read_next_outcomes index (input, sat, unsat, truncated) =
+  (* One ordered list of the results read so far
+     (newest first), instead of separate satisfiable and unsatisfiable
+     lists, so that a session can deliver them in the order Kodkodi
+     printed them. *)
+  datatype result = Found of int * raw_bound list | Refuted of int
+
+  fun read_next_outcomes input_truncated index (input, results, truncated) =
     let
       val (prefix, section) = Substring.position outcome_marker input
       val next_problem = #2 (Substring.position problem_marker prefix)
     in
       if Substring.isEmpty section orelse
          not (Substring.isEmpty next_problem) then
-        (input, sat, unsat, truncated)
+        (input, results, truncated)
       else
         let
           val outcome = read_section_body outcome_marker section
@@ -982,18 +989,23 @@ structure Refute_Forl :> Refute_Forl = struct
         in
           if outcome = "UNSATISFIABLE" orelse
              outcome = "TRIVIALLY_UNSATISFIABLE" then
-            read_next_outcomes index (rest, sat, index :: unsat, truncated)
+            read_next_outcomes input_truncated index
+              (rest, Refuted index :: results, truncated)
           else if outcome = "SATISFIABLE" orelse
                   outcome = "TRIVIALLY_SATISFIABLE" then
             let
               (* An instance belongs to this problem only.  Do not let a
                  missing marker consume the next problem's model. *)
-              val this_problem =
-                #1 (Substring.position problem_marker section)
+              val (this_problem, next_problem) =
+                Substring.position problem_marker section
+              val instance_truncated =
+                input_truncated andalso Substring.isEmpty next_problem
             in
-              read_next_outcomes index
-                (rest, (index, read_next_instance this_problem) :: sat,
-                 unsat, truncated)
+              read_next_outcomes input_truncated index
+                (rest,
+                 Found (index,
+                  read_next_instance instance_truncated this_problem) ::
+                 results, truncated)
             end
           else
             raise SYNTAX
@@ -1002,14 +1014,14 @@ structure Refute_Forl :> Refute_Forl = struct
         end
         (* Nothing legible follows a cut section, so stop on an empty
            remainder and let the caller's exit status settle the run. *)
-        handle Truncated => (Substring.full "", sat, unsat, true)
+        handle Truncated => (Substring.full "", results, true)
     end
 
-  fun read_next_problems (input, sat, unsat, truncated) =
+  fun read_next_problems input_truncated (input, results, truncated) =
     let val section = #2 (Substring.position problem_marker input)
     in
       if Substring.isEmpty section then
-        (sat, unsat, truncated)
+        (results, truncated)
       else
         let
           val after_marker =
@@ -1020,9 +1032,9 @@ structure Refute_Forl :> Refute_Forl = struct
         in
           case Int.fromString number of
               SOME one_based =>
-                read_next_problems
-                  (read_next_outcomes (one_based - 1)
-                    (after_marker, sat, unsat, truncated))
+                read_next_problems input_truncated
+                  (read_next_outcomes input_truncated (one_based - 1)
+                    (after_marker, results, truncated))
             | NONE =>
                 (* No delimiter after the number means the header itself
                    was cut short, not that it is ill-formed. *)
@@ -1030,15 +1042,17 @@ structure Refute_Forl :> Refute_Forl = struct
                   raise SYNTAX
                     ("Refute_Forl.read_next_problems",
                      "expected number after \"PROBLEM\"")
-                else (sat, unsat, true)
+                else (results, true)
         end
     end
 
-  fun parse_output text =
-    let val (sat, unsat, truncated) =
-      read_next_problems (Substring.full text, [], [], false)
+  (* The results of the transcript in the order printed, and whether it
+     stops mid-section. *)
+  fun parse_output input_truncated text =
+    let val (results, truncated) =
+      read_next_problems input_truncated (Substring.full text, [], false)
     in
-      (rev sat, rev unsat, truncated)
+      (rev results, truncated)
     end
 
   fun trim_line text =
@@ -1302,13 +1316,29 @@ structure Refute_Forl :> Refute_Forl = struct
       Portable.finally close work ()
     end
 
-  fun read_all path =
+  val max_captured_output_bytes = 16 * 1024 * 1024
+
+  fun read_output path =
     let
       val stream = TextIO.openIn path
       fun close () =
         TextIO.closeIn stream handle Interrupt => raise Interrupt | _ => ()
     in
-      Portable.finally close (fn () => TextIO.inputAll stream) ()
+      Portable.finally close (fn () =>
+        let
+          fun read remaining chunks =
+            if remaining = 0 then
+              (String.concat (rev chunks),
+               Option.isSome (TextIO.input1 stream))
+            else
+              let val chunk = TextIO.inputN (stream, Int.min (65536, remaining))
+              in
+                if chunk = "" then (String.concat (rev chunks), false)
+                else read (remaining - String.size chunk) (chunk :: chunks)
+              end
+        in
+          read max_captured_output_bytes []
+        end) ()
     end
 
   fun remove path = OS.FileSys.remove path handle OS.SysErr _ => ()
@@ -1322,13 +1352,19 @@ structure Refute_Forl :> Refute_Forl = struct
       | Posix.Process.W_STOPPED signal =>
           128 + SysWord.toInt (Posix.Signal.toWord signal)
 
-  fun run_child command =
-    Thread_Attributes.uninterruptible (fn restore_interrupts => fn () =>
+  val fudge_milliseconds = 250
+
+  (* [spawn] replaces upstream's blocking
+     [run_child]: it returns the running process at once and the launcher's
+     exit status goes to a file.  The launcher and all of its descendants
+     run in a fresh session.  The supervising shell terminates that process
+     group before it exits, even if a wrapper itself finishes normally, so
+     it cannot orphan its JVM or SAT child.  It writes the launcher's exit
+     status to [code_path] as soon as it has it, so the caller can poll
+     without blocking on the process. *)
+  fun spawn command code_path =
+    Thread_Attributes.uninterruptible (fn _ => fn () =>
       let
-        (* Put the launcher and all of its descendants in a fresh session.
-           The supervising shell terminates that process group before it
-           exits, even if a wrapper itself finishes normally, so it cannot
-           orphan its JVM or SAT child. *)
         val setsid = valOf (setsid_executable ())
         val sleep = valOf (sleep_executable ())
         val supervised =
@@ -1347,36 +1383,83 @@ structure Refute_Forl :> Refute_Forl = struct
           " & child=$!; trap 'terminate' TERM INT; " ^
           "if [ -n \"$cancelled\" ]; then terminate; fi; " ^
           "wait \"$child\"; status=$?; " ^
+          "printf '%s\\n' \"$status\" > " ^ shell_quote code_path ^ "; " ^
           "if kill -TERM -$child 2>/dev/null; then " ^
           "(\"$timer\" 1; kill -KILL -$child 2>/dev/null) & reaper=$!; " ^
           "wait \"$reaper\" 2>/dev/null; fi; exit \"$status\""
-        val process = Unix.execute ("/bin/sh", ["-c", supervised])
-        val reaped = ref false
-        fun reap () =
-          let val status = Unix.reap process
-          in reaped := true; status end
-        fun terminate () =
-          if !reaped then ()
-          else
-            ((Unix.kill (process, Posix.Signal.term) handle _ => ());
-             (ignore (reap ()) handle _ => ()))
-        fun wait () = exit_code (reap ())
       in
-        restore_interrupts wait ()
-          handle error => (terminate (); Exn.reraise error)
+        Unix.execute ("/bin/sh", ["-c", supervised])
       end) ()
 
-  (* The solver runs through a shell, so place a kernel-enforced output cap
-     on its stdout and stderr before it starts.  This bounds both temporary
-     storage and the later [TextIO.inputAll] parse.  POSIX [ulimit -f] is in
-     512-byte blocks. *)
-  val max_captured_output_bytes = 16 * 1024 * 1024
-  val max_captured_output_blocks = max_captured_output_bytes div 512
+  (* A solver session replaces the blocking
+     [solve_any_problem].  [submit] starts one batch; [next] blocks until
+     the solver has finished another problem, the solver has ended, or the
+     deadline has passed, and returns that one event; [cancel] stops the
+     solver; [close] cancels it if it still runs, removes its files and
+     returns the number of finished results that were never delivered.
+     The Kodkodi backend reads the transcript while Kodkodi writes it: it
+     prints and flushes one numbered block per finished problem.  Kodkodi
+     reports an error without its problem's number, so errors come with
+     the [Ended] event, counted by message; the problems with no result
+     when the process ended by itself are the ones they belong to. *)
+  datatype ending =
+      Finished
+    | Cut
+    | Failed of string
 
-  val fudge_milliseconds = 250
+  datatype event =
+      Sat of int * raw_bound list
+    | Unsat of int
+    | Ended of {ending : ending, message : string, errors : (string * int) list}
 
-  fun uncached_solve_any_problem overlord deadline max_threads
-      max_solutions problems =
+  type session =
+    {next : unit -> event, cancel : unit -> unit, close : unit -> int}
+
+  type request =
+    {debug : bool, overlord : bool, deadline : Time.time, max_threads : int,
+     max_file_size : int, max_solutions : int, problems : problem list}
+
+  (* A session whose events are known at once, [Ended] last. *)
+  fun static_session events : session =
+    let val remaining = ref events
+    in
+      {next = fn () =>
+         (case !remaining of
+              [] => raise Fail "Refute_Forl: next after the last event"
+            | [last] => last
+            | event :: rest => (remaining := rest; event)),
+       cancel = fn () => (),
+       close = fn () =>
+         length (List.filter
+           (fn Ended _ => false | _ => true) (!remaining))}
+    end
+
+  (* Each distinct stderr line is an error message; the first 16 are kept. *)
+  val max_error_messages = 16
+
+  fun error_counts error_text =
+    let
+      fun clean line =
+        remove_prefix "Error: "
+          (remove_prefix "Solve error: " (remove_suffix "." line))
+      val lines = List.filter (fn line => line <> "" andalso line <> "EXIT")
+        (List.map clean (trim_split_lines error_text))
+      fun add line [] = [(quote_output line, 1)]
+        | add line ((message, n) :: rest) =
+            if message = quote_output line then (message, n + 1) :: rest
+            else (message, n) :: add line rest
+      fun count (line, table) =
+        if List.exists (fn (message, _) => message = quote_output line) table
+           orelse length table < max_error_messages
+        then add line table
+        else table
+    in
+      List.foldl count [] lines
+    end
+
+  fun kodkodi_session
+      ({overlord, deadline, max_threads, max_file_size, max_solutions,
+        problems, ...} : request) : session =
     let
       val true_index = find_index (fn problem => #formula problem = True)
         problems
@@ -1409,34 +1492,34 @@ structure Refute_Forl :> Refute_Forl = struct
           #1 (List.nth (indexed_problems, index))
         else
           raise SYNTAX
-            ("Refute_Forl.uncached_solve_any_problem",
-             "problem index out of range")
+            ("Refute_Forl.kodkodi_session", "problem index out of range")
       val milliseconds =
         Time.toMilliseconds (deadline - Time.now ()) - fudge_milliseconds
       val solve_all = max_solutions > 1
+      val trivial_events = List.map Unsat trivially_unsat
+      fun ended ending message errors =
+        Ended {ending = ending, message = message, errors = errors}
     in
       if null indexed_problems then
-        Normal ([], trivially_unsat, "")
+        static_session (trivial_events @ [ended Finished "" []])
       else if milliseconds <= 0 then
-        TimedOut trivially_unsat
+        static_session (trivial_events @ [ended Cut "" []])
       else if not (is_configured ()) then
-        Error ("Kodkodi is not configured", trivially_unsat)
+        static_session
+          (trivial_events @
+           [ended (Failed "Kodkodi is not configured") "" []])
       else
         let
           val directory =
-            if overlord then OS.FileSys.getDir ()
-            else make_private_directory (temp_root ())
-          (* Debug/overlord mode retains artifacts, but must not share the
-             traditional fixed names with another invocation. *)
-          val directory =
             if overlord then make_private_directory (OS.FileSys.getDir ())
-            else directory
+            else make_private_directory (temp_root ())
           val stem = "kodkodi"
           val input_path = path_for directory stem "kki"
           val output_path = path_for directory stem "out"
           val error_path = path_for directory stem "err"
+          val code_path = path_for directory stem "code"
           val paths =
-            [input_path, output_path, error_path] @
+            [input_path, output_path, error_path, code_path] @
             List.concat
               (List.map (fn (_, problem) => scratch_files problem)
                 indexed_problems)
@@ -1445,107 +1528,259 @@ structure Refute_Forl :> Refute_Forl = struct
             else
               (List.app remove paths;
                OS.FileSys.rmDir directory handle OS.SysErr _ => ())
-          fun work () =
+          val arguments =
+            ["-max-msecs", IntInf.toString milliseconds] @
+            (if solve_all then ["-solve-all"] else []) @
+            ["-max-solutions", Int.toString max_solutions] @
+            (* Start every batch problem; a
+               processor-sized pool can starve later scopes. *)
+            ["-max-threads", Int.toString
+              (if max_threads > 0 then max_threads
+               else length indexed_problems)]
+          (* Keep the caller's working directory for a shell-command
+             override such as [./kodkodi].  Every path Kodkodi touches is
+             absolute -- the ones below, and the CNF file it writes for an
+             external solver -- so nothing lands in the cwd. *)
+          val command =
+            (* POSIX -f uses 512-byte blocks and covers CNFs too.  Keep
+               this disk limit separate from the transcript read.  Capture
+               setup errors too, with a non-timeout status. *)
+            "{ ulimit -f " ^
+            IntInf.toString (IntInf.fromInt max_file_size * 2048) ^
+            " || exit 125; exec " ^ launcher_command () ^ " " ^
+            String.concatWith " " arguments ^ "; } < " ^
+            shell_quote input_path ^ " > " ^ shell_quote output_path ^
+            " 2> " ^ shell_quote error_path
+          val process =
+            (write_problems input_path (List.map #2 indexed_problems);
+             spawn command code_path)
+            handle error => (remove_files (); Exn.reraise error)
+          val reaped = ref false
+          fun reap () =
+            if !reaped then 0
+            else
+              let val status = Unix.reap process
+              in reaped := true; exit_code status end
+          fun cancel () =
+            if !reaped then ()
+            else
+              ((Unix.kill (process, Posix.Signal.term) handle _ => ());
+               (ignore (reap ()) handle _ => ()))
+          (* The transcript, read as it grows. *)
+          val descriptor = ref (NONE : Posix.FileSys.file_desc option)
+          val chunks = ref ([] : string list)
+          val bytes_read = ref 0
+          val output_truncated = ref false
+          fun input_descriptor () =
+            case !descriptor of
+                SOME fd => SOME fd
+              | NONE =>
+                  (let val fd = Posix.FileSys.openf
+                         (output_path, Posix.FileSys.O_RDONLY,
+                          Posix.FileSys.O.flags [])
+                   in descriptor := SOME fd; SOME fd end
+                   handle OS.SysErr _ => NONE)
+          fun read_more () =
+            case input_descriptor () of
+                NONE => false
+              | SOME fd =>
+                  let
+                    fun loop got =
+                      let val room = max_captured_output_bytes - !bytes_read
+                      in
+                        if room <= 0 then
+                          (if Word8Vector.length
+                                (Posix.IO.readVec (fd, 1)) > 0
+                           then output_truncated := true else ();
+                           got)
+                        else
+                          let
+                            val chunk = Byte.bytesToString
+                              (Posix.IO.readVec (fd, Int.min (65536, room)))
+                          in
+                            if chunk = "" then got
+                            else
+                              (chunks := chunk :: !chunks;
+                               bytes_read := !bytes_read + String.size chunk;
+                               loop true)
+                          end
+                      end
+                  in
+                    loop false
+                  end
+          val parsed_count = ref 0
+          val parse_message = ref ""
+          val queue = ref trivial_events
+          val model_seen = ref false
+          (* Parse what was read and queue the results not queued yet.  A
+             transcript that stops mid-section is a transcript still being
+             written, unless the solver has ended. *)
+          fun parse_new input_truncated =
             let
-              val _ = write_problems input_path (List.map #2 indexed_problems)
-              val arguments =
-                ["-max-msecs", IntInf.toString milliseconds] @
-                (if solve_all then ["-solve-all"] else []) @
-                ["-max-solutions", Int.toString max_solutions] @
-                (if max_threads > 0 then
-                   ["-max-threads", Int.toString max_threads]
-                 else [])
-              (* Keep the caller's working directory for a shell-command
-                 override such as [./kodkodi].  Every path Kodkodi touches
-                 is absolute -- the ones below, and the CNF file it writes
-                 for an external solver -- so nothing lands in the cwd. *)
-              val command =
-                "ulimit -f " ^ Int.toString max_captured_output_blocks ^
-                "; exec " ^ launcher_command () ^ " " ^
-                String.concatWith " " arguments ^ " < " ^
-                shell_quote input_path ^ " > " ^ shell_quote output_path ^
-                " 2> " ^ shell_quote error_path
-              val code = run_child command
-              val output = read_all output_path
-              val errors = read_all error_path
-              (* The transcript is solver output: a run killed mid-write
-                 leaves it truncated, and a launcher of the caller's own
-                 choosing can put anything at all in it.  Neither may
-                 abort the search with a parse exception, so both become
-                 a bounded diagnostic here and the exit status below
-                 decides the verdict. *)
-              fun parsed () =
-                let
-                  val (solutions0, unsat0, truncated) = parse_output output
-                in
-                  (List.map (fn (index, instance) =>
-                     (reindex index, instance)) solutions0,
-                   List.map reindex unsat0,
-                   if truncated then "Kodkodi output was truncated" else "")
-                end
-                handle SYNTAX (_, reason) => ([], [], reason)
-              val (solutions, nontrivial_unsat, parse_message) = parsed ()
-              val unsat = trivially_unsat @ nontrivial_unsat
+              val text = String.concat (rev (!chunks))
+              val (results, truncated) = parse_output input_truncated text
+              val fresh = List.drop (results, !parsed_count)
+              val events = List.map (fn Found (index, instance) =>
+                                         Sat (reindex index, instance)
+                                      | Refuted index =>
+                                         Unsat (reindex index)) fresh
+            in
+              parsed_count := length results;
+              queue := !queue @ events;
+              if List.exists (fn Sat _ => true | _ => false) events
+              then model_seen := true else ();
+              truncated
+            end
+            handle SYNTAX (_, reason) => (parse_message := reason; false)
+          fun code_file () =
+            let
+              val text = #1 (read_output code_path)
+                handle Interrupt => raise Interrupt | _ => ""
+            in
+              if String.isSuffix "\n" text then
+                Int.fromString (trim_line text)
+              else NONE
+            end
+          val result = ref (NONE : event option)
+          fun finish natural_code =
+            let
+              val code = case natural_code of
+                  SOME code => (ignore (reap ()); code)
+                | NONE => (cancel (); 2)
+              val _ = read_more ()
+              val truncated = parse_new (!output_truncated)
+              val (errors, errors_truncated) =
+                read_output error_path
+                handle Interrupt => raise Interrupt | _ => ("", false)
               val solver_message = first_error errors
-              val message =
-                if solver_message <> "" then solver_message
-                else parse_message
+              val message = String.concatWith "; "
+                (List.filter (fn text => text <> "")
+                  [solver_message,
+                   if !output_truncated then "Kodkodi output was truncated"
+                   else if solver_message = "" then
+                     (if truncated andalso natural_code <> NONE then
+                        "Kodkodi output was truncated"
+                      else !parse_message)
+                   else "",
+                   if errors_truncated then "Kodkodi stderr was truncated"
+                   else ""])
               val _ =
                 if errors <> "" andalso Refute_Core.Private.enabled 2
                 then Refute_Core.Private.warn "Refute_Forl"
-                  "solve_any_problem" errors
+                  "submit" errors
                 else ()
+              val ending =
+                if natural_code = NONE then Cut
+                else if !model_seen orelse code = 0 then Finished
+                else if code = 2 then Cut
+                (* A returned status is solver/launcher data.  A real HOL
+                   interrupt is not one: it propagates from [next]. *)
+                else Failed
+                  (if message = "" then
+                     "Kodkodi launcher exited with status " ^
+                     Int.toString code
+                   else message)
             in
-              if not (null solutions) orelse code = 0 then
-                Normal (solutions, unsat, message)
-              else if code = 2 then TimedOut unsat
-              (* A returned status is solver/launcher data.  A real HOL
-                 interrupt is reraised by [run_child]'s cleanup handler,
-                 so do not let a launcher forged 130 abort the caller. *)
-              else Error
-                (if message = "" then
-                   "Kodkodi launcher exited with status " ^ Int.toString code
-                 else message,
-                 unsat)
+              result := SOME (ended ending message (error_counts errors))
+            end
+          fun take () =
+            case !queue of
+                event :: rest => (queue := rest; SOME event)
+              | [] => NONE
+          fun next () =
+            case take () of
+                SOME event => event
+              | NONE =>
+                  (case !result of
+                       SOME event => event
+                     | NONE =>
+                         let
+                           val _ = if read_more () then
+                                     ignore (parse_new true) else ()
+                         in
+                           if not (null (!queue)) then next ()
+                           else
+                             case code_file () of
+                                 SOME code => (finish (SOME code); next ())
+                               | NONE =>
+                                   if Time.>= (Time.now (), deadline) then
+                                     (finish NONE; next ())
+                                   else
+                                     (OS.Process.sleep
+                                        (Time.fromMilliseconds 10);
+                                      next ())
+                         end)
+          fun close () =
+            let
+              val _ = if Option.isSome (!result) then ()
+                      else
+                        (cancel ();
+                         ignore (read_more ());
+                         ignore (parse_new true))
+              val leftover = length (List.filter
+                (fn Ended _ => false | _ => true) (!queue))
+              val _ = case !descriptor of
+                  SOME fd => (Posix.IO.close fd handle _ => ())
+                | NONE => ()
+            in
+              remove_files (); leftover
             end
         in
-          Portable.finally remove_files work ()
+          {next = next, cancel = cancel, close = close}
         end
     end
 
-  val cached_outcome = Refute_Session.state "kodkodi_outcome"
-    (NONE : ((int * problem list) * outcome) option)
+  val backend = ref kodkodi_session
+
+  fun with_backend replacement work =
+    let val previous = !backend
+    in
+      backend := replacement;
+      Portable.finally (fn () => backend := previous) work ()
+    end
+
+  val cached_session = Refute_Session.state "kodkodi_outcome"
+    (NONE : ((int * int * problem list) * event list) option)
 
   (* ListPair.allEq is already false on unequal lengths. *)
   fun problem_lists_equivalent (first, second) =
     ListPair.allEq problems_equivalent (first, second)
 
-  fun solve_any_problem debug overlord deadline max_threads max_solutions
-      problems =
+  (* A batch that ended by itself without a message is cached whole: the
+     same problems under the same limits are answered from it. *)
+  fun submit (request : request) : session =
     let
-      fun solve () =
-        uncached_solve_any_problem overlord deadline max_threads
-          max_solutions problems
-      fun keys_equivalent ((solutions1, problems1),
-                           (solutions2, problems2)) =
-        solutions1 = solutions2 andalso
+      val {debug, overlord, max_file_size, max_solutions, problems, ...} =
+        request
+      val key = (max_solutions, max_file_size, problems)
+      fun keys_equivalent ((solutions1, limit1, problems1),
+                           (solutions2, limit2, problems2)) =
+        solutions1 = solutions2 andalso limit1 = limit2 andalso
         problem_lists_equivalent (problems1, problems2)
       fun fresh () =
-        let val outcome = solve ()
+        let
+          val {next, cancel, close} = !backend request
+          val seen = ref ([] : event list)
+          fun next' () =
+            let val event = next ()
+            in
+              seen := event :: !seen;
+              (case event of
+                   Ended {ending = Finished, message = "", ...} =>
+                     Refute_Session.update cached_session
+                       (fn _ => SOME (key, rev (!seen)))
+                 | _ => ());
+              event
+            end
         in
-          (case outcome of
-               Normal (_, _, "") =>
-                 Refute_Session.update cached_outcome
-                   (fn _ => SOME ((max_solutions, problems), outcome))
-             | _ => ());
-          outcome
+          {next = next', cancel = cancel, close = close}
         end
     in
-      if debug orelse overlord then solve ()
+      if debug orelse overlord then !backend request
       else
-        case Refute_Session.read cached_outcome of
-            SOME (key, outcome) =>
-              if keys_equivalent (key, (max_solutions, problems)) then outcome
+        case Refute_Session.read cached_session of
+            SOME (cached_key, events) =>
+              if keys_equivalent (cached_key, key) then static_session events
               else fresh ()
           | NONE => fresh ()
     end

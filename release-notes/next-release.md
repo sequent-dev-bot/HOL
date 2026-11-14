@@ -128,6 +128,17 @@ Bugs fixed
 
 -   HolRefute now applies polymorphic `upd_box` type patterns to concrete instances.
 
+- HolRefute's model finder reads Kodkodi's output while it is written and
+  uses each problem's result as it finishes: a model stops the search, an
+  unsatisfiable result completes its scope, and results finished by the
+  deadline still count. Kodkodi's errors are counted by message, and the
+  progress reason of an `Unknown` reports finished results left unused,
+  batches starved by a problem that never finishes, and the error counts.
+
+- HolRefute separates Kodkodi's configurable per-file disk limit
+  (`upd_max_file_size`, default 1024 MiB) from its 16 MiB stdout/stderr read
+  limits, so external SAT solvers can receive larger temporary CNF files.
+
 -   `computeLib.del_persistent_consts` in an ancestor could undo a descendant's later `computeLib.add_persistent_funs` for the same constant.
     Loading a theory with more than one parent could re-run the ancestor's deletion against the global compset.
     Persistent compset deletions and `set_EVAL_skip` calls are now applied once, when the theory recording them is loaded.

@@ -143,11 +143,6 @@ signature Refute_Forl = sig
 
   type raw_bound = n_ary_index * int list list
 
-  datatype outcome =
-    Normal of (int * raw_bound list) list * int list * string
-  | TimedOut of int list
-  | Error of string * int list
-
   exception SYNTAX of string * string
 
   (* The third component reports a transcript that stops mid-section, i.e.
@@ -165,6 +160,44 @@ signature Refute_Forl = sig
   val scratch_file_path : string -> string
 
   val is_configured : unit -> bool
-  val solve_any_problem :
-    bool -> bool -> Time.time -> int -> int -> problem list -> outcome
+
+  (* A solver session: submit a batch, receive
+     one event per problem as it finishes, cancel, close.  [next] blocks
+     until a problem has finished, the solver has ended or the deadline has
+     passed.  [Ended] is the last event (and is returned again by every
+     later [next]): [Finished] when the solver ended by itself, [Cut] when
+     its time ran out, [Failed] when it failed; [message] holds what it
+     reported besides results, [errors] the solver's errors counted by
+     message.  Problems are numbered from 0 in the submitted list.
+     [cancel] stops the solver; [close] cancels it if it still runs,
+     removes its files and returns how many finished results were never
+     delivered. *)
+  datatype ending =
+      Finished
+    | Cut
+    | Failed of string
+
+  datatype event =
+      Sat of int * raw_bound list
+    | Unsat of int
+    | Ended of {ending : ending, message : string, errors : (string * int) list}
+
+  type session =
+    {next : unit -> event, cancel : unit -> unit, close : unit -> int}
+
+  type request =
+    {debug : bool, overlord : bool, deadline : Time.time, max_threads : int,
+     max_file_size : int, max_solutions : int, problems : problem list}
+
+  val submit : request -> session
+
+  (* The Kodkodi backend [submit] starts sessions on, uncached. *)
+  val kodkodi_session : request -> session
+
+  (* Run [work] with [replacement] as the backend [submit] starts sessions
+     on, for tests that drive the search with a scripted solver. *)
+  val with_backend : (request -> session) -> (unit -> 'a) -> 'a
+
+  (* A session whose events are known at once, [Ended] last. *)
+  val static_session : event list -> session
 end

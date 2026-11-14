@@ -27,9 +27,10 @@ ifdef HOLSELFTESTLEVEL
 
 all: holrefute-selftest.log
 .PHONY: holrefute-selftest.log
-holrefute-selftest.log: selftest.exe
+holrefute-selftest.log: selftest.exe forl_limits.uo
 	$(tee ./selftest.exe 2>&1,$@)
+	$(tee HOLDIR=$(HOLDIR) sh ./forl_limits.sh 2>&1,forl-limits.log)
 
 endif
 
-EXTRA_CLEANS = selftest.exe holrefute-selftest.log
+EXTRA_CLEANS = selftest.exe holrefute-selftest.log forl-limits.log

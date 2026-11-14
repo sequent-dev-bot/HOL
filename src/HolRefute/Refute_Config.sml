@@ -91,6 +91,8 @@ signature Refute_Config = sig
       debug : bool,
       overlord : bool,
       max_threads : int,
+      (* Maximum size of each file written by Kodkodi, in MiB. *)
+      max_file_size : int,
       tac_timeout : real,
       specialize : bool,
       box : (Type.hol_type option * bool option) list,
@@ -216,6 +218,8 @@ signature Refute_Config = sig
   val upd_debug : bool -> config -> config
   val upd_overlord : bool -> config -> config
   val upd_max_threads : int -> config -> config
+  (* Per-file disk limit in MiB; positive, default 256. *)
+  val upd_max_file_size : int -> config -> config
   val upd_tac_timeout : real -> config -> config
   val upd_specialize : bool -> config -> config
   val upd_box :

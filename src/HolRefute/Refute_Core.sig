@@ -121,6 +121,7 @@ signature Refute_Core = sig
     | MfDebug of bool
     | MfOverlord of bool
     | MfMaxThreads of int
+    | MfMaxFileSize of int
     | MfTacTimeout of real
     | MfSpecialize of bool
     | MfBox of (hol_type option * bool option) list

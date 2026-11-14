@@ -1095,8 +1095,6 @@ structure Refute_Cert_Model :> Refute_Cert_Model = struct
           !values
         end
 
-      val choices = map (fn hole =>
-        candidates (Term.type_of hole) (#max_constructor_depth policy)) holes
       val vectors = ref ([] : term list list)
       val vector_limit = #max_completion_vectors policy
       fun same_vector (left, right) =
@@ -1107,14 +1105,24 @@ structure Refute_Cert_Model :> Refute_Cert_Model = struct
            List.exists (fn old => same_vector (old, vector)) (!vectors)
         then ()
         else vectors := !vectors @ [vector]
-      val diagonal_count =
-        if null choices then 0
-        else List.foldl Int.min vector_limit (map length choices)
-      val _ = List.app (fn index =>
-        add_vector (map (fn options => List.nth (options, index)) choices))
-        (List.tabulate (diagonal_count, fn index => index))
-      val _ = ignore (app_combinations_bounded
-        vector_limit add_vector choices)
+      (* Synthesizing the completions is not free, so it runs only once an
+         attempt is known to need them; a replay that already ran out of
+         its deadline must not spend more time here before returning. *)
+      fun fill_vectors () =
+        let
+          val choices = map (fn hole =>
+            candidates (Term.type_of hole) (#max_constructor_depth policy))
+            holes
+          val diagonal_count =
+            if null choices then 0
+            else List.foldl Int.min vector_limit (map length choices)
+          val _ = List.app (fn index =>
+            add_vector (map (fn options => List.nth (options, index))
+                          choices))
+            (List.tabulate (diagonal_count, fn index => index))
+        in
+          ignore (app_combinations_bounded vector_limit add_vector choices)
+        end
 
       fun completed_inputs vector =
         let
@@ -1173,6 +1181,7 @@ structure Refute_Cert_Model :> Refute_Cert_Model = struct
             if null holes orelse resource_exhausted schematic_stats then
               (schematic_result, schematic_stats)
             else
-              search (!vectors) (#failure schematic_stats)
+              (fill_vectors ();
+               search (!vectors) (#failure schematic_stats))
     end
 end

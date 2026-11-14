@@ -144,6 +144,20 @@ fun check_deadline deadline =
   if Time.now () >= deadline then raise Timeout.TIMEOUT Time.zeroTime
   else ()
 
+(* Certification of a model the solver has finished must end before the
+   call's own timer fires.  Both are [Timeout.apply] timers set for the
+   same instant; when the outer one fires first, the inner [Timeout.apply]
+   re-raises [Interrupt] instead of [Timeout.TIMEOUT], the model is lost
+   and the call reports "timed out".  Replay is therefore given a deadline
+   this much before the call's: a tenth of the budget, at most two seconds.
+   A model whose replay does not finish by then is kept uncertified, as
+   when replay runs out of its deadline at any other time. *)
+fun certification_headroom deadline started =
+  let val budget = Real.max (0.0, Time.toReal (Time.- (deadline, started)))
+      val cap = Time.fromSeconds 2
+      val tenth = Time.fromReal (budget / 10.0)
+  in if Time.< (cap, tenth) then cap else tenth end
+
 fun unsound_delay deadline =
   Int.max (0, Int.min (max_unsound_delay_ms,
     LargeInt.toInt (Time.toMilliseconds (Refute_Util.remaining deadline)) *
@@ -603,11 +617,35 @@ fun abandoned_mono_verdict report exn =
    instances of a run; the counters add up over them. *)
 type progress =
   {phase : string ref, definitions : int ref, emitted : int ref,
-   completed : int ref, offered : int ref, finished : int ref}
+   completed : int ref, offered : int ref, finished : int ref,
+   unused : int ref, starved_batches : int ref, starved_problems : int ref,
+   unresolved : int ref, solver_errors : (string * int) list ref}
 
 fun new_progress () : progress =
   {phase = ref "preprocessing", definitions = ref 0, emitted = ref 0,
-   completed = ref 0, offered = ref 0, finished = ref 0}
+   completed = ref 0, offered = ref 0, finished = ref 0,
+   unused = ref 0, starved_batches = ref 0, starved_problems = ref 0,
+   unresolved = ref 0, solver_errors = ref []}
+
+(* The solver's errors, counted by message over all batches. *)
+fun add_solver_error (progress : progress) text count =
+  let
+    fun add [] = [(text, count)]
+      | add ((message, n) :: rest) =
+          if message = text then (message, n + count) :: rest
+          else (message, n) :: add rest
+  in
+    #solver_errors progress := add (!(#solver_errors progress))
+  end
+
+fun solver_error_reasons (progress : progress) =
+  map (fn (text, count) =>
+         "solver error (" ^ Int.toString count ^ " time" ^
+         (if count = 1 then "" else "s") ^ "): " ^ text)
+    (!(#solver_errors progress)) @
+  (if !(#unresolved progress) = 0 then []
+   else [Int.toString (!(#unresolved progress)) ^ " problems ended with " ^
+         "no result when the solver ended by itself with errors"])
 
 fun enter_phase (progress : progress) name = #phase progress := name
 
@@ -620,7 +658,12 @@ fun progress_reason (progress : progress) rejected =
   Int.toString (!(#emitted progress)) ^ " emitted; problems offered " ^
   Int.toString (!(#offered progress)) ^ ", finished " ^
   Int.toString (!(#finished progress)) ^ ", rejected " ^
-  Int.toString rejected
+  Int.toString rejected ^ "; finished but unused " ^
+  Int.toString (!(#unused progress)) ^ "; batches starved " ^
+  Int.toString (!(#starved_batches progress)) ^ " (problems never started " ^
+  Int.toString (!(#starved_problems progress)) ^ "); solver errors " ^
+  Int.toString (List.foldl (fn ((_, n), total) => n + total) 0
+                  (!(#solver_errors progress)))
 
 fun run_instance deadline started (config : Refute_Core.config)
       incremental solver (initial_max_potential, initial_max_genuine)
@@ -872,20 +915,31 @@ fun run_instance deadline started (config : Refute_Core.config)
     fun scopes_checked () =
       length (List.filter scope_checked (!generated_scopes))
 
+    (* progress tracking.  A result arrives for
+       one problem at a time, so only the scopes equivalent to that
+       problem's are looked at: counting every scope for every result made
+       a large batch cost more than the solver took to finish it. *)
     fun update_checked problems indices =
-      let
-        val completed_before = scopes_checked ()
-        val _ = List.app (fn index =>
-          if index >= 0 andalso index < length problems then
-            let val problem = List.nth (problems, index)
-            in
-              if rich_member problem (!checked_problems) then ()
-              else checked_problems := problem :: !checked_problems
-            end
-          else ()) indices
-      in
-        bump (#completed progress) (scopes_checked () - completed_before)
-      end
+      List.app (fn index =>
+        if index >= 0 andalso index < length problems then
+          let
+            val problem = List.nth (problems, index)
+            val scope = #scope (metadata problem)
+            val affected = List.filter
+              (fn other => MFS.scopes_equivalent (scope, other))
+              (!generated_scopes)
+            fun completed () =
+              length (List.filter scope_checked affected)
+          in
+            if rich_member problem (!checked_problems) then ()
+            else
+              let val completed_before = completed ()
+              in
+                checked_problems := problem :: !checked_problems;
+                bump (#completed progress) (completed () - completed_before)
+              end
+          end
+        else ()) indices
 
     fun make_base (problem : rich_problem) : Refute_Core.counterexample =
       {backend = "kodkod", substrate = "kodkod",
@@ -927,20 +981,40 @@ fun run_instance deadline started (config : Refute_Core.config)
              else [])
           else ["model comes from the liberal, unsound-by-design problem"]
         fun discard () = if sound then discarded_sound_model := true else ()
+        val cert_deadline =
+          Time.- (deadline, certification_headroom deadline started)
+        fun certify_by replay_deadline =
+          MFM.certify
+            {executable = executable andalso not scope_has_codatatype,
+             original = original,
+             eval_terms = eval_terms,
+             reconstruction = reconstructed,
+             certification = certification,
+             replay_sidecar = replay_sidecar,
+             replay_hints = replay_hints,
+             cex = make_base problem,
+             sound = sound,
+             genuine_means_genuine = genuine_formula andalso not weakened,
+             reasons = reasons,
+             deadline = SOME replay_deadline}
+        (* A replay that ran into its deadline has its interrupt
+           consumed, but the call's own timer, a moment later, can still
+           land before the replay returns.  Past the replay's deadline the
+           model is kept without replaying it again: that attempt stops at
+           once and the model is delivered, where an escaping interrupt
+           would lose it. *)
+        fun past_replay_deadline () =
+          Time.>= (Time.now (), cert_deadline)
+        fun certify () =
+          certify_by cert_deadline
+          handle error as Timeout.TIMEOUT _ =>
+            if past_replay_deadline () then certify_by cert_deadline
+            else Exn.reraise error
+               | error as Interrupt =>
+            if past_replay_deadline () then certify_by cert_deadline
+            else Exn.reraise error
       in
-        case MFM.certify
-          {executable = executable andalso not scope_has_codatatype,
-           original = original,
-           eval_terms = eval_terms,
-           reconstruction = reconstructed,
-           certification = certification,
-           replay_sidecar = replay_sidecar,
-           replay_hints = replay_hints,
-           cex = make_base problem,
-           sound = sound,
-           genuine_means_genuine = genuine_formula andalso not weakened,
-           reasons = reasons,
-           deadline = SOME deadline} of
+        case certify () of
             MFM.Drop => (discard (); NONE)
           | MFM.Keep semantic_cex =>
               let val cex =
@@ -971,7 +1045,15 @@ fun run_instance deadline started (config : Refute_Core.config)
          met_potential := !met_potential + 1
        else ())
 
-    fun solve_any_problem state first_time problems =
+    (* The search loop talks to the solver only
+       through a session ([KK.submit]) and acts on each result as it
+       arrives.  A model that settles the quotas stops the search and
+       cancels the session; an unsatisfiable problem completes its scope
+       at once, so at a deadline everything finished counts.  When the
+       solver ends by itself after a model (Kodkodi stops at the first
+       model unless it was asked for several), the problems without a
+       result are submitted again, as upstream's loop did. *)
+    fun solve_batch state first_time problems =
       let
         val (found_really_genuine, raw_max_potential,
              raw_max_genuine, donno) = state
@@ -992,214 +1074,245 @@ fun run_instance deadline started (config : Refute_Core.config)
             val _ = check_deadline deadline
             val _ = kodkod_calls := !kodkod_calls + 1
             val _ = enter_phase progress "solving"
-            val solved = KK.solve_any_problem (#debug mf) (#overlord mf)
-                deadline (#max_threads mf) max_solutions
-                (map raw_problem problems)
-            val _ = bump (#finished progress) (case solved of
-                KK.Normal (sat, unsat, _) => length sat + length unsat
-              | KK.TimedOut unsat => length unsat
-              | KK.Error (_, unsat) => length unsat)
+            val session = KK.submit
+              {debug = #debug mf, overlord = #overlord mf,
+               deadline = deadline, max_threads = #max_threads mf,
+               max_file_size = #max_file_size mf,
+               max_solutions = max_solutions,
+               problems = map raw_problem problems}
+            val indices = Portable.upto 0 (length problems - 1)
+            (* Problems whose result arrived, and sound problems that need
+               no solving since their liberal sibling is unsatisfiable. *)
+            val received = ref ([] : int list)
+            val co_indices = ref ([] : int list)
+            val model_handled = ref false
+            val resubmitted = ref false
+            val current = ref (found_really_genuine, max_potential,
+                               max_genuine, donno)
+
+            (* A liberal problem that is unsatisfiable settles its sound
+               sibling too. *)
+            fun note_unsat index =
+              let
+                val sound_index = index - 1
+              in
+                if sound_index >= 0 andalso
+                   #unsound (metadata (List.nth (problems, index))) andalso
+                   MFS.scopes_equivalent
+                     (#scope (metadata (List.nth (problems, sound_index))),
+                      #scope (metadata (List.nth (problems, index))))
+                then co_indices := sound_index :: !co_indices
+                else ()
+              end
+
+            fun on_unsat index =
+              (received := index :: !received;
+               bump (#finished progress) 1;
+               update_checked problems [index];
+               note_unsat index;
+               false)
+
+            (* Returns true when the search is over. *)
+            fun on_sat (index, bounds) =
+              let
+                val (found_really_genuine, max_potential,
+                     max_genuine, donno) = !current
+                val _ = received := index :: !received
+                val _ = bump (#finished progress) 1
+                val _ = model_handled := true
+                val problem = List.nth (problems, index)
+                val is_liberal = #unsound (metadata problem)
+                val _ = if is_liberal then update_checked problems [index]
+                        else ()
+                fun set state = (current := state; latest_state := state)
+              in
+                if is_liberal then
+                  let
+                    (* A certification promotion is a phase boundary this
+                       port adds: do not reconstruct a later liberal model
+                       (which could be merely Potential), and consume
+                       exactly one genuine slot before dropping the
+                       remaining unsound problems.  Upstream never promotes
+                       a liberal model. *)
+                    val (promoted, kept) =
+                      case reconstruct problem bounds of
+                          SOME cex =>
+                            if certainty_is_genuine (#certainty cex) then
+                              (keep_counterexample cex; (true, 1))
+                            else if max_potential > 0 then
+                              (keep_counterexample cex; (false, 1))
+                            else (false, 0)
+                        | NONE => (false, 0)
+                    val found = found_really_genuine orelse promoted
+                    val (max_potential, max_genuine) =
+                      liberal_budget_after_models
+                        {max_potential = max_potential,
+                         max_genuine = max_genuine,
+                         delivered = kept,
+                         kept = kept, promoted = promoted,
+                         incremental = incremental}
+                    val _ = set (found, max_potential, max_genuine, donno)
+                  in
+                    max_genuine <= 0 andalso max_potential <= 0
+                  end
+                else
+                  let
+                    (* [max_potential] bounds models that may be spurious
+                       because the encoding behind them is unsound; only
+                       the liberal problems handled above spend it.  A
+                       sound problem's model is a real result whatever
+                       certainty reconstruction lands on (quasi-genuine
+                       for an inexact encoding, potential when kernel
+                       certification got stuck), so it is always reported,
+                       never discarded for want of potential budget.  Only
+                       a genuine model spends a [max_genuine] slot, so the
+                       search for one carries on past the weaker models it
+                       reported.  This diverges from upstream, whose sound
+                       branch charges a slot to every sound model it prints,
+                       quasi-genuine ones included; its [num_genuine]
+                       belongs to the unsound branch, where it is
+                       identically 0.  [reconstruct] already raises
+                       [discarded_sound_model] on each of its own rejection
+                       paths. *)
+                    val _ = check_deadline deadline
+                    val results = case reconstruct problem bounds of
+                        NONE => []
+                      | SOME cex => (keep_counterexample cex; [cex])
+                    val genuine_results = List.filter
+                      (certainty_is_genuine o #certainty) results
+                    val max_genuine = max_genuine - length genuine_results
+                    val found = found_really_genuine orelse
+                      not (null genuine_results)
+                    (* A sound model that only reconstructs as quasi does
+                       not establish a theorem, so it cannot suppress the
+                       later potential/unsound search. *)
+                    val max_potential = if found then 0 else max_potential
+                    val _ = set (found, max_potential, max_genuine, donno)
+                  in
+                    (* Upstream caps sound-model harvesting at two rounds
+                       per batch unconditionally (its [not first_time]
+                       cut-off).  Here the cap applies only in the
+                       incremental case; the 1/1 path ignores
+                       [first_time]. *)
+                    (max_genuine <= 0 andalso max_potential <= 0) orelse
+                    (incremental andalso not first_time andalso
+                     max_potential <= 0)
+                  end
+              end
+              handle error as Timeout.TIMEOUT _ =>
+                (bump (#unused progress) 1; Exn.reraise error)
+                   | error as Interrupt =>
+                (bump (#unused progress) 1; Exn.reraise error)
+
+            (* The deadline passed with problems unfinished.  With a
+               positive thread limit [w], the solver started the first [w]
+               unfinished problems at most, so the rest never ran. *)
+            fun note_starvation () =
+              let
+                val unfinished = length (List.filter
+                  (fn index => not (Lib.mem index (!received))) indices)
+                val never_started = if #max_threads mf > 0 then
+                  Int.max (0, unfinished - #max_threads mf) else 0
+              in
+                if never_started > 0 then
+                  (bump (#starved_batches progress) 1;
+                   bump (#starved_problems progress) never_started)
+                else ()
+              end
+
+            fun note_cut () =
+              if !resubmitted then () else note_starvation ()
+
+            fun remaining_problems (_, max_potential, _, _) =
+              Util.filter_out_indices
+                (distinct_ints (!received @ !co_indices)) problems
+              |> (fn values =>
+                if max_potential <= 0 then
+                  List.filter (not o #unsound o metadata) values
+                else values)
+
+            fun finish ending message errors =
+              let
+                val _ = List.app (fn (text, count) =>
+                  add_solver_error progress text count) errors
+                val unfinished = length (List.filter
+                  (fn index => not (Lib.mem index (!received))) indices)
+                val state as (found, max_potential, max_genuine, donno) =
+                  !current
+              in
+                case ending of
+                    KK.Cut => raise Timeout.TIMEOUT Time.zeroTime
+                  | KK.Failed text =>
+                      (add_error ("Kodkod error: " ^ text);
+                       last_donno := donno + 1;
+                       (found, max_potential, max_genuine, donno + 1))
+                  | KK.Finished =>
+                      let
+                        val _ = if message = "" then () else
+                          Refute_Core.Private.say 1
+                            ("Kodkod warning: " ^ message ^ "\n")
+                        val _ = if errors = [] then () else
+                          bump (#unresolved progress) unfinished
+                      in
+                        if not (!model_handled) then
+                          if unfinished = 0 then state
+                          else
+                            (add_error
+                               "Kodkodi returned an incomplete result";
+                             (found, max_potential, max_genuine, donno + 1))
+                        else
+                          let val remaining = remaining_problems state
+                              val _ = resubmitted := true
+                          in
+                            solve_batch state false remaining
+                          end
+                      end
+              end
+
+            (* At the deadline, what the solver had already finished still
+               counts: an unsatisfiable result completes its scope.  There
+               is no time left to reconstruct a model, so one that arrives
+               here is counted as unused. *)
+            fun use_finished () =
+              (#cancel session ();
+               let
+                 fun drain () =
+                   case #next session () of
+                       KK.Unsat index => (ignore (on_unsat index); drain ())
+                     | KK.Sat _ => (bump (#unused progress) 1; drain ())
+                     | KK.Ended _ => ()
+               in
+                 drain ()
+               end) handle _ => ()
+
+            fun loop () =
+              case #next session () of
+                  KK.Unsat index => (ignore (on_unsat index); loop ())
+                | KK.Sat (index, bounds) =>
+                    if on_sat (index, bounds) then
+                      let val (found, max_potential, max_genuine, donno) =
+                        !current
+                      in
+                        #cancel session ();
+                        (found, Int.max (0, max_potential),
+                         Int.max (0, max_genuine), donno)
+                      end
+                    else loop ()
+                | KK.Ended {ending, message, errors} =>
+                    finish ending message errors
           in
-            case solved of
-                KK.Normal ([], unsat_indices, warning) =>
-                  let
-                    val all_reported_unsat = List.all
-                      (fn index => Lib.mem index unsat_indices)
-                      (Portable.upto 0 (length problems - 1))
-                  in
-                    update_checked problems unsat_indices;
-                    if warning = "" then () else
-                      Refute_Core.Private.say 1
-                        ("Kodkod warning: " ^ warning ^ "\n");
-                    if all_reported_unsat then
-                      (found_really_genuine, max_potential,
-                       max_genuine, donno)
-                    else
-                      (add_error "Kodkodi returned an incomplete result";
-                       (found_really_genuine, max_potential,
-                        max_genuine, donno + 1))
-                  end
-              | KK.Normal (sat_models, unsat_indices, warning) =>
-                  let
-                    val _ = if warning = "" then () else
-                      Refute_Core.Private.say 1
-                        ("Kodkod warning: " ^ warning ^ "\n")
-                    val (liberal, conservative) = List.partition
-                      (fn (index, _) =>
-                        #unsound (metadata (List.nth (problems, index))))
-                      sat_models
-                    val _ = update_checked problems
-                      (unsat_indices @ map #1 liberal)
-                  in
-                    if null conservative then
-                      let
-                        (* A certification promotion is a phase boundary
-                           this port adds: do not reconstruct a later
-                           liberal model (which could be merely Potential),
-                           and consume exactly one genuine slot before
-                           dropping the remaining unsound problems.
-                           Upstream never promotes a liberal model. *)
-                        fun reconstruct_until_genuine _ 0 _ = (false, 0)
-                          | reconstruct_until_genuine _ _ [] = (false, 0)
-                          | reconstruct_until_genuine potential remaining
-                              ((index, bounds) :: models) =
-                              (case reconstruct
-                                  (List.nth (problems, index)) bounds of
-                                   SOME cex =>
-                                     if certainty_is_genuine (#certainty cex)
-                                     then (keep_counterexample cex; (true, 1))
-                                     else
-                                       let
-                                         val keep = potential > 0
-                                         val (promoted, kept) =
-                                           reconstruct_until_genuine
-                                             (if keep then potential - 1
-                                              else potential)
-                                             (remaining - 1) models
-                                         val _ = if keep then
-                                           keep_counterexample cex else ()
-                                       in
-                                         (promoted, kept + (if keep then 1
-                                                           else 0))
-                                       end
-                                 | NONE =>
-                                     reconstruct_until_genuine potential
-                                       (remaining - 1) models)
-                        (* A liberal problem can nevertheless reconstruct to
-                           a genuine counterexample.  Scan enough results for
-                           both quotas, but retain potential results only up
-                           to their own quota. *)
-                        val (promoted, kept) = reconstruct_until_genuine
-                          max_potential (max_potential + max_genuine) liberal
-                        val found = found_really_genuine orelse promoted
-                        val (max_potential, max_genuine) =
-                          liberal_budget_after_models
-                            {max_potential = max_potential,
-                             max_genuine = max_genuine,
-                             delivered = kept,
-                             kept = kept, promoted = promoted,
-                             incremental = incremental}
-                        val _ = latest_state :=
-                          (found, max_potential, max_genuine, donno)
-                      in
-                        if max_genuine <= 0 andalso max_potential <= 0 then
-                          (found, 0, 0, donno)
-                        else
-                          let
-                            val co_indices = List.mapPartial (fn index =>
-                              let val sound_index = index - 1
-                              in
-                                if sound_index >= 0 andalso
-                                   index < length problems andalso
-                                   #unsound
-                                     (metadata
-                                       (List.nth (problems, index))) andalso
-                                   MFS.scopes_equivalent
-                                     (#scope (metadata (List.nth
-                                        (problems, sound_index))),
-                                      #scope (metadata (List.nth
-                                        (problems, index))))
-                                then SOME sound_index else NONE
-                              end) unsat_indices
-                            val bye = distinct_ints
-                              (map #1 sat_models @ unsat_indices @ co_indices)
-                            val remaining_problems =
-                              Util.filter_out_indices bye problems
-                              |> (fn values =>
-                                if max_potential <= 0 then
-                                  List.filter
-                                    (not o #unsound o metadata) values
-                                else values)
-                          in
-                            solve_any_problem
-                              (found, max_potential, max_genuine, donno)
-                              false remaining_problems
-                          end
-                      end
-                    else
-                      let
-                        (* [max_potential] bounds models that may be
-                           spurious because the encoding behind them is
-                           unsound; only the liberal problems handled above
-                           spend it.  A sound problem's model is a real
-                           result whatever certainty reconstruction lands
-                           on (quasi-genuine for an inexact encoding,
-                           potential when kernel certification got stuck),
-                           so it is always reported, never discarded for
-                           want of potential budget.  Only a genuine model
-                           spends a [max_genuine] slot, so the search for
-                           one carries on past the weaker models it
-                           reported.  This diverges from upstream, whose
-                           sound branch charges a slot to every sound model
-                           it prints, quasi-genuine ones included; its
-                           [num_genuine] belongs to the unsound branch,
-                           where it is identically 0.
-                           [reconstruct] already raises
-                           [discarded_sound_model] on each of its own
-                           rejection paths. *)
-                        val attempted =
-                          MFS.take_at_most max_genuine conservative
-                        fun harvest kept [] = kept
-                          | harvest kept ((index, bounds) :: models) =
-                              let
-                                val _ = check_deadline deadline
-                              in
-                                case reconstruct
-                                  (List.nth (problems, index)) bounds of
-                                     NONE => harvest kept models
-                                   | SOME cex =>
-                                       (keep_counterexample cex;
-                                        harvest (cex :: kept) models)
-                              end
-                        val results = harvest [] attempted
-                        val genuine_results = List.filter
-                          (certainty_is_genuine o #certainty) results
-                        val max_genuine = max_genuine - length genuine_results
-                        val found = found_really_genuine orelse
-                          not (null genuine_results)
-                        (* A sound model that only reconstructs as quasi does
-                           not establish a theorem, so it cannot suppress the
-                           later potential/unsound search. *)
-                        val max_potential = if found then 0 else max_potential
-                        val _ = latest_state :=
-                          (found, max_potential, max_genuine, donno)
-                      in
-                        (* Upstream caps sound-model harvesting at two
-                           rounds per batch unconditionally (its
-                           [not first_time] cut-off).  Here the cap applies
-                           only in the incremental case; the 1/1 path
-                           ignores [first_time]. *)
-                        if (max_genuine <= 0 andalso max_potential <= 0) orelse
-                           (incremental andalso not first_time andalso
-                            max_potential <= 0) then
-                          (found, max_potential, max_genuine, donno)
-                        else
-                          let
-                            val bye = distinct_ints
-                              (map #1 sat_models @ unsat_indices)
-                            val remaining_problems =
-                              Util.filter_out_indices bye problems
-                              |> (fn values =>
-                                if max_potential <= 0 then
-                                  List.filter (not o #unsound o metadata)
-                                    values
-                                else values)
-                          in
-                            solve_any_problem
-                              (found, max_potential, max_genuine, donno)
-                              false remaining_problems
-                          end
-                      end
-                  end
-              | KK.TimedOut unsat_indices =>
-                  (update_checked problems unsat_indices;
-                   raise Timeout.TIMEOUT Time.zeroTime)
-              | KK.Error (message, unsat_indices) =>
-                  (update_checked problems unsat_indices;
-                   add_error ("Kodkod error: " ^ message);
-                   last_donno := donno + 1;
-                   (found_really_genuine, max_potential,
-                    max_genuine, donno + 1))
+            (let val result = loop ()
+             in ignore (#close session ()); result end)
+            handle error =>
+              (* The search's own timer may fire before the solver's
+                 session reports the cut (it then interrupts the search),
+                 so starvation is noted here for either. *)
+              ((case error of
+                    Timeout.TIMEOUT _ => (note_cut (); use_finished ())
+                  | Interrupt => (note_cut (); use_finished ())
+                  | _ => ());
+               bump (#unused progress) (#close session () handle _ => 0);
+               Exn.reraise error)
           end
       end
 
@@ -1265,7 +1378,7 @@ fun run_instance deadline started (config : Refute_Core.config)
         val _ = generated_scopes := !generated_scopes @ scope_batch
         val _ = if last then potential_only_warning () else ()
       in
-        solve_any_problem
+        solve_batch
           (found, max_potential, max_genuine, donno) true problems
       end
 
@@ -1546,7 +1659,8 @@ fun run_body config instances =
             Refute_Core.Unknown more =>
               Refute_Core.Unknown
                 (progress_first ::
-                 List.foldl Refute_Core.add_reason more reasons)
+                 List.foldl Refute_Core.add_reason
+                   (solver_error_reasons progress @ more) reasons)
           | Refute_Core.Counterexample cexs =>
               Refute_Core.Counterexample (map with_rejections cexs)
           | Refute_Core.Model models =>
