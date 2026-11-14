@@ -212,6 +212,10 @@ Bugs fixed
     The tactics' results are unchanged.
     Over 476 slow `gvs`/`gs` calls recorded from a large development, skipping the unchanged assumptions and summarising each context once cut the time from 96.1s to 84.8s, with identical subgoals for every call.
 
+-   The scratch files of the SML-inspection tools (`smlOpen`, `smlExecScripts`, `smlRedirect`, and so TacticToe) went by default to one directory per user, `$XDG_CACHE_HOME/hol4/scratch`, so two HOL builds run at once by the same user overwrote each other's files there, and one could fail with `OpenStruct` while building the documentation.
+    Unless `HOL4_SCRATCH` names a directory, each process now uses a subdirectory of its own there, which is removed when the process exits.
+    When `HOL4_TACTICTOE_CACHE` is set, those subdirectories go under its `tmp/scratch` directory, as was intended; before, that setting was ignored whenever `XDG_CACHE_HOME` or `HOME` was set.
+
 New theories
 ------------
 
@@ -253,6 +257,11 @@ New examples
 
 Incompatibilities
 -----------------
+
+-   The `cv_compute` translator no longer lets a later `cv_rep` translation of a constant or pattern silently shadow an earlier one.
+    Adding a translation for a pattern that already has a different one (via `cv_trans` or the `[cv_rep]` attribute) is now an error; remove the old one first with the new `cv_transLib.cv_rep_delete "thy.name"`.
+    When two independently loaded ancestors translate the same pattern differently, loading still works, but using that pattern fails with an "ambiguous translation" error naming both theorems until one is removed with `cv_rep_delete`.
+    The same theorem reached through several ancestors is not a conflict.
 
 -   AKS's `computeBasic` no longer defines numeric modular exponentiation;
     use `expModTheory` for `exp_mod_binary`, `exp_mod_step`, their definitions,
