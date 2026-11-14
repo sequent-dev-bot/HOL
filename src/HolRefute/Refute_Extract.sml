@@ -3173,6 +3173,22 @@ structure Refute_Extract :> Refute_Extract = struct
             substitutions)
         end
 
+      (* A thunk built by [substitution_source] holds the term source of
+         every variable bound before it.  Binding each such thunk, memoised,
+         to an SML name that later thunks refer to keeps a chain of k
+         bindings at k thunks and k evaluations, instead of thunks that
+         copy one another (2^k source text, 2^k evaluations). *)
+      fun term_name value = "term_" ^ clean_name value
+      fun term_declaration name source =
+        "val " ^ name ^ " = let val refute_memo = Susp.delay " ^ source ^
+        " in fn () => Susp.force refute_memo end"
+      fun with_terms named body =
+        if null named then body
+        else
+          "let " ^ join "\n    " (List.map (fn (name, source) =>
+            term_declaration name source) named) ^
+          "\nin " ^ body ^ " end"
+
       (* [bump_counter] is the raw prefix, for a branch whose emitted
          sequence continues past it; the wrappers close a branch. *)
       val bump_counter =
@@ -3262,15 +3278,20 @@ structure Refute_Extract :> Refute_Extract = struct
           fun branch_body (constructor, variables, next) =
             let
               val constructor_number = constructor_index constructor
-              val additions = List.map (fn (index, variable) =>
+              val named = List.map (fn (index, variable) =>
                 (variable, variable_name variable,
                  thunk ("Refute_EvalSML.split_term " ^
                    integer constructor_number ^ " " ^ integer index ^
                    " " ^ integer expression_index ^ " " ^
                    substitution_source prior_environment)))
                 (Lib.enumerate 0 variables)
+              val additions = List.map (fn (variable, value, _) =>
+                (variable, value, term_name value)) named
             in
-              recurse next (additions @ environment)
+              with_terms
+                (List.map (fn (_, value, source) => (term_name value, source))
+                   named)
+                (recurse next (additions @ environment))
             end
           fun branch (entry as (constructor, variables, _)) =
             constructor_expression context constructor
@@ -3663,7 +3684,7 @@ structure Refute_Extract :> Refute_Extract = struct
         | Bind (variable, tm, fallback, next) =>
             let
               val value = variable_name variable
-              val term = evaluation_thunk tm environment
+              val term = term_name value
               val next_environment = (variable, value, term) :: environment
               val continued = compile_exhaustive_plan next next_environment
                 genuine_only
@@ -3678,7 +3699,9 @@ structure Refute_Extract :> Refute_Extract = struct
             in
               safe_value (evaluated_expression tm) stuck ^
               "let val " ^ value ^ " = refute_value\n" ^
-              "in " ^ continued ^ " end)"
+              "    " ^
+              term_declaration term (evaluation_thunk tm environment) ^
+              "\nin " ^ continued ^ " end)"
             end
         | Split (tm, branches) =>
             split_case
@@ -3753,7 +3776,7 @@ structure Refute_Extract :> Refute_Extract = struct
           | Bind (variable, tm, fallback, next) =>
               let
                 val value = variable_name variable
-                val term = evaluation_thunk tm environment
+                val term = term_name value
                 val continued = compile_random_plan next
                   ((variable, value, term) :: environment) genuine state
                 val failed =
@@ -3766,8 +3789,10 @@ structure Refute_Extract :> Refute_Extract = struct
                           compile_random_plan other environment "false" state)
               in
                 safe_value (evaluated_expression tm) failed ^
-                "let val " ^ value ^ " = refute_value in " ^ continued ^
-                " end)"
+                "let val " ^ value ^ " = refute_value\n" ^
+                "    " ^
+                term_declaration term (evaluation_thunk tm environment) ^
+                "\nin " ^ continued ^ " end)"
               end
           | Split (tm, branches) =>
               split_case

@@ -42,6 +42,35 @@ structure Refute_QC :> Refute_QC = struct
     List.foldr (fn (variable, plan) => guarded_gen variable plan)
       continuation variables
 
+  (* An equation's [Bind] fallback holds a second copy of the rest of the
+     plan, so k nested fallbacks make 2^k copies, which extraction renames
+     and emits one by one (about 2 kB of native source per node).  A
+     fallback is kept only while the plan, counted as a tree, stays within
+     this many nodes. *)
+  val max_plan_nodes = 1000
+
+  (* The plan's tree size, counting stopped once it passes [limit]. *)
+  fun plan_nodes_upto limit plan =
+    let
+      fun count current n =
+        if n > limit then n
+        else
+          case current of
+              Test _ => n + 1
+            | Gen (_, next) => count next (n + 1)
+            | Bind (_, _, NONE, next) => count next (n + 1)
+            | Bind (_, _, SOME other, next) => count next (count other (n + 1))
+            | Split (_, branches) =>
+                List.foldl (fn ((_, _, next), k) => count next k) (n + 1)
+                  branches
+            | Guard {cont, ...} => count cont (n + 1)
+            | SmartGuard {cont, ...} => count cont (n + 1)
+            | Enum {cont, ...} => count cont (n + 1)
+            | Prune => n + 1
+    in
+      count plan 0
+    end
+
   fun fresh_variables avoids types =
     let
       val avoid_variables = List.concat (List.map Term.free_vars_lr avoids)
@@ -787,14 +816,28 @@ structure Refute_QC :> Refute_QC = struct
                    not (member rhs bound)
                 then
                   let
+                    (* The Bind and its fallback share one compiled
+                       continuation, and the fallback is dropped once the
+                       plan passes [max_plan_nodes]. *)
+                    val next = continuation ()
                     val fallback =
                       if genspec_available (Term.type_of rhs) then
-                        SOME (guarded_gen rhs (continuation ()))
+                        SOME (guarded_gen rhs next)
                       else NONE
+                    val bind = Bind (rhs, lhs, fallback, next)
+                    val bind =
+                      if isSome fallback andalso
+                         plan_nodes_upto max_plan_nodes bind > max_plan_nodes
+                      then
+                        (Refute_Core.Private.say 2
+                           ("Refute dropped the fallback for " ^
+                            safe_term_text assumption ^ ": plan over " ^
+                            Int.toString max_plan_nodes ^ " nodes\n");
+                         Bind (rhs, lhs, NONE, next))
+                      else bind
                     val variables = subtract_terms assumption_vars [rhs]
                   in
-                    SOME (gen_all variables
-                      (Bind (rhs, lhs, fallback, continuation ())))
+                    SOME (gen_all variables bind)
                   end
                 else
                   case fully_applied_constructor rhs of

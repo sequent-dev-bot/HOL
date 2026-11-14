@@ -1828,6 +1828,26 @@ val _ = test "an oversized generator list gives up at its size" (fn () =>
     Time.toReal (Time.- (Time.now (), start)) < 30.0
   end)
 
+(* Twenty chained [x_i + 1 = x_(i+1)] premises: each binds its right side
+   with a generator fallback, so an uncapped plan holds 2^20 copies of the
+   rest of the plan, and each binding's term names the ones before it. *)
+val _ = test "a long chain of equations stays small in native code" (fn () =>
+  let
+    val xs = List.tabulate (21, fn i =>
+      mk_var ("x" ^ Int.toString i, numSyntax.num))
+    val chain = List.tabulate (20, fn i =>
+      mk_eq (numSyntax.mk_plus (List.nth (xs, i), numSyntax.term_of_int 1),
+             List.nth (xs, i + 1)))
+    val goal = list_mk_imp (chain,
+      numSyntax.mk_less (List.nth (xs, 20), numSyntax.term_of_int 20))
+    val outcome =
+      refute (exhaustive |> upd_substrate NativeSML
+                         |> upd_smart_generators false |> upd_timeout 60.0)
+             goal
+  in
+    cex_where (fn c => #substrate c = "native" andalso is_genuine c) outcome
+  end)
+
 val _ = test "a Horn premise is enumerated" (fn () =>
   let
     val goal = ``ALL_DISTINCT (xs : bool list) ==> LENGTH xs < 1``
