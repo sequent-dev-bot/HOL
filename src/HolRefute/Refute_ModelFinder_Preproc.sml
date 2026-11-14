@@ -191,8 +191,17 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
       val lookup = AList.lookup (Lib.uncurry Term.aconv)
       fun recurse environment candidate =
         case MFH.numeral_value candidate of
-            SOME value => MFN.mk_numeral (MFH.int_of_numeral value)
-              (MFH.binarize_nat_and_int_in_type (Term.type_of candidate))
+            SOME value =>
+              let val ty = MFH.binarize_nat_and_int_in_type
+                (Term.type_of candidate)
+              in
+                (* A numeral beyond ML's [int] is
+                   a variable that only names its value, left for the
+                   encoder to find unrepresentable. *)
+                case MFH.int_of_numeral value of
+                    SOME small => MFN.mk_numeral small ty
+                  | NONE => MFN.mk_oversized (Arbint.toString value) ty
+              end
           | NONE =>
               if Term.is_abs candidate then
                 let

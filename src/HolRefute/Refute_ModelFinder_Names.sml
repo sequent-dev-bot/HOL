@@ -6,6 +6,7 @@ structure Refute_ModelFinder_Names :> Refute_ModelFinder_Names = struct
   val name_sep = "$"
 
   val numeral_prefix = reserved_prefix ^ "num" ^ name_sep
+  val oversized_prefix = reserved_prefix ^ "oversized" ^ name_sep
   val sel_prefix = reserved_prefix ^ "sel"
   val discr_prefix = reserved_prefix ^ "is" ^ name_sep
   val lfp_iterator_prefix = reserved_prefix ^ "lfpit" ^ name_sep
@@ -160,6 +161,11 @@ structure Refute_ModelFinder_Names :> Refute_ModelFinder_Names = struct
 
   fun mk_numeral value ty =
     mk_reserved_var (numeral_prefix ^ Int.toString value) ty
+
+  (* A numeral beyond ML's [int]; the name carries
+     the value, so two different ones are never the same variable. *)
+  fun mk_oversized digits ty =
+    mk_reserved_var (oversized_prefix ^ digits) ty
 
   fun mk_discriminator constructor ty =
     mk_reserved_var (discr_prefix ^ constructor) ty

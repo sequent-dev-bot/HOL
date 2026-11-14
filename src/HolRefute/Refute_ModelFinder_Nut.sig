@@ -8,6 +8,7 @@ signature Refute_ModelFinder_Nut = sig
 
   datatype cst =
     False | True | Iden | Num of int | Unknown | Unrep | Suc | Add |
+    Oversized |
     Subtract | Multiply | Divide | Gcd | Lcm | Fracs | NormFrac |
     NatToInt | IntToNat |
     (* Word operations with no arithmetic reading.  [Add], [Subtract] and

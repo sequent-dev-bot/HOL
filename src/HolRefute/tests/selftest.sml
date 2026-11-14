@@ -2956,9 +2956,17 @@ val _ = mf_test "typedefs over num are refuted" (fn () =>
            String.isSubstring "zoo_three_abs" text andalso
            not (String.isSubstring "refute$" text)
          end) (#bindings c)) andalso
-  bounds_clean (refute (carrier |> upd_binary_ints (SOME true)
-                          |> upd_card [(SOME ``:num``, [3]), (NONE, [3])])
-                       ``(a : zoo_three) = b``))
+  (* The bound 3 is above the three-valued
+     carrier, so it compares above every value there and the typedef's
+     membership holds of them: a model, not an unknown. *)
+  refute (carrier |> upd_binary_ints (SOME true)
+            |> upd_card [(SOME ``:num``, [3]), (NONE, [3])])
+         ``(a : zoo_three) = b``
+  |> cex_where (fn c =>
+       kodkod_genuine c andalso not (null (#bindings c)) andalso
+       List.all (fn (_, v) =>
+         String.isSubstring "zoo_three_abs" (Parse.term_to_string v))
+         (#bindings c)))
 
 val _ = mf_test "a typedef stated as two halves is harvested" (fn () =>
   refute carrier ``(a : refute_harvest_split) = b`` |> cex_where kodkod_genuine
@@ -5585,6 +5593,61 @@ in
       let val (mono, rest) =
         S.mono_partition_with (fn _ => false) [] [chr_ty, ``:word8``, ``:'a``]
       in length mono = 2 andalso rest = [``:'a``] end)
+end
+
+(* The size of a numeral type is a numeral, and a
+   literal beyond ML's int is unrepresentable rather than a declined goal. *)
+local
+  val big = "1606938044258990275541962092341162602522202993782792835301376"
+  fun term_of s = Parse.Term [QUOTE s]
+  fun found c = kodkod_genuine c
+  fun declined outcome =
+    List.exists (String.isSubstring "does not fit") (reasons_of outcome)
+  val n_five = ``5n``
+in
+  val _ = mf_test "dimindex of a numeral type is a numeral, with no carrier for the type"
+    (fn () =>
+      refute mf ``(n : num) < dimindex (:256) ==> n <> 5``
+      |> cex_where (fn c => found c andalso binding_is c ``n : num`` n_five andalso
+                            scope_of c ``:256`` = NONE))
+
+  val _ = mf_test "dimword of a numeral type is its exact power of two"
+    (fn () =>
+      refute mf ``(n : num) < dimword (:8) ==> n <> 255``
+      |> cex_where (fn c => found c andalso
+                            binding_is c ``n : num`` ``255n`` andalso
+                            scope_of c ``:8`` = NONE) andalso
+      bounds_clean (refute mf ``(n : num) < dimword (:8) ==> n <> 256``))
+
+  val _ = mf_test "an int literal beyond ML's int is unrepresentable, not a declined goal"
+    (fn () =>
+      let val outcome = refute mf (term_of ("(i : int) = " ^ big ^ "i"))
+      in not (declined outcome) andalso is_cex outcome end)
+
+  val _ = mf_test "a num literal beyond ML's int is unrepresentable, not a declined goal"
+    (fn () =>
+      let val outcome = refute mf (term_of ("(n : num) <> " ^ big))
+      in not (declined outcome) andalso bounds_clean outcome end)
+
+  val _ = mf_test "a num literal above the fragment compares as above every value"
+    (fn () =>
+      List.all (fn goal =>
+        refute mf (term_of goal)
+        |> cex_where (fn c => found c andalso binding_is c ``n : num`` n_five))
+        ["(n : num) < " ^ big ^ " ==> n <> 5",
+         "(n : num) <= " ^ big ^ " ==> n <> 5"] andalso
+      bounds_clean (refute mf (term_of ("" ^ big ^ " < (n : num) ==> n <> 5"))) andalso
+      bounds_clean (refute mf (term_of ("" ^ big ^ " <= (n : num) ==> n <> 5"))))
+
+  val _ = mf_test "a num literal above the binary range compares as above every value"
+    (fn () =>
+      List.all (fn goal =>
+        refute (mf |> upd_binary_ints (SOME true) |> upd_bits [3])
+               (term_of goal)
+        |> cex_where (fn c => found c andalso binding_is c ``n : num`` ``2n``))
+        ["(n : num) < 100 ==> n <> 2", "(n : num) <= 100 ==> n <> 2"] andalso
+      bounds_clean (refute (mf |> upd_binary_ints (SOME true) |> upd_bits [3])
+                           ``100 < (n : num) ==> n <> 2``))
 end
 
 (* ------------------------------------------------------------------- *)

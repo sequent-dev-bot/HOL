@@ -3848,12 +3848,9 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
     else
       [ty]
 
-  fun int_of_numeral value =
-    Arbint.toInt value
-    handle Overflow =>
-      raise Util.TOO_LARGE
-        ("Refute_ModelFinder_HOL.int_of_numeral",
-         "numeral does not fit in int")
+  (* A numeral beyond ML's [int] is
+     unrepresentable at any carrier, so it is no error here. *)
+  fun int_of_numeral value = SOME (Arbint.toInt value) handle Overflow => NONE
 
   fun is_funbox_type ty =
     Refute_ModelFinder_Names.is_refute_type
@@ -6504,6 +6501,20 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
             result
           end
 
+  (* [dimindex(:N)] and [dimword(:N)] at a numeral
+     type [:N] are the numerals [N] and [2 ** N], read by the kernel
+     conversion before any definition is unfolded.  Unfolded, [dimword] would
+     become the cardinality of the universe of [:N], which is a carrier of [N]
+     atoms. *)
+  fun numeral_type_size candidate =
+    case Lib.total boolSyntax.dest_strip_comb candidate of
+        SOME (name, [_]) =>
+          if name = "fcp$dimindex" orelse name = "words$dimword" then
+            Option.map (boolSyntax.rhs o Thm.concl)
+              (Lib.total wordsLib.SIZES_CONV candidate)
+          else NONE
+      | _ => NONE
+
   fun unfold_defs_in_term
         (context as {case_names, ersatz_table, whacks, total_consts,
                      whack_weakening, choice_guard_inserted, ...}
@@ -6527,6 +6538,8 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
       fun process_args depth arguments = map (do_term depth) arguments
       and do_term depth candidate =
         if is_numeral candidate then candidate
+        else if Option.isSome (numeral_type_size candidate) then
+          valOf (numeral_type_size candidate)
         else if Term.is_abs candidate then
           let val (variable, body) = Term.dest_abs candidate
           in Term.mk_abs (variable, do_term depth body) end

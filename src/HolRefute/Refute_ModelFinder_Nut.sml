@@ -29,6 +29,9 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
 
   datatype cst =
     False | True | Iden | Num of int | Unknown | Unrep | Suc | Add |
+    (* A [num] or [int] literal beyond ML's [int],
+       which no carrier holds. *)
+    Oversized |
     Subtract | Multiply | Divide | Gcd | Lcm | Fracs | NormFrac |
     NatToInt | IntToNat |
     (* Word operations with no arithmetic reading.  [Add], [Subtract] and
@@ -81,6 +84,7 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
     | string_for_cst (Num value) = "Num " ^ Int.toString value
     | string_for_cst Unknown = "Unknown"
     | string_for_cst Unrep = "Unrep"
+    | string_for_cst Oversized = "Oversized"
     | string_for_cst Suc = "Suc"
     | string_for_cst Add = "Add"
     | string_for_cst Subtract = "Subtract"
@@ -367,6 +371,11 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
               (name, size MFN.numeral_prefix, NONE))
           else NONE
       | NONE => NONE
+
+  fun is_oversized_numeral term =
+    case Lib.total Term.dest_var term of
+        SOME (name, _) => String.isPrefix MFN.oversized_prefix name
+      | NONE => false
 
   fun factorize (ty, term) =
     if MFH.is_pair_type ty then
@@ -722,10 +731,19 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
               SOME integer =>
                 Cst (Num integer, Term.type_of candidate, MFR.Any)
             | NONE =>
+              (* A numeral beyond ML's [int] has no
+                 carrier atom. *)
+              if is_oversized_numeral candidate then
+                Cst (Oversized, Term.type_of candidate, MFR.Any)
+              else
               (case MFH.numeral_value candidate of
                    SOME integer =>
-                     Cst (Num (MFH.int_of_numeral integer),
-                       Term.type_of candidate, MFR.Any)
+                     (case MFH.int_of_numeral integer of
+                          SOME small =>
+                            Cst (Num small, Term.type_of candidate, MFR.Any)
+                        | NONE =>
+                            Cst (Oversized, Term.type_of candidate,
+                              MFR.Any))
                  | NONE =>
               case word_literal_value candidate of
                   SOME value =>
@@ -1460,6 +1478,13 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                     if representable then Cst (Num value, ty, atom)
                     else Cst (Unrep, ty, MFR.Opt atom)
                   end
+            | Cst (Oversized, ty, _) =>
+                (* No carrier holds a literal
+                   beyond ML's [int]. *)
+                Cst (Unrep, ty,
+                  if MFH.is_bitword_type ty then
+                    MFR.best_opt_set_rep_for_type scope ty
+                  else MFR.Opt (MFR.Atom (MFS.spec_of_type scope ty)))
             | Cst (Suc, ty, _) =>
                 let val atom = MFR.Atom
                   (MFS.spec_of_type scope (domain_type ty))
@@ -1649,7 +1674,30 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                   val second' = sub second
                   val optional = List.exists
                     (MFR.is_opt_rep o rep_of) [first', second']
+                  (* A [num] literal above the
+                     fragment is above every value the carrier holds, so
+                     the order against a represented value is decided. *)
+                  fun above_fragment nut =
+                    (type_of nut = MFH.num_type orelse
+                     type_of nut = MFH.unsigned_bitword_type) andalso
+                    (case nut of
+                         Cst (Oversized, _, _) => true
+                       | Cst (Num value, ty, _) =>
+                           not (if MFH.is_bitword_type ty then
+                                  MFP.is_twos_complement_representable
+                                    (#bits scope) value
+                                else value < #1 (MFS.spec_of_type scope ty))
+                       | _ => false)
                 in
+                  if above_fragment second andalso
+                     not (above_fragment first) andalso
+                     not (MFR.is_opt_rep (rep_of first')) then
+                    Cst (True, ty, MFR.Formula Util.Neut)
+                  else if above_fragment first andalso
+                          not (above_fragment second) andalso
+                          not (MFR.is_opt_rep (rep_of second')) then
+                    Cst (False, ty, MFR.Formula Util.Neut)
+                  else
                   s_op2 Less ty (bool_rep polarity optional) first' second'
                 end
             | Op2 (SignedLess, ty, _, first, second) =>

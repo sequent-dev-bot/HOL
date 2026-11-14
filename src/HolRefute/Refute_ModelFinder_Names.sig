@@ -5,6 +5,7 @@ signature Refute_ModelFinder_Names = sig
   val reserved_prefix : string
   val name_sep : string
   val numeral_prefix : string
+  val oversized_prefix : string
   val discr_prefix : string
   val lfp_iterator_prefix : string
   val gfp_iterator_prefix : string
@@ -29,6 +30,7 @@ signature Refute_ModelFinder_Names = sig
   val sel_no_from_name : string -> int
   val mk_reserved_var : string -> hol_type -> term
   val mk_numeral : int -> hol_type -> term
+  val mk_oversized : string -> hol_type -> term
   val mk_discriminator : string -> hol_type -> term
   val mk_iterator_zero : string -> hol_type -> term
   val mk_iterator_suc : string -> hol_type -> term

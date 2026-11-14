@@ -177,7 +177,7 @@ signature Refute_ModelFinder_HOL = sig
   val is_pair_type : hol_type -> bool
   val is_higher_order_type : hol_type -> bool
   val factor_types : hol_type -> hol_type list
-  val int_of_numeral : Arbint.int -> int
+  val int_of_numeral : Arbint.int -> int option
   val is_funbox_type : hol_type -> bool
   val is_pairbox_type : hol_type -> bool
   val is_fp_iterator_type : hol_type -> bool
