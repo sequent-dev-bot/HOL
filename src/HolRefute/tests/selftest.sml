@@ -2562,8 +2562,9 @@ val _ = mf_test "kodkod refutes and certifies a numeric goal" (fn () =>
     kodkod_genuine c andalso #substrate c = "kodkod" andalso
     Option.isSome (#cert c)))
 
-(* A four-column relation cannot fit a 256-atom universe. Both sound
-   and liberal assembly reject it. *)
+(* A four-column relation cannot fit a 256-atom universe. The scope is
+   rejected once, before either its sound or its liberal problem is
+   assembled. *)
 val arity_goal = ``(r : 'a -> 'a -> 'a -> 'a -> bool) a b c d``
 val arity_config = mf |> upd_mono [(NONE, SOME false)]
 
@@ -2571,8 +2572,8 @@ val _ = mf_test "exhausted arity rejections retain one counted reason"
   (fn () =>
     case refute (arity_config |> upd_card [(NONE, [256])]) arity_goal of
         Unknown reasons =>
-          (case List.filter (String.isSubstring "problems rejected:") reasons of
-               [reason] => String.isSubstring "2 problems rejected:" reason
+          (case List.filter (String.isSubstring "problem rejected:") reasons of
+               [reason] => String.isSubstring "1 problem rejected:" reason
                  andalso String.isSubstring "arity 4" reason
                  andalso String.isSubstring "universe of size 256" reason
              | _ => false)
@@ -2596,7 +2597,7 @@ val _ = mf_test "assembly rejections survive solver setup exceptions"
           val result = refute cfg arity_goal
         in
           unknown_with "SysErr" result andalso
-          unknown_with "2 problems rejected:" result andalso
+          unknown_with "1 problem rejected:" result andalso
           unknown_with "arity 4" result
         end
     in
@@ -2621,9 +2622,10 @@ val _ = mf_test "adaptive arity rejections survive interrupted display"
         arity_goal
     in
       !entered andalso unknown_with "timed out" result andalso
-      unknown_with "2 problems rejected:" result andalso
-      unknown_with "arity 4" result andalso
-      unknown_with "universe of size 256" result
+      unknown_with "1 problem rejected: arity 4" result andalso
+      unknown_with "problems rejected: cardinalities no smaller than \
+        \those of a scope that was rejected: arity 4" result andalso
+      unknown_with "too large for a universe of size" result
     end))
 
 (* Every [Unknown] of the model finder names the phase it reached and its
@@ -2646,8 +2648,127 @@ val _ = mf_test "a size rejection names the relation, the limit, phase and count
       unknown_with "(limit: arity 3)" result andalso
       progress_has ["phase reached: assembly", "definitions accepted ",
                     "scopes completed 0 of 1 emitted",
-                    "problems offered 0, finished 0, rejected 2"] result
+                    "problems offered 0, finished 0, rejected 1"] result
     end)
+
+(* A scope that cannot fit is rejected, once,
+   before either of its problems is assembled.  A scope with at least its
+   cardinalities is rejected with it, and a window whose first scope cannot
+   fit ends the search at once. *)
+local
+  structure MFK = Refute_ModelFinder_Kodkod
+  fun assembled cfg =
+    let
+      val previous = !MFK.assembly_calls
+      val result = refute cfg arity_goal
+    in
+      (result, !MFK.assembly_calls - previous)
+    end
+  fun rejected_count n outcome =
+    outcome |> cex_where (fn c =>
+      List.exists (fn (key, value) =>
+        key = "problems_rejected" andalso value = n) (#stats c))
+in
+  val _ = mf_test "a scope that cannot fit is rejected before it is assembled"
+    (fn () =>
+      let
+        val (_, fitting) = assembled (arity_config |> upd_card [(NONE, [2])])
+        val (both, calls) =
+          assembled (arity_config |> upd_card [(NONE, [2, 256])])
+      in
+        fitting > 0 andalso calls = fitting andalso rejected_count 1 both
+      end)
+
+  val _ = mf_test "a scope no smaller than a rejected scope is rejected with it"
+    (fn () =>
+      let
+        val (_, fitting) = assembled (arity_config |> upd_card [(NONE, [2])])
+        val ((result, calls), text) = capture 2 (fn () =>
+          assembled (arity_config |> upd_card [(NONE, [2, 256, 257, 258])]
+                     |> upd_quiet false))
+      in
+        calls = fitting andalso rejected_count 3 result andalso
+        String.isSubstring "1 problem rejected: arity 4" text andalso
+        String.isSubstring "2 problems rejected: cardinalities no smaller \
+          \than those of a scope that was rejected: arity 4" text
+      end)
+
+  (* A bound variable of three arguments has 64 columns at card 4, past the
+     limit of 30, which is only met while its formula is assembled: the sound
+     and the liberal problem are each rejected once, and the larger scopes
+     are rejected with them. *)
+  val bound_goal =
+    ``(!(g : 'a -> 'a -> 'a -> bool). g x y z) ==>
+      (h : 'a -> 'a -> 'a -> bool) x y z``
+  val _ = mf_test "a size rejection met in assembly rejects the larger scopes unassembled"
+    (fn () =>
+      let
+        fun run cards =
+          let
+            val previous = !MFK.assembly_calls
+            val result = refute (arity_config |> upd_card [(NONE, cards)])
+                           bound_goal
+          in (result, !MFK.assembly_calls - previous) end
+        val (_, fitting) = run [2, 3]
+        val (result, calls) = run [2, 3, 4, 5, 6]
+      in
+        calls = fitting + 2 andalso
+        unknown_with "2 problems rejected: arity 64 of bound variable" result
+        andalso
+        unknown_with "4 problems rejected: cardinalities no smaller than \
+          \those of a scope that was rejected: arity 64 of bound variable"
+          result
+      end)
+
+  val _ = mf_test "no scope of the window fitting stops the search, naming the relation and the limit"
+    (fn () =>
+      let
+        val (result, calls) =
+          assembled (arity_config |> upd_card [(NONE, [256, 257, 258])])
+      in
+        calls = 0 andalso
+        unknown_with "no scope in the window can fit: arity 4 of Kodkod \
+          \relation associated with \"r\" too large for a universe of size \
+          \256 (limit: arity 3)" result andalso
+        not (unknown_with "universe of size 257" result) andalso
+        progress_has ["problems offered 0, finished 0, rejected 1"] result
+      end)
+end
+
+(* Kodkod refuses a matrix past the tuple limit,
+   whatever the relations of the problem; the expressions of the formula
+   are held to the limit too.  72 atoms and 6 columns is the capacity
+   139314069504 Kodkodi reported. *)
+local
+  structure MFK = Refute_ModelFinder_Kodkod
+  structure F = Refute_Forl
+  val names = [((3, 0), "a"), ((3, 1), "b")]
+  val a = F.Rel (3, 0)
+  val b = F.Rel (3, 1)
+  fun message_for universe formula =
+    (MFK.check_expression_arities names universe formula; NONE)
+    handle Refute_ModelFinder_Util.TOO_LARGE (_, message) => SOME message
+in
+  val _ = test "an expression past the tuple limit is rejected naming its relations"
+    (fn () =>
+      case message_for 72 (F.No (F.Product (a, b))) of
+          SOME message =>
+            List.all (fn needle => String.isSubstring needle message)
+              ["arity 6 of a Kodkod expression over \"a\", \"b\"",
+               "universe of size 72", "(limit: arity 5)"]
+        | NONE => false)
+
+  val _ = test "an expression within the tuple limit is accepted"
+    (fn () =>
+      message_for 72 (F.No (F.Join (a, b))) = NONE andalso
+      message_for 72 (F.No (F.Product (a, F.Univ))) = NONE andalso
+      message_for 72 (F.No a) = NONE)
+
+  val _ = test "an expression is held to the limit inside an integer expression"
+    (fn () =>
+      Option.isSome
+        (message_for 72 (F.LT (F.Cardinality (F.Product (a, b)), F.Num 1))))
+end
 
 val _ = mf_test "a declined goal names the phase and counts"
   (fn () =>
@@ -2690,8 +2811,8 @@ val _ = mf_test "rejected scopes do not hide a genuine counterexample"
     in
       result |> cex_where (fn c => kodkod_genuine c andalso
         List.exists (fn (key, value) =>
-          key = "problems_rejected" andalso value = 2) (#stats c))
-      andalso String.isSubstring "2 problems rejected:" text
+          key = "problems_rejected" andalso value = 1) (#stats c))
+      andalso String.isSubstring "1 problem rejected:" text
       andalso String.isSubstring "arity 4" text
     end)
 
@@ -2718,7 +2839,7 @@ val _ = mf_test "published counterexamples retain rejection stats on timeout"
       fun witnesses (Counterexample cs) = cs | witnesses _ = []
       fun counted (c : counterexample) =
         List.exists (fn (key, value) =>
-          key = "problems_rejected" andalso value = 2) (#stats c)
+          key = "problems_rejected" andalso value = 1) (#stats c)
       val normal = witnesses (refute cfg goal)
       (* Block the final display callback of the second model, after the
          first witness is published. Only the outer timer can end this run. *)
@@ -5802,6 +5923,31 @@ val _ = mf_test "an unnumbered solver error is counted and tied to the problems"
       unknown_with "7 problems ended with no result" result andalso
       progress_has ["solver errors 2"] result andalso
       not (bounds_clean result)
+    end)
+
+(* The solver's `File too large` is a solver error, counted by its message:
+   it is no size rejection, which is decided before the solver runs. *)
+val _ = mf_test "a File too large solver error is counted as a solver error"
+  (fn () =>
+    let
+      val calls = ref []
+      val ended = KK.Ended {ending = KK.Finished, message = "",
+                            errors = [("File too large", 3)]}
+      val submits = ref 0
+      (* the first batch ends with the error, later ones finish cleanly *)
+      fun events (req : KK.request) =
+        (submits := !submits + 1;
+         if !submits = 1 then [KK.Unsat 0, ended]
+         else List.tabulate (length (#problems req), KK.Unsat) @
+              [KK.Ended {ending = KK.Finished, message = "", errors = []}])
+      val result = KK.with_backend (scripted calls events (fn _ => ended))
+        (fn () => refute mf true_goal)
+    in
+      is_unknown result andalso
+      unknown_with "solver error (3 times): File too large" result andalso
+      progress_has ["solver errors 3"] result andalso
+      not (unknown_with "problem rejected:" result) andalso
+      not (unknown_with "problems rejected:" result)
     end)
 
 (* A model the solver finished just before the deadline: its replay has no

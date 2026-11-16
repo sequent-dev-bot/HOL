@@ -119,6 +119,59 @@ fun check_arity guilty universe_card arity =
   else
     ()
 
+(* Kodkod builds a matrix as large as the universe
+   raised to the arity of each expression of the formula, and refuses one
+   past the same tuple limit [check_arity] applies to relations.  Only the
+   expressions that can have more columns than their parts are looked at:
+   products, joins, projections and comprehensions.  [names] says which
+   relation each index is, for the message. *)
+fun check_expression_arities names universe_card formula =
+  let
+    val limit = Refute_Forl.max_arity universe_card
+    fun relations_in expression =
+      Refute_Forl.fold_formula
+        {formula_func = fn _ => fn found => found,
+         rel_expr_func = fn (Rel index) => (fn found =>
+                           if mem index found then found else index :: found)
+                          | _ => (fn found => found),
+         int_expr_func = fn _ => fn found => found}
+        (Some expression) []
+    fun described expression =
+      let
+        val found = List.mapPartial (fn index =>
+          Option.map (fn name => quote (MFN.original_name name))
+            (Option.map #2 (List.find (fn (other, _) => other = index)
+               names))) (rev (relations_in expression))
+      in
+        if null found then ""
+        else " over " ^ String.concatWith ", " found
+      end
+    fun rel_expr_func expression () =
+      case expression of
+          Product _ => check expression
+        | Join _ => check expression
+        | Project _ => check expression
+        | Comprehension _ => check expression
+        | _ => ()
+    and check expression =
+      let val arity = Refute_Forl.arity_of_rel_expr expression
+      in
+        if arity > limit then
+          raise Util.TOO_LARGE
+            ("Refute_ModelFinder_Kodkod.check_arity",
+             "arity " ^ Int.toString arity ^ " of a Kodkod expression" ^
+             described expression ^ " too large for a universe of size " ^
+             Int.toString universe_card ^ " (limit: arity " ^
+             Int.toString limit ^ ")")
+        else ()
+      end
+  in
+    Refute_Forl.fold_formula
+      {formula_func = fn _ => fn value => value,
+       rel_expr_func = rel_expr_func,
+       int_expr_func = fn _ => fn value => value} formula ()
+  end
+
 fun empty_offset_table () =
   (* The second component is the HOL4 port's distinguished-default slot,
      replacing upstream's dummy-type key. *)
@@ -3039,16 +3092,14 @@ fun scope_with_offsets
    bits = bits, bisim_depth = bisim_depth, data_types = data_types,
    ofs = offsets}
 
-fun assemble_problem_once
-      ({debug, peephole_optim, total_consts, datatype_sym_break,
-        kodkod_sym_break,
-        comment, solver, unsound_delay, free_names, nonsel_names,
-        nondef_us, def_us, need_us} : assembly_params)
-      unsound (scope : MFS.scope) : rich_problem =
+(* The part of assembly that depends on the scope
+   alone: the representations of the problem's relations and the arity limit
+   on them.  A scope that fails here has no problem worth assembling. *)
+fun scope_representations
+      ({total_consts, free_names, nonsel_names, ...} : assembly_params)
+      (scope : MFS.scope) =
   let
     val offsets = #ofs scope
-    val data_types = #data_types scope
-    val bits = #bits scope
     val main_j0 = MFS.offset_of_type offsets Type.bool
     val (nat_card, nat_j0) = MFS.spec_of_type scope MFH.num_type
     val (int_card, int_j0) = MFS.spec_of_type scope MFH.int_type
@@ -3056,7 +3107,6 @@ fun assemble_problem_once
       if nat_j0 = main_j0 andalso int_j0 = main_j0 then ()
       else raise Util.BAD
         ("Refute_ModelFinder_Kodkod.assemble_problem", "bad offsets")
-    val kk = MFP.kodkod_constrs peephole_optim nat_card int_card main_j0
     val (free_names, rep_table) = MFNT.choose_reps_for_free_vars scope
       free_names MFNT.NameTable.empty
     val (sel_names, rep_table) =
@@ -3086,6 +3136,34 @@ fun assemble_problem_once
         ("", 1, initial_universe)
         (free_names @ sel_names @ nonsel_names)
     val _ = check_arity guilty minimum_universe highest_rep_arity
+  in
+    (free_names, sel_names, nonsel_names, rep_table)
+  end
+
+(* Raises TOO_LARGE when the scope's relations
+   cannot fit, as assembly would, without assembling anything. *)
+fun check_scope_fits params scope =
+  with_arity_retry (#ofs scope) (fn offsets =>
+    ignore (scope_representations params (scope_with_offsets scope offsets)))
+
+val assembly_calls = ref 0
+
+fun assemble_problem_once
+      (params as {debug, peephole_optim, total_consts, datatype_sym_break,
+        kodkod_sym_break,
+        comment, solver, unsound_delay, free_names, nonsel_names,
+        nondef_us, def_us, need_us} : assembly_params)
+      unsound (scope : MFS.scope) : rich_problem =
+  let
+    val offsets = #ofs scope
+    val data_types = #data_types scope
+    val bits = #bits scope
+    val main_j0 = MFS.offset_of_type offsets Type.bool
+    val (nat_card, _) = MFS.spec_of_type scope MFH.num_type
+    val (int_card, _) = MFS.spec_of_type scope MFH.int_type
+    val kk = MFP.kodkod_constrs peephole_optim nat_card int_card main_j0
+    val (free_names, sel_names, nonsel_names, rep_table) =
+      scope_representations params scope
 
     val def_us = map (MFNT.choose_reps_in_nut scope unsound rep_table true)
       def_us
@@ -3154,7 +3232,13 @@ fun assemble_problem_once
     val _ = if bits = 0 then () else check_bits bits formula
     val _ =
       if formula = KK.False then ()
-      else check_arity "" universe_card highest_bound_arity
+      else (check_arity "" universe_card highest_bound_arity;
+            check_expression_arities
+              (List.mapPartial (fn MFNT.FreeRel (index, _, _, nickname) =>
+                                  SOME (index, nickname)
+                                | _ => NONE)
+                 (free_rels @ sel_rels @ other_rels))
+              universe_card formula)
     val problem : KK.problem =
       {comment = (if unsound then "unsound" else "sound") ^ "\n" ^ comment,
        settings =
@@ -3174,8 +3258,9 @@ fun assemble_problem_once
   end
 
 fun assemble_problem params unsound scope =
+  (assembly_calls := !assembly_calls + 1;
   with_arity_retry (#ofs scope) (fn offsets =>
-    assemble_problem_once params unsound (scope_with_offsets scope offsets))
+    assemble_problem_once params unsound (scope_with_offsets scope offsets)))
 
 (* Upstream to_set_bool_op and kk_vect_set_bool_op are intentionally
    omitted: no representation reachable in this port dispatches to them,

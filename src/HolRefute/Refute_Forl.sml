@@ -192,7 +192,23 @@ structure Refute_Forl :> Refute_Forl = struct
       | False => #formula_func funcs formula initial
       | True => #formula_func funcs formula initial
       | FormulaReg _ => #formula_func funcs formula initial
+  (* [rel_expr_func] also sees every expression
+     that has parts, before its parts, so that a caller can check the
+     expressions a problem builds as well as the relations it names. *)
   and fold_rel_expr funcs relation initial =
+    fold_rel_expr_parts funcs relation
+      (case relation of
+           Iden => initial
+         | Ints => initial
+         | None => initial
+         | Univ => initial
+         | Atom _ => initial
+         | AtomSeq _ => initial
+         | Rel _ => initial
+         | Var _ => initial
+         | RelReg _ => initial
+         | _ => #rel_expr_func funcs relation initial)
+  and fold_rel_expr_parts funcs relation initial =
     case relation of
         RelLet (assigns, body) =>
           fold_rel_expr funcs body

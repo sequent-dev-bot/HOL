@@ -28,4 +28,19 @@ signature Refute_ModelFinder_Kodkod = sig
   val assemble_problem :
     assembly_params -> bool -> Refute_ModelFinder_Scope.scope ->
     rich_problem
+  (* Raises ModelFinder_Util.TOO_LARGE when the
+     relations of a scope cannot fit, as [assemble_problem] would, but
+     assembles nothing. *)
+  val check_scope_fits :
+    assembly_params -> Refute_ModelFinder_Scope.scope -> unit
+  (* The number of [assemble_problem] calls so far,
+     for the selftests. *)
+  val assembly_calls : int ref
+  (* [check_expression_arities names universe_card
+     formula] raises TOO_LARGE when an expression of [formula] has more
+     columns than a universe of [universe_card] atoms allows; [names] say
+     which relation each index is. *)
+  val check_expression_arities :
+    (Refute_Forl.n_ary_index * string) list -> int ->
+    Refute_Forl.formula -> unit
 end

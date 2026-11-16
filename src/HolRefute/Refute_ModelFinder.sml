@@ -321,31 +321,53 @@ fun actual_solver incremental (mf : Refute_Core.mf_config) =
 fun solver_arguments deadline solver =
   #2 (Refute_ForlSat.sat_solver_spec (Refute_Util.remaining deadline) solver)
 
-fun problem_for_scope deadline (mf : Refute_Core.mf_config)
+(* The assembly parameters of a scope are shared
+   by the check that a scope can fit and by its assembly. *)
+fun assembly_params deadline (mf : Refute_Core.mf_config)
       all_types solver free_names nonsel_names nondef_us def_us need_us
-      reject_problem unsound scope =
+      (scope : MFS.scope) : MFK.assembly_params =
   let
     val effective_total_consts =
       Option.getOpt (#total_consts mf, exact_totality all_types scope)
-    val params : MFK.assembly_params =
-      {debug = #debug mf,
-       peephole_optim = #peephole_optim mf,
-       total_consts = effective_total_consts,
-       datatype_sym_break = #datatype_sym_break mf,
-       kodkod_sym_break = #kodkod_sym_break mf,
-       comment = scope_comment scope,
-       solver = solver_arguments deadline solver,
-       unsound_delay = unsound_delay deadline,
-       free_names = free_names,
-       nonsel_names = nonsel_names,
-       nondef_us = nondef_us,
-       def_us = def_us,
-       need_us = need_us}
   in
-    SOME (MFK.assemble_problem params unsound scope)
-    handle Util.TOO_LARGE reason => (reject_problem reason; NONE)
-         | Util.TOO_SMALL reason => (reject_problem reason; NONE)
+    {debug = #debug mf,
+     peephole_optim = #peephole_optim mf,
+     total_consts = effective_total_consts,
+     datatype_sym_break = #datatype_sym_break mf,
+     kodkod_sym_break = #kodkod_sym_break mf,
+     comment = scope_comment scope,
+     solver = solver_arguments deadline solver,
+     unsound_delay = unsound_delay deadline,
+     free_names = free_names,
+     nonsel_names = nonsel_names,
+     nondef_us = nondef_us,
+     def_us = def_us,
+     need_us = need_us}
   end
+
+(* [reject_too_large] hears of the rejections for
+   size, which a larger scope would meet too; [reject_problem] of the rest. *)
+fun problem_for_scope params reject_problem reject_too_large unsound scope =
+  SOME (MFK.assemble_problem params unsound scope)
+  handle Util.TOO_LARGE reason => (reject_too_large reason; NONE)
+       | Util.TOO_SMALL reason => (reject_problem reason; NONE)
+
+(* The reason a scope's relations cannot fit,
+   found without assembling anything. *)
+fun scope_too_large params scope =
+  (MFK.check_scope_fits params scope; NONE)
+  handle Util.TOO_LARGE reason => SOME reason
+
+(* [bigger] has at least the cardinality of every
+   type that [smaller] has.  What does not fit at [smaller] does not fit at
+   [bigger]: relation arities grow with cardinalities and the arity limit
+   shrinks with the universe. *)
+fun scope_at_least (bigger : MFS.scope, smaller : MFS.scope) =
+  List.all (fn (ty, card) =>
+    case List.find (fn (other, _) => Util.same_type ty other)
+           (#card_assigns bigger) of
+        SOME (_, larger) => larger >= card
+      | NONE => false) (#card_assigns smaller)
 
 fun metadata (_, metadata : MFK.problem_metadata) = metadata
 
@@ -591,6 +613,9 @@ fun harvest_guard terms =
 
 exception RESTART_AFTER_HARVEST
 
+(* See [add_problem]. *)
+exception NO_SCOPE_FITS of string * string
+
 val scope_limit_hint =
   "scope limit reached; consider using \"mono\" or \"merge_type_vars\" " ^
   "to prevent this"
@@ -619,13 +644,14 @@ type progress =
   {phase : string ref, definitions : int ref, emitted : int ref,
    completed : int ref, offered : int ref, finished : int ref,
    unused : int ref, starved_batches : int ref, starved_problems : int ref,
-   unresolved : int ref, solver_errors : (string * int) list ref}
+   unresolved : int ref, solver_errors : (string * int) list ref,
+   dropped_msec : int ref}
 
 fun new_progress () : progress =
   {phase = ref "preprocessing", definitions = ref 0, emitted = ref 0,
    completed = ref 0, offered = ref 0, finished = ref 0,
    unused = ref 0, starved_batches = ref 0, starved_problems = ref 0,
-   unresolved = ref 0, solver_errors = ref []}
+   unresolved = ref 0, solver_errors = ref [], dropped_msec = ref 0}
 
 (* The solver's errors, counted by message over all batches. *)
 fun add_solver_error (progress : progress) text count =
@@ -663,7 +689,9 @@ fun progress_reason (progress : progress) rejected =
   Int.toString (!(#starved_batches progress)) ^ " (problems never started " ^
   Int.toString (!(#starved_problems progress)) ^ "); solver errors " ^
   Int.toString (List.foldl (fn ((_, n), total) => n + total) 0
-                  (!(#solver_errors progress)))
+                  (!(#solver_errors progress))) ^
+  "; time on rejected problems " ^
+  Int.toString (!(#dropped_msec progress)) ^ " ms"
 
 fun run_instance deadline started (config : Refute_Core.config)
       incremental solver (initial_max_potential, initial_max_genuine)
@@ -1316,18 +1344,58 @@ fun run_instance deadline started (config : Refute_Core.config)
           end
       end
 
+    (* The search stops when the first scope of
+       the window cannot fit: every other scope has at least its
+       cardinalities.  It is raised with the reason the first scope was
+       rejected for. *)
+    val scopes_tried = ref 0
+    val too_large_scopes =
+      ref ([] : (bool option * MFS.scope * (string * string)) list)
+
+    fun lost_since begun =
+      bump (#dropped_msec progress)
+        (Int.fromLarge (Time.toMilliseconds (Time.- (Time.now (), begun))))
+
+    (* A scope with at least the cardinalities of a scope that was rejected
+       for its size is rejected for the same size, with no work. *)
+    fun known_too_large flag scope =
+      Option.map (fn (_, _, (location, message)) =>
+        (location, "cardinalities no smaller than those of a scope that was " ^
+                   "rejected: " ^ message))
+        (List.find (fn (entry, rejected, _) =>
+           (entry = NONE orelse entry = flag) andalso
+           scope_at_least (scope, rejected)) (!too_large_scopes))
+
+    fun remember_too_large flag scope reason =
+      too_large_scopes := (flag, scope, reason) :: !too_large_scopes
+
     (* [problems] is newest-first. *)
     fun add_problem flags scope (problems, donno) =
       let
+        val first = !scopes_tried = 0
+        val _ = scopes_tried := !scopes_tried + 1
+        val _ = enter_phase progress "assembly"
+        val _ = check_deadline deadline
+        val params = assembly_params deadline mf all_types solver
+          free_names nonsel_names nondef_us def_us need_us scope
         fun add unsound (kept, unknown) =
           let
+              (* progress tracking. *)
               val _ = enter_phase progress "assembly"
               val _ = check_deadline deadline
+              val begun = Time.now ()
+              fun rejected_for_size reason =
+                (remember_too_large (SOME unsound) scope reason;
+                 reject_problem reason)
           in
-            case problem_for_scope deadline mf all_types solver
-                free_names nonsel_names nondef_us def_us need_us
-                reject_problem unsound scope of
-                NONE => (kept, unknown + 1)
+            case known_too_large (SOME unsound) scope of
+                SOME reason =>
+                  (reject_problem reason; lost_since begun;
+                   (kept, unknown + 1))
+              | NONE =>
+            case problem_for_scope params reject_problem rejected_for_size
+                   unsound scope of
+                NONE => (lost_since begun; (kept, unknown + 1))
               | SOME problem =>
                   if rich_member problem (!generated_problems) then
                     (kept, unknown)
@@ -1340,9 +1408,25 @@ fun run_instance deadline started (config : Refute_Core.config)
                            else (problem :: kept, unknown)
                        | [] => ([problem], unknown))
           end
+        val begun = Time.now ()
+        val too_large =
+          if null flags then NONE else
+          case known_too_large NONE scope of
+              SOME reason => SOME reason
+            | NONE =>
+                (case scope_too_large params scope of
+                     SOME reason =>
+                       (remember_too_large NONE scope reason; SOME reason)
+                   | NONE => NONE)
       in
-        List.foldl (fn (flag, result) => add flag result)
-          (problems, donno) flags
+        case too_large of
+            SOME reason =>
+              (reject_problem reason; lost_since begun;
+               if first then raise NO_SCOPE_FITS reason
+               else (problems, donno + length flags))
+          | NONE =>
+              List.foldl (fn (flag, result) => add flag result)
+                (problems, donno) flags
       end
 
     fun potential_only_warning () =
@@ -1564,6 +1648,12 @@ fun run_instance deadline started (config : Refute_Core.config)
       in
         (finalize (!last_donno) outcome, remaining (!latest_state))
       end
+       | NO_SCOPE_FITS (location, message) =>
+      (finalize (!last_donno)
+         (Refute_Core.Unknown
+            ["no scope in the window can fit: " ^ message ^ " (" ^
+             location ^ ")"]),
+       remaining (!latest_state))
   end
   handle RESTART_AFTER_HARVEST =>
     run_instance deadline started config incremental solver
