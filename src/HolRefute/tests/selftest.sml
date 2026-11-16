@@ -2338,9 +2338,13 @@ val _ = test "word width variables need a width pin" (fn () =>
                                  word_goal))
           [SOME 1, SOME 2, SOME 3, SOME 4])
 
+(* The suite's own budget, not a tight one: both reasons are raised after
+   preprocessing, before any scope or solver work, so a short budget only
+   adds a way for a host stall to replace the checked reason with a
+   timeout. *)
 val _ = test "word types are classified before encoding" (fn () =>
   let
-    val cfg = default_config |> quiet |> upd_timeout 2.0 |> only [ModelFinder]
+    val cfg = mf
     fun says goal message =
       Lib.mem ("kodkod: " ^ message) (reasons_of (refute cfg goal))
   in
