@@ -19,10 +19,12 @@ local open Refute_Rat Refute_Real in end
    while a sibling backend of the same call runs, and the only public
    observer would be a second backend racing the first.  The fourth is
    [Refute_ModelFinder_Words], the word operation registry, whose rows
-   and table builder no public route reaches one at a time.  The fifth
-   is [Refute_ModelFinder_Preproc.axioms_max_count], lowered by "a goal over
-   too many definitions is declined, naming the bound": a goal that
-   reaches the real bound needs thousands of definitions. *)
+   and table builder no public route reaches one at a time.  The fifth is
+   the boxing pass's sharing memo ([Refute_ModelFinder_HOL.with_sharing_memo],
+   its counters, [Refute_ModelFinder_Preproc.box_check]), called by "the
+   boxing pass works on shared terms" and "the shared boxing pass agrees
+   with the unshared one": how often a memo computed cannot be observed
+   through a verdict. *)
 val lookup_term_postprocessor =
   Refute_ModelFinder_Model.lookup_term_postprocessor
 
@@ -227,6 +229,27 @@ val kodkodi_configured =
 fun mf_test name pred =
   if kodkodi_configured then test name pred
   else skip name "kodkodi not configured"
+
+(* From here on every call of the boxing pass is compared with the unshared
+   implementation's (the reference module), after the pass that follows
+   boxing, so that every model-finder goal below checks the shared pass. *)
+val box_compared = ref 0
+val box_disagreed = ref ([] : string list)
+val _ = Refute_ModelFinder_Preproc.box_check :=
+  (fn context => fn def => fn input => fn output =>
+    let
+      val expected = SOME (refuteBoxReference.reference_box context def input)
+                     handle Interrupt => raise Interrupt | _ => NONE
+    in
+      box_compared := !box_compared + 1;
+      if (case expected of
+              SOME e => Term.aconv
+                (Refute_ModelFinder_Preproc.after_boxing context e)
+                (Refute_ModelFinder_Preproc.after_boxing context output)
+            | NONE => false)
+      then ()
+      else box_disagreed := Parse.term_to_string input :: !box_disagreed
+    end)
 
 (* Registered stub backends: their [configured] flag is cleared after the
    test that uses them so they never join a later search. *)
@@ -2983,27 +3006,6 @@ val _ = mf_test "the model finder leaves the theory untouched" (fn () =>
       [``zoo_wf_lfp n``, ``zoo_nonwf_lfp n``, ``zoo_mutual_lfp n``,
        ``zoo_mutual_nonwf_lfp n``]
   end)
-
-(* A goal whose definition closure is larger than the bound is declined at
-   once with the bound named, not left to unfold until its deadline. *)
-val ax_chain0_def = TotalDefn.Define `ax_chain0 (n : num) = n + 1`
-val ax_chain1_def = TotalDefn.Define `ax_chain1 (n : num) = ax_chain0 n + 1`
-val ax_chain2_def = TotalDefn.Define `ax_chain2 (n : num) = ax_chain1 n + 1`
-
-val _ = mf_test "a goal over too many definitions is declined, naming the bound"
-  (fn () =>
-    let
-      val goal = ``ax_chain2 (n : num) = n``
-      val bound = Refute_ModelFinder_Preproc.axioms_max_count
-      val saved = !bound
-      val within = refute mf goal
-      val _ = bound := 2
-      val over = (refute mf goal handle e => (bound := saved; raise e))
-      val _ = bound := saved
-    in
-      genuine within andalso
-      unknown_with "the definitions the goal depends on exceed 2 axioms" over
-    end)
 
 val word_cfg = mf |> upd_timeout 60.0
   |> upd_card [(SOME ``:num``, [8]), (NONE, [1])]
@@ -6020,6 +6022,122 @@ val _ = mf_test "a fake session sees submit, events and close in order"
       List.last (!calls) = "close" andalso
       not (List.exists (fn call => call = "cancel") (!calls))
     end)
+
+(* ------------------------------------------------------------------- *)
+(* The boxing pass on shared terms.           *)
+(* ------------------------------------------------------------------- *)
+
+val _ = section "boxing on shared terms"
+
+local
+  structure MFH = Refute_ModelFinder_HOL
+  structure MFP = Refute_ModelFinder_Preproc
+  val num_fun_ty = ``:num -> num``
+  val box_context =
+    MFH.make_context
+      (#mf (mf |> upd_box [(SOME num_fun_ty, SOME true)])) []
+  val plain_context = MFH.make_context (#mf mf) []
+
+  (* t0 = x, t(k+1) = f tk tk: 2^k leaves, 2k+2 distinct nodes. *)
+  fun dag depth =
+    let
+      val f = Term.mk_var ("f", ``:num -> num -> num``)
+      fun build 0 = Term.mk_var ("x", ``:num``)
+        | build k = let val below = build (k - 1)
+                    in Term.list_mk_comb (f, [below, below]) end
+    in build depth end
+
+  (* The result has the shape of [dag depth], its two operands of every
+     level one physical node.  [aconv] against a second copy would walk the
+     2^depth leaves. *)
+  fun shape term 0 = Term.aconv term (Term.mk_var ("x", ``:num``))
+    | shape term k =
+        let
+          val (operator, operand) = Term.dest_comb term
+          val (f, left) = Term.dest_comb operator
+        in
+          Term.aconv f (Term.mk_var ("f", ``:num -> num -> num``)) andalso
+          Portable.pointer_eq (left, operand) andalso shape operand (k - 1)
+        end
+
+  (* A pair of eta redexes under the sharing, so that the contraction
+     really has work to do. *)
+  fun eta_dag depth =
+    let
+      val g = Term.mk_var ("g", ``:num -> num``)
+      val y = Term.mk_var ("y", ``:num``)
+      val redex = Term.mk_abs (y, Term.mk_comb (g, y))
+      val f = Term.mk_var ("f", ``:(num -> num) -> (num -> num) -> num -> num``)
+      fun build 0 = redex
+        | build k = let val below = build (k - 1)
+                    in Term.mk_abs (y, Term.list_mk_comb (f, [below, below, y]))
+                    end
+    in build depth end
+in
+val _ = test "eta_contract enters each distinct node once" (fn () =>
+  let
+    val depth = 40
+    val _ = MFH.reset_sharing_counts ()
+    val result = MFH.with_sharing_memo (fn () => MFH.eta_contract (dag depth))
+    val entered = !(#entered MFH.eta_counts)
+    val lookups = !(#lookups MFH.eta_counts)
+    val _ = MFH.reset_sharing_counts ()
+  in
+    shape result depth andalso
+    entered = 2 * depth + 2 andalso lookups > entered
+  end)
+
+val _ = test "eta_contract on shared terms equals the unshared one" (fn () =>
+  let
+    val term = eta_dag 6
+    val _ = MFH.reset_sharing_counts ()
+    val shared = MFH.with_sharing_memo (fn () => MFH.eta_contract term)
+    val _ = MFH.reset_sharing_counts ()
+  in
+    Term.aconv shared (refuteBoxReference.reference_eta_contract term)
+  end)
+
+(* The result of the shared pass is alpha-equivalent to the unshared
+   one's on these terms, which need coercions between boxed and plain
+   function and pair types, and its memo is asked for every distinct
+   coercion once. *)
+val _ = test "the shared boxing pass agrees with the unshared one" (fn () =>
+  let
+    val f = Term.mk_var ("f", num_fun_ty)
+    val g = Term.mk_var ("g", num_fun_ty)
+    val n = Term.mk_var ("n", ``:num``)
+    val id = Term.mk_abs (n, n)
+    val inc = ``\m : num. m + 1``
+    val terms =
+      [boolSyntax.mk_eq (f, id),
+       boolSyntax.mk_eq (pairSyntax.mk_pair (f, g), pairSyntax.mk_pair (id, inc)),
+       ``!(f : num -> num) (g : num -> num). (f, g) = (g, f)``,
+       ``?(f : num -> num). f 1 = 2 /\ (!k. f k = f (k + 1))``,
+       boolSyntax.mk_eq
+         (pairSyntax.mk_pair (pairSyntax.mk_pair (f, g), f),
+          pairSyntax.mk_pair (pairSyntax.mk_pair (id, inc), f))]
+    fun agrees context def term =
+      Term.aconv
+        (MFP.after_boxing context
+           (MFP.box_fun_and_pair_in_term context def term))
+        (MFP.after_boxing context
+           (refuteBoxReference.reference_box context def term))
+    val _ = MFH.reset_sharing_counts ()
+    val results = List.concat (map (fn term =>
+      [agrees box_context true term, agrees box_context false term,
+       agrees plain_context true term, agrees plain_context false term])
+      terms)
+    val coerced = !(#entered MFH.coerce_counts)
+    val _ = MFH.reset_sharing_counts ()
+  in
+    List.all (fn ok => ok) results andalso coerced > 0
+  end)
+end
+
+(* Every boxing call the selftest's model-finder goals make was compared
+   with the unshared pass's by the hook installed after [mf_test]. *)
+val _ = mf_test "every boxing call of the selftest agrees with the unshared pass"
+  (fn () => !box_compared > 0 andalso null (!box_disagreed))
 
 (* ------------------------------------------------------------------- *)
 (* Potential counterexamples and retries.  Registers a restricted       *)

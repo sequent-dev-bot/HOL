@@ -648,10 +648,11 @@ type progress =
    dropped_msec : int ref}
 
 fun new_progress () : progress =
+  (MFH.reset_sharing_counts ();
   {phase = ref "preprocessing", definitions = ref 0, emitted = ref 0,
    completed = ref 0, offered = ref 0, finished = ref 0,
    unused = ref 0, starved_batches = ref 0, starved_problems = ref 0,
-   unresolved = ref 0, solver_errors = ref [], dropped_msec = ref 0}
+   unresolved = ref 0, solver_errors = ref [], dropped_msec = ref 0})
 
 (* The solver's errors, counted by message over all batches. *)
 fun add_solver_error (progress : progress) text count =
@@ -691,7 +692,8 @@ fun progress_reason (progress : progress) rejected =
   Int.toString (List.foldl (fn ((_, n), total) => n + total) 0
                   (!(#solver_errors progress))) ^
   "; time on rejected problems " ^
-  Int.toString (!(#dropped_msec progress)) ^ " ms"
+  Int.toString (!(#dropped_msec progress)) ^ " ms; " ^
+  MFH.sharing_summary ()
 
 fun run_instance deadline started (config : Refute_Core.config)
       incremental solver (initial_max_potential, initial_max_genuine)

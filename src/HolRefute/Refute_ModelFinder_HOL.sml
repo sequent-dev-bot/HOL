@@ -5623,25 +5623,109 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
       search term
     end
 
+  (* The boxing pass and its coercions work on
+     shared terms.  A term the pass builds shares its subterms (a coercion
+     of a pair copies its operand once per component), so a walk that treats
+     it as a tree is exponential in the depth of the sharing; upstream's
+     terms are ML values and are walked as trees too.  While
+     [with_sharing_memo] runs, [eta_contract] and [coerce_term] answer a
+     term they have seen from a table keyed by [Term.compare] (which
+     short-cuts a physically shared node), so each distinct node is entered
+     once.  The counters say how often each memo was asked and how often it
+     had to compute. *)
+  type sharing_counts = {lookups : int ref, entered : int ref}
+  fun new_sharing_counts () : sharing_counts =
+    {lookups = ref 0, entered = ref 0}
+  val box_counts = new_sharing_counts ()
+  val coerce_counts = new_sharing_counts ()
+  val eta_counts = new_sharing_counts ()
+
+  fun reset_sharing_counts () =
+    List.app (fn ({lookups, entered} : sharing_counts) =>
+                (lookups := 0; entered := 0))
+      [box_counts, coerce_counts, eta_counts]
+
+  fun sharing_summary () =
+    let
+      fun show name ({lookups, entered} : sharing_counts) =
+        name ^ " " ^ Int.toString (!lookups) ^ " entries, " ^
+        Int.toString (!entered) ^ " distinct subterms"
+    in
+      "boxing pass: " ^ show "boxing" box_counts ^ "; " ^
+      show "coercions" coerce_counts ^ "; " ^ show "eta_contract" eta_counts
+    end
+
+  fun tally ({lookups, ...} : sharing_counts) = lookups := !lookups + 1
+  fun enter ({entered, ...} : sharing_counts) = entered := !entered + 1
+
+  type coerce_key = term * hol_type * hol_type
+  fun compare_coerce_key ((t1, a1, b1) : coerce_key, (t2, a2, b2)) =
+    case Term.compare (t1, t2) of
+        EQUAL =>
+          (case Type.compare (a1, a2) of
+               EQUAL => Type.compare (b1, b2)
+             | order => order)
+      | order => order
+
+  type sharing_memo =
+    {eta : (term, term) Redblackmap.dict ref,
+     coerce : (coerce_key, term) Redblackmap.dict ref}
+
+  val active_memo : sharing_memo option ref = ref NONE
+
+  fun with_sharing_memo work =
+    let
+      val saved = !active_memo
+      val _ = active_memo := SOME
+        {eta = ref (Redblackmap.mkDict Term.compare),
+         coerce = ref (Redblackmap.mkDict compare_coerce_key)}
+      val result = work () handle exn => (active_memo := saved; raise exn)
+      val _ = active_memo := saved
+    in result end
+
+  (* Eta-contraction, as upstream's; the memo only skips repeated nodes. *)
   fun eta_contract term =
-    if Term.is_abs term then
-      let
-        val (variable, body) = Term.dest_abs term
-        val contracted_body = eta_contract body
-      in
-        if Term.is_comb contracted_body andalso
-           Term.aconv (#2 (Term.dest_comb contracted_body)) variable andalso
-           not (Term.free_in variable
-             (#1 (Term.dest_comb contracted_body))) then
-          eta_contract (#1 (Term.dest_comb contracted_body))
-        else
-          Term.mk_abs (variable, contracted_body)
-      end
-    else if Term.is_comb term then
-      let val (function, argument) = Term.dest_comb term
-      in Term.mk_comb (eta_contract function, eta_contract argument) end
-    else
-      term
+    let
+      fun contract term =
+        case !active_memo of
+            NONE => step term
+          | SOME {eta, ...} =>
+              let val _ = tally eta_counts
+              in
+                case Redblackmap.peek (!eta, term) of
+                    SOME result => result
+                  | NONE =>
+                      let val _ = enter eta_counts
+                          val result = step term
+                      in
+                        eta := Redblackmap.insert (!eta, term, result);
+                        result
+                      end
+              end
+      and step term =
+        let
+        in
+          if Term.is_abs term then
+            let
+              val (variable, body) = Term.dest_abs term
+              val contracted_body = contract body
+            in
+              if Term.is_comb contracted_body andalso
+                 Term.aconv (#2 (Term.dest_comb contracted_body)) variable
+                 andalso
+                 not (Term.free_in variable
+                   (#1 (Term.dest_comb contracted_body))) then
+                contract (#1 (Term.dest_comb contracted_body))
+              else
+                Term.mk_abs (variable, contracted_body)
+            end
+          else if Term.is_comb term then
+            let val (function, argument) = Term.dest_comb term
+            in Term.mk_comb (contract function, contract argument) end
+          else
+            term
+        end
+    in contract term end
 
   fun construct_value context constructor raw_arguments =
     let val arguments = map eta_contract raw_arguments
@@ -5693,7 +5777,28 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
 
   fun coerce_term context new_ty old_ty term =
     if new_ty = old_ty then term
-    else if is_funbox_type new_ty then
+    else
+      case !active_memo of
+          NONE => coerce_step context new_ty old_ty term
+        | SOME {coerce, ...} =>
+            let
+              val _ = tally coerce_counts
+              val key = (term, new_ty, old_ty)
+            in
+              case Redblackmap.peek (!coerce, key) of
+                  SOME result => result
+                | NONE =>
+                    let
+                      val _ = enter coerce_counts
+                      val result = coerce_step context new_ty old_ty term
+                    in
+                      coerce := Redblackmap.insert (!coerce, key, result);
+                      result
+                    end
+            end
+
+  and coerce_step context new_ty old_ty term =
+    if is_funbox_type new_ty then
       let
         val arguments = boxed_type_args new_ty
         val domain = List.nth (arguments, 0)
@@ -5720,7 +5825,10 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
         val variable = Term.variant (Term.all_vars term)
           (Term.mk_var ("x", new_domain))
         val old_argument = coerce_term context old_domain new_domain variable
-        val body = Term.mk_comb (term, old_argument)
+        (* The application is reduced when [term] is an abstraction, so that
+           coercing its result to a pair does not copy the unreduced redex
+           into each component; the passes after boxing reduce it anyway. *)
+        val body = s_betapply (term, old_argument)
       in
         Term.mk_abs (variable,
           coerce_term context new_range old_range body)

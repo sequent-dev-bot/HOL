@@ -251,7 +251,21 @@ signature Refute_ModelFinder_HOL = sig
   val select_nth_constr_arg :
     mf_context -> term -> term -> int -> hol_type -> term
   val generated_selector_argument : term -> term -> term option
+  (* Sharing in the boxing pass: how often each
+     of its memos was asked (entries) and how often it had to compute
+     (distinct subterms). *)
+  type sharing_counts = {lookups : int ref, entered : int ref}
+  val box_counts : sharing_counts
+  val coerce_counts : sharing_counts
+  val eta_counts : sharing_counts
+  val reset_sharing_counts : unit -> unit
+  val sharing_summary : unit -> string
+  val tally : sharing_counts -> unit
+  val enter : sharing_counts -> unit
+  val with_sharing_memo : (unit -> 'a) -> 'a
   val eta_contract : term -> term
+  val constr_expand : mf_context -> hol_type -> term -> term
+  val boxed_constructor : mf_context -> hol_type -> term
   val coerce_term : mf_context -> hol_type -> hol_type -> term -> term
   val unarize_unbox_etc_term : term -> term
   val optimized_quot_type_axioms : mf_context -> hol_type -> term list

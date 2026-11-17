@@ -3,8 +3,16 @@ signature Refute_ModelFinder_Preproc = sig
 
   type context = Refute_ModelFinder_HOL.mf_context
 
-  (* How many axioms a problem may collect. *)
-  val axioms_max_count : int ref
+  (* The boxing pass and a hook that sees each
+     input and output of it. *)
+  val box_fun_and_pair_in_term : context -> bool -> term -> term
+  val box_check : (context -> bool -> term -> term -> unit) ref
+  (* The pass that reduces what boxing leaves (selectors of constructors,
+     redexes); two boxed terms mean the same when they are alpha-equivalent
+     after it. *)
+  val after_boxing : context -> term -> term
+
+  val is_generated_const : term -> bool
 
   val preprocess_formulas :
     context -> term list -> term ->

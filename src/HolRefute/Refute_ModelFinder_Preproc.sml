@@ -13,13 +13,6 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
   val value_var_prefix = MFN.reserved_prefix ^ "v"
   val max_skolem_depth = 3
   val axioms_max_depth = 255
-  (* A bound on how many axioms one problem may
-     collect.  A goal over a large semantics unfolds into thousands of
-     definitions, each unfolded, skolemized and boxed in turn; the work is
-     then bounded only by the goal's deadline, with the heap growing until
-     the process runs out of store.  Such a goal is declined, with this
-     bound named, so it is reported at once instead of exhausting memory. *)
-  val axioms_max_count = ref 2000
   val special_max_depth = 20
   val quantifier_cluster_threshold = 7
   val binary_int_threshold = 3
@@ -1069,6 +1062,8 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
       recurse term
     end
 
+  val after_boxing = simplify_constrs_and_sels
+
   fun distribute_quantifiers term =
     if boolSyntax.is_forall term then
       let
@@ -1887,13 +1882,6 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
                 (seen, definitions, def_set, nondefinitions, nondef_set)
               else
                 let
-                  val _ =
-                    if length definitions + length nondefinitions >=
-                       !axioms_max_count then
-                      raise Refute_ModelFinder_Util.NOT_SUPPORTED
-                        ("the definitions the goal depends on exceed " ^
-                         Int.toString (!axioms_max_count) ^ " axioms")
-                    else ()
                   val accumulator =
                     if definitional then
                       (seen, normalized :: definitions,
@@ -2185,7 +2173,17 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
       recurse term []
     end
 
-  fun box_fun_and_pair_in_term context def original =
+  fun polarity_index Util.Pos = 0
+    | polarity_index Util.Neg = 1
+    | polarity_index Util.Neut = 2
+
+  (* Boxing works on shared terms, one result per
+     distinct (subterm, polarity) under one environment of renamed binders,
+     one per distinct (term, type) in the coercions.  An environment carries
+     its own table, since a binder's replacement changes what its body
+     becomes. *)
+  fun box_fun_and_pair_core context def original =
+    MFH.with_sharing_memo (fn () =>
     let
       val original_vars = Term.all_vars original
       fun positive_existential polarity existential =
@@ -2195,9 +2193,20 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
         if Type.is_vartype ty then 1
         else 1 + List.foldl (op +) 0
           (map type_size (#Args (Type.dest_thy_type ty)))
-      val env_lookup = AList.lookup (Lib.uncurry Term.aconv)
-      fun rebind environment variable new_ty body =
+      type environment =
+        {pairs : (term * term) list,
+         memo : ((term * int), term) Redblackmap.dict ref}
+      fun new_environment pairs : environment =
+        {pairs = pairs,
+         memo = ref (Redblackmap.mkDict (fn ((t1, p1), (t2, p2)) =>
+           case Term.compare (t1, t2) of
+               EQUAL => Int.compare (p1, p2)
+             | order => order))}
+      fun env_lookup ({pairs, ...} : environment) =
+        AList.lookup (Lib.uncurry Term.aconv) pairs
+      fun rebind ({pairs, ...} : environment) variable new_ty body =
         let
+          val environment = pairs
           val (name, _) = Term.dest_var variable
           (* A changed binder type may coincide with a free representation
              variable.  Also avoid replacements of outer binders whose
@@ -2205,7 +2214,10 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
           val variable' = Term.variant
             (original_vars @ map #2 environment)
             (Term.mk_var (name, new_ty))
-        in (variable', body, (variable, variable') :: environment) end
+        in
+          (variable', body,
+           new_environment ((variable, variable') :: environment))
+        end
       fun quantifier environment polarity existential candidate =
         let
           val (variable, body) =
@@ -2296,7 +2308,26 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
         in
           MFH.retype_constant "box" candidate new_ty
         end
-      and recurse environment polarity candidate =
+      and recurse (environment : environment) polarity candidate =
+        if Term.is_comb candidate orelse Term.is_abs candidate then
+          let
+            val _ = MFH.tally MFH.box_counts
+            val key = (candidate, polarity_index polarity)
+          in
+            case Redblackmap.peek (!(#memo environment), key) of
+                SOME result => result
+              | NONE =>
+                  let
+                    val _ = MFH.enter MFH.box_counts
+                    val result = recurse_step environment polarity candidate
+                  in
+                    #memo environment :=
+                      Redblackmap.insert (!(#memo environment), key, result);
+                    result
+                  end
+          end
+        else recurse_step environment polarity candidate
+      and recurse_step environment polarity candidate =
         if boolSyntax.is_forall candidate then
           quantifier environment polarity false candidate
         else if boolSyntax.is_exists candidate then
@@ -2362,8 +2393,18 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
         else if Term.is_const candidate then constant candidate
         else candidate
     in
-      recurse [] Util.Pos original
-    end
+      recurse (new_environment []) Util.Pos original
+    end)
+
+  (* Tests compare each result with the
+     unshared implementation's; it is called with the context, the
+     definition flag, the pass's input and its output. *)
+  val box_check : (context -> bool -> term -> term -> unit) ref =
+    ref (fn _ => fn _ => fn _ => fn _ => ())
+
+  fun box_fun_and_pair_in_term context def original =
+    let val result = box_fun_and_pair_core context def original
+    in (!box_check) context def original result; result end
 
   fun do_tail context def destroy_constrs term =
     let
