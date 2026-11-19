@@ -5671,6 +5671,40 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
     {eta : (term, term) Redblackmap.dict ref,
      coerce : (coerce_key, term) Redblackmap.dict ref}
 
+  (* [deviation from upstream] A term of more than [limit] nodes as a tree,
+     found without walking more than [limit] of them. *)
+  val sharing_threshold = 500
+  fun exceeds_tree_size limit term =
+    let
+      val count = ref 0
+      exception Exceeded
+      fun walk term =
+        (count := !count + 1;
+         if !count > limit then raise Exceeded
+         else if Term.is_comb term then
+           let val (function, argument) = Term.dest_comb term
+           in walk function; walk argument end
+         else if Term.is_abs term then walk (#2 (Term.dest_abs term))
+         else ())
+    in (walk term; false) handle Exceeded => true end
+
+  (* [deviation from upstream] The parts of [LET (\v. body) value]. *)
+  fun let_parts term =
+    if boolSyntax.is_let term then
+      let val (abstraction, value) = boolSyntax.dest_let term
+      in
+        case Lib.total Term.dest_abs abstraction of
+            SOME (variable, body) => SOME (variable, body, value)
+          | NONE => NONE
+      end
+    else NONE
+
+  (* [deviation from upstream] The variable of a shared coercion. *)
+  val let_counter = ref 0
+  fun fresh_let_variable ty =
+    (let_counter := !let_counter + 1;
+     Term.mk_var ("shared_" ^ Int.toString (!let_counter), ty))
+
   val active_memo : sharing_memo option ref = ref NONE
 
   fun with_sharing_memo work =
@@ -5797,6 +5831,45 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
                     end
             end
 
+  (* [deviation from upstream] Coercing a pair-typed value copies it into
+     every selector, and nested copies of a function result make a term that
+     is small as a DAG but exponential as a tree, which kernel operations
+     walk as one.  A large value is bound once instead, as Nitpick's [s_let]
+     does for a pulled-out constructor, and the coercion goes through
+     [LET], [COND] and the binding. *)
+  and shares_coercion context new_ty old_ty term =
+    Option.isSome (let_parts term) orelse
+    (boolSyntax.is_cond term andalso exceeds_tree_size sharing_threshold term)
+    orelse
+    (is_pairbox_type old_ty andalso
+     not (is_nonfree_constr (#1 (HolKernel.strip_comb term))) andalso
+     exceeds_tree_size sharing_threshold term)
+
+  and shared_coercion context new_ty old_ty term =
+    case let_parts term of
+        SOME (variable, body, value) =>
+          let
+            val body' = coerce_term context new_ty old_ty body
+          in
+            if Term.aconv body' variable then value
+            else boolSyntax.mk_let (Term.mk_abs (variable, body'), value)
+          end
+      | NONE =>
+          if boolSyntax.is_cond term then
+            let val (condition, left, right) = boolSyntax.dest_cond term
+            in
+              boolSyntax.mk_cond (condition,
+                coerce_term context new_ty old_ty left,
+                coerce_term context new_ty old_ty right)
+            end
+          else
+            let
+              val variable = fresh_let_variable old_ty
+              val body = coerce_step context new_ty old_ty variable
+            in
+              boolSyntax.mk_let (Term.mk_abs (variable, body), term)
+            end
+
   and coerce_step context new_ty old_ty term =
     if is_funbox_type new_ty then
       let
@@ -5833,6 +5906,10 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
         Term.mk_abs (variable,
           coerce_term context new_range old_range body)
       end
+    else if (is_pair_type new_ty orelse is_pairbox_type new_ty) andalso
+            (is_pair_type old_ty orelse is_pairbox_type old_ty) andalso
+            shares_coercion context new_ty old_ty term then
+      shared_coercion context new_ty old_ty term
     else if (is_pair_type new_ty orelse is_pairbox_type new_ty) andalso
             (is_pair_type old_ty orelse is_pairbox_type old_ty) then
       let

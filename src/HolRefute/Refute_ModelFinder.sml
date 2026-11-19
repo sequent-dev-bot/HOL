@@ -149,12 +149,12 @@ fun check_deadline deadline =
    same instant; when the outer one fires first, the inner [Timeout.apply]
    re-raises [Interrupt] instead of [Timeout.TIMEOUT], the model is lost
    and the call reports "timed out".  Replay is therefore given a deadline
-   this much before the call's: a tenth of the budget, at most two seconds.
+   this much before the call's: a tenth of the budget, at most five seconds.
    A model whose replay does not finish by then is kept uncertified, as
    when replay runs out of its deadline at any other time. *)
 fun certification_headroom deadline started =
   let val budget = Real.max (0.0, Time.toReal (Time.- (deadline, started)))
-      val cap = Time.fromSeconds 2
+      val cap = Time.fromSeconds 5
       val tenth = Time.fromReal (budget / 10.0)
   in if Time.< (cap, tenth) then cap else tenth end
 
@@ -1142,6 +1142,11 @@ fun run_instance deadline started (config : Refute_Core.config)
                note_unsat index;
                false)
 
+            (* [deviation from upstream] A model kept after the call's
+               deadline ends the search: carrying on would only wait for
+               the solver's next result with no time left to use it. *)
+            fun past_deadline () = Time.>= (Time.now (), deadline)
+
             (* Returns true when the search is over. *)
             fun on_sat (index, bounds) =
               let
@@ -1183,7 +1188,8 @@ fun run_instance deadline started (config : Refute_Core.config)
                          incremental = incremental}
                     val _ = set (found, max_potential, max_genuine, donno)
                   in
-                    max_genuine <= 0 andalso max_potential <= 0
+                    (max_genuine <= 0 andalso max_potential <= 0) orelse
+                    past_deadline ()
                   end
                 else
                   let
@@ -1226,7 +1232,8 @@ fun run_instance deadline started (config : Refute_Core.config)
                        [first_time]. *)
                     (max_genuine <= 0 andalso max_potential <= 0) orelse
                     (incremental andalso not first_time andalso
-                     max_potential <= 0)
+                     max_potential <= 0) orelse
+                    past_deadline ()
                   end
               end
               handle error as Timeout.TIMEOUT _ =>
@@ -1313,7 +1320,7 @@ fun run_instance deadline started (config : Refute_Core.config)
                      | KK.Ended _ => ()
                in
                  drain ()
-               end) handle _ => ()
+               end) handle Interrupt => raise Interrupt | _ => ()
 
             fun loop () =
               case #next session () of
@@ -1341,7 +1348,9 @@ fun run_instance deadline started (config : Refute_Core.config)
                     Timeout.TIMEOUT _ => (note_cut (); use_finished ())
                   | Interrupt => (note_cut (); use_finished ())
                   | _ => ());
-               bump (#unused progress) (#close session () handle _ => 0);
+               bump (#unused progress)
+                 (#close session () handle Interrupt => raise Interrupt
+                                         | _ => 0);
                Exn.reraise error)
           end
       end

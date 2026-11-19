@@ -1143,6 +1143,45 @@ val _ = test "interrupting the caller unwinds the backends" (fn () =>
       end)
   end)
 
+(* [deviation from upstream] A call that its caller's timeout ends with
+   [Thread.kill] leaves the output scope it held; the next call takes it
+   over instead of waiting on it for good. *)
+val _ = test "a call ended by Thread.kill does not block the next call" (fn () =>
+  let
+    val enabled = ref false
+    val started = ref false
+    val release = ref false
+    fun spin () =
+      if !release then ()
+      else (OS.Process.sleep (Time.fromMilliseconds 10); spin ())
+    fun run _ _ = (started := true; spin (); Unknown [])
+    val _ = register_backend (stub "selftest-killed-owner" ~76 enabled run)
+    val cfg = default_config |> quiet |> upd_sequential false
+      |> upd_timeout 60.0 |> only [RegisteredBackend "selftest-killed-owner"]
+    fun wait_started 0 = ()
+      | wait_started n =
+          if !started then ()
+          else (OS.Process.sleep (Time.fromMilliseconds 50);
+                wait_started (n - 1))
+  in
+    with_enabled [enabled] (fn () =>
+      let
+        val caller = Standard_Thread.fork
+          {name = "selftest killed caller", stack_limit = NONE,
+           interrupts = false}
+          (fn () => (ignore (refute cfg ``T``); ()) handle _ => ())
+        val _ = wait_started 200
+        val _ = Thread.kill caller
+        val second =
+          Timeout.apply (Time.fromSeconds 30)
+            (fn () => is_cex (refute (exhaustive |> upd_timeout 20.0) ``F``)) ()
+          handle Timeout.TIMEOUT _ => false
+        val _ = release := true
+      in
+        !started andalso second
+      end)
+  end)
+
 (* Racing: a Genuine answer is never cut off by an earlier weaker one, a
    declared ceiling makes a weaker answer decisive, and merged Potential
    answers sort by backend weight. *)
@@ -6131,6 +6170,34 @@ val _ = test "the shared boxing pass agrees with the unshared one" (fn () =>
     val _ = MFH.reset_sharing_counts ()
   in
     List.all (fn ok => ok) results andalso coerced > 0
+  end)
+
+(* Coercing a value to a pair of its selectors copies it into each of them,
+   so each coercion doubles a value that nests another coercion's result.  A
+   large value is bound once instead, so the coercion adds a constant to its
+   size, and coercing the binding back gives the value itself. *)
+val _ = test "coercing a large pair-boxed value binds it once" (fn () =>
+  let
+    val pair_ty = ``:num # num``
+    val boxed_ty = MFH.box_type plain_context MFH.InPair pair_ty
+    val f = Term.mk_var ("f", Type.-->(boxed_ty, Type.-->(boxed_ty, boxed_ty)))
+    fun build 0 = Term.mk_var ("p", boxed_ty)
+      | build k = let val below = build (k - 1)
+                  in Term.list_mk_comb (f, [below, below]) end
+    fun tree_size term =
+      if Term.is_comb term then
+        1 + tree_size (Term.rator term) + tree_size (Term.rand term)
+      else if Term.is_abs term then 1 + tree_size (#2 (Term.dest_abs term))
+      else 1
+    val value = build 9
+    val coerced = MFH.coerce_term plain_context pair_ty boxed_ty value
+    val small = build 2
+    val back = MFH.coerce_term plain_context boxed_ty pair_ty
+      (MFH.coerce_term plain_context pair_ty boxed_ty small)
+  in
+    MFH.is_pairbox_type boxed_ty andalso
+    tree_size coerced <= tree_size value + 30 andalso
+    Term.aconv back small
   end)
 end
 
