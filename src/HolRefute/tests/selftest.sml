@@ -1143,6 +1143,45 @@ val _ = test "interrupting the caller unwinds the backends" (fn () =>
       end)
   end)
 
+(* [deviation from upstream] A call that its caller's timeout ends with
+   [Thread.kill] leaves the output scope it held; the next call takes it
+   over instead of waiting on it for good. *)
+val _ = test "a call ended by Thread.kill does not block the next call" (fn () =>
+  let
+    val enabled = ref false
+    val started = ref false
+    val release = ref false
+    fun spin () =
+      if !release then ()
+      else (OS.Process.sleep (Time.fromMilliseconds 10); spin ())
+    fun run _ _ = (started := true; spin (); Unknown [])
+    val _ = register_backend (stub "selftest-killed-owner" ~76 enabled run)
+    val cfg = default_config |> quiet |> upd_sequential false
+      |> upd_timeout 60.0 |> only [RegisteredBackend "selftest-killed-owner"]
+    fun wait_started 0 = ()
+      | wait_started n =
+          if !started then ()
+          else (OS.Process.sleep (Time.fromMilliseconds 50);
+                wait_started (n - 1))
+  in
+    with_enabled [enabled] (fn () =>
+      let
+        val caller = Standard_Thread.fork
+          {name = "selftest killed caller", stack_limit = NONE,
+           interrupts = false}
+          (fn () => (ignore (refute cfg ``T``); ()) handle _ => ())
+        val _ = wait_started 200
+        val _ = Thread.kill caller
+        val second =
+          Timeout.apply (Time.fromSeconds 30)
+            (fn () => is_cex (refute (exhaustive |> upd_timeout 20.0) ``F``)) ()
+          handle Timeout.TIMEOUT _ => false
+        val _ = release := true
+      in
+        !started andalso second
+      end)
+  end)
+
 (* Racing: a Genuine answer is never cut off by an earlier weaker one, a
    declared ceiling makes a weaker answer decisive, and merged Potential
    answers sort by backend weight. *)

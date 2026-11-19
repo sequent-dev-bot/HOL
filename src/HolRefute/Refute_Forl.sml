@@ -1572,16 +1572,24 @@ structure Refute_Forl :> Refute_Forl = struct
              spawn command code_path)
             handle error => (remove_files (); Exn.reraise error)
           val reaped = ref false
+          (* [deviation from upstream] [Unix.reap] closes the process's
+             pipes before it waits, so one cut short by the call's timer
+             could not be repeated, and a catch-all around it swallowed the
+             timer's one interrupt.  The wait is not interrupted, a pending
+             interrupt is raised once it is done, and none is swallowed. *)
           fun reap () =
             if !reaped then 0
             else
-              let val status = Unix.reap process
-              in reaped := true; exit_code status end
+              Thread_Attributes.uninterruptible (fn _ => fn () =>
+                let val status = Unix.reap process
+                in reaped := true; exit_code status end) ()
           fun cancel () =
             if !reaped then ()
             else
-              ((Unix.kill (process, Posix.Signal.term) handle _ => ());
-               (ignore (reap ()) handle _ => ()))
+              ((Unix.kill (process, Posix.Signal.term)
+                  handle Interrupt => raise Interrupt | _ => ());
+               (ignore (reap ())
+                  handle Interrupt => raise Interrupt | _ => ()))
           (* The transcript, read as it grows. *)
           val descriptor = ref (NONE : Posix.FileSys.file_desc option)
           val chunks = ref ([] : string list)
@@ -1719,7 +1727,11 @@ structure Refute_Forl :> Refute_Forl = struct
                              case code_file () of
                                  SOME code => (finish (SOME code); next ())
                                | NONE =>
-                                   if Time.>= (Time.now (), deadline) then
+                                   (* [deviation from upstream] A session
+                                      cancelled before it ended has no
+                                      status to wait for. *)
+                                   if !reaped orelse
+                                      Time.>= (Time.now (), deadline) then
                                      (finish NONE; next ())
                                    else
                                      (OS.Process.sleep

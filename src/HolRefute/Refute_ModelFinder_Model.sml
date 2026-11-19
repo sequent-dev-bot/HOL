@@ -2270,8 +2270,15 @@ fun certify {executable, original, eval_terms,
     val model = SOME (model_report reconstructed)
     val base = replace_cex cex (fallback_certainty sound genuine reasons)
       bindings evals NONE model
+    (* [deviation from upstream] A replay deadline that has passed keeps the
+       model uncertified at once: copying the problem and instantiating the
+       model into it first took seconds on a large one, past the call's own
+       deadline. *)
+    val expired = case deadline of
+        SOME limit => Time.>= (Time.now (), limit)
+      | NONE => false
   in
-    case if executable andalso codatatypes_ok andalso
+    case if not expired andalso executable andalso codatatypes_ok andalso
             private_codatatypes_ok then
            certification_copy (#scope cex) private_types original eval_terms
              private_bindings replay_hints replay_sidecar

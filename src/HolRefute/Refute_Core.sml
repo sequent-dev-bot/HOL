@@ -2308,7 +2308,49 @@ structure Refute_Core :> Refute_Core = struct
       finish result
     end
 
-  val quiet_mutex = Mutex.mutex ()
+  (* [deviation from upstream] The output scope is owned by one thread for a
+     whole call, but a call the caller's timeout cannot stop is ended with
+     [Thread.kill], which neither unwinds a mutex held across the call nor
+     restores [Feedback]'s output flags.  A mutex held that way stayed
+     locked for good, and every later call in the process waited on it until
+     its own timeout.  The owner is recorded under a mutex held only for the
+     check, and a call that finds its owner dead takes the scope over and
+     puts the flags back as the owner found them. *)
+  val quiet_guard = Mutex.mutex ()
+  val quiet_owner =
+    ref (NONE : {thread : Thread.thread, messages : bool, warnings : bool}
+                option)
+
+  fun claim_quiet_scope () =
+    Multithreading.synchronized "Refute quiet output" quiet_guard (fn () =>
+      let
+        fun take () =
+          (quiet_owner :=
+             SOME {thread = Thread.self (), messages = !Feedback.emit_MESG,
+                   warnings = !Feedback.emit_WARNING};
+           true)
+      in
+        case !quiet_owner of
+            NONE => take ()
+          | SOME {thread, messages, warnings} =>
+              if Thread.isActive thread then false
+              else (Feedback.emit_MESG := messages;
+                    Feedback.emit_WARNING := warnings;
+                    take ())
+      end)
+
+  fun with_quiet_scope f =
+    let
+      fun acquire () =
+        if claim_quiet_scope () then ()
+        else (OS.Process.sleep (Time.fromMilliseconds 10); acquire ())
+      fun release () =
+        Multithreading.synchronized "Refute quiet output" quiet_guard
+          (fn () => quiet_owner := NONE)
+    in
+      acquire ();
+      Portable.finally release f ()
+    end
 
   fun refute_problem ctxt (cfg : config) problem =
     let
@@ -2334,8 +2376,7 @@ structure Refute_Core :> Refute_Core = struct
             raise Feedback.mk_HOL_ERR "Refute" "refute"
               "Refute was called from a backend of a running Refute call"
         | NONE =>
-            Multithreading.synchronized "Refute quiet output" quiet_mutex
-              in_context
+            with_quiet_scope in_context
     end
 
   fun refute ctxt cfg tm =
