@@ -6132,6 +6132,34 @@ val _ = test "the shared boxing pass agrees with the unshared one" (fn () =>
   in
     List.all (fn ok => ok) results andalso coerced > 0
   end)
+
+(* Coercing a value to a pair of its selectors copies it into each of them,
+   so each coercion doubles a value that nests another coercion's result.  A
+   large value is bound once instead, so the coercion adds a constant to its
+   size, and coercing the binding back gives the value itself. *)
+val _ = test "coercing a large pair-boxed value binds it once" (fn () =>
+  let
+    val pair_ty = ``:num # num``
+    val boxed_ty = MFH.box_type plain_context MFH.InPair pair_ty
+    val f = Term.mk_var ("f", Type.-->(boxed_ty, Type.-->(boxed_ty, boxed_ty)))
+    fun build 0 = Term.mk_var ("p", boxed_ty)
+      | build k = let val below = build (k - 1)
+                  in Term.list_mk_comb (f, [below, below]) end
+    fun tree_size term =
+      if Term.is_comb term then
+        1 + tree_size (Term.rator term) + tree_size (Term.rand term)
+      else if Term.is_abs term then 1 + tree_size (#2 (Term.dest_abs term))
+      else 1
+    val value = build 9
+    val coerced = MFH.coerce_term plain_context pair_ty boxed_ty value
+    val small = build 2
+    val back = MFH.coerce_term plain_context boxed_ty pair_ty
+      (MFH.coerce_term plain_context pair_ty boxed_ty small)
+  in
+    MFH.is_pairbox_type boxed_ty andalso
+    tree_size coerced <= tree_size value + 30 andalso
+    Term.aconv back small
+  end)
 end
 
 (* Every boxing call the selftest's model-finder goals make was compared
