@@ -9,7 +9,13 @@ signature Refute_ModelFinder_HOL = sig
 
   type special_fun = (term * int list * term list) * term
 
-  type wf_cache = (term * (bool * bool)) list
+  (* [deviation from upstream] The caches of one context are maps. *)
+  type wf_cache =
+    {entries : (term, int * (bool * bool)) Redblackmap.dict, next : int}
+
+  type special_funs =
+    {entries : special_fun list, count : int,
+     index : (term, ((int list * term list) * term) list) Redblackmap.dict}
 
   type iterator_info =
     {pred : term, preds : term list, arg_tys : hol_type list,
@@ -30,7 +36,8 @@ signature Refute_ModelFinder_HOL = sig
      rules : term list,
      cases : term list}
 
-  type fixpoint_cache = (kname * fixpoint_group option) list
+  (* [deviation from upstream] indexed table or map in place of a list scan *)
+  type fixpoint_cache = fixpoint_group option KNametab.table
 
   type type_operator = {Thy : string, Tyop : string}
 
@@ -49,6 +56,25 @@ signature Refute_ModelFinder_HOL = sig
      pred : term, inverse_axioms : term list, univ : bool}
 
   type frac_info = {tyop : type_operator, ersatz : ersatz list}
+
+  (* [deviation from upstream] How often a definition was looked up in the
+     tables, how often a registry was enumerated and how often the
+     properties of a constant were searched for. *)
+  type lookup_counts =
+    {definitions : int ref, registry_scans : int ref,
+     equational_checks : int ref}
+
+  (* The questions the unfolding asks per constant occurrence; a context
+     answers them from tables built once, and a test can put others in its
+     cell. *)
+  type lookups =
+    {case_info : term -> (int * int) option,
+     whacked : term -> bool,
+     replacement : term -> term option,
+     ersatz_call : term -> term -> bool,
+     record_get : term -> int option,
+     record_update : term -> int option,
+     definition : term -> (bool * term * int) option}
 
   type mf_context =
     {max_bisim_depth : int,
@@ -79,19 +105,26 @@ signature Refute_ModelFinder_HOL = sig
      ersatz_table : ersatz list,
      whack_weakening : bool ref,
      choice_guard_inserted : bool ref,
-     choice_empty_cache : (term * bool) list ref,
+     (* [deviation from upstream] indexed table or map in place of a list scan *)
+     choice_empty_cache : (term, bool) Redblackmap.dict ref,
      choice_predicate_attempts : int ref,
      prefix_origins : (string * hol_type) list ref,
      skolems : skolem_info list ref,
-     special_funs : special_fun list ref,
+     (* [deviation from upstream] indexed table or map in place of a list scan *)
+     special_funs : special_funs ref,
      wf_cache : wf_cache ref,
-     constr_cache : (hol_type * term list) list ref,
+     (* [deviation from upstream] indexed table or map in place of a list scan *)
+     constr_cache : (hol_type, term list) Redblackmap.dict ref,
      (* the goal's word literals per width, and the operations
         met as unknown values *)
      word_literals : (hol_type * IntInf.int list) list ref,
-     unknown_ops : string list ref}
+     unknown_ops : string list ref,
+     counts : lookup_counts,
+     lookups : lookups ref,
+     equational_memo : (term, unit) Redblackmap.dict ref}
 
   val const_key : term -> {Name : string, Thy : string}
+  val original_const_key : term -> {Name : string, Thy : string}
   val same_key : KernelSig.kernelname -> KernelSig.kernelname -> bool
   val add_simps : 'a list KNametab.table ref -> term -> 'a list -> unit
   val term_under_def : term -> term
@@ -146,6 +179,12 @@ signature Refute_ModelFinder_HOL = sig
      rules : term list,
      stem : string} option
   val is_raw_equational_fun : mf_context -> term -> bool
+  (* [deviation from upstream] indexed table or map in place of a list scan *)
+  val raw_def_of_const_ext :
+    const_table * const_table -> term -> (bool * term) option
+  val indexed_lookups :
+    lookup_counts -> const_table * const_table ->
+    (kname * (int * int)) list -> term list -> ersatz list -> lookups
   val is_equational_fun : mf_context -> term -> bool
   val equational_fun_axioms : mf_context -> term -> term list
 
@@ -232,7 +271,9 @@ signature Refute_ModelFinder_HOL = sig
   val mate_of_rep_fun : term -> term
   val first_unregistered_typedef : term list -> hol_type option
   val unregistered_typedef_reason : term list -> string option
-  val is_record_get : term -> bool
+  (* [deviation from upstream] indexed table or map in place of a list scan *)
+  val is_record_get : mf_context -> term -> bool
+  val tick : int ref -> unit
   val is_named_const : KernelSig.kernelname -> term -> bool
   val is_descr : term -> bool
   val numeral_value : term -> Arbint.int option

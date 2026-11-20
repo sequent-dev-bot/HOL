@@ -715,17 +715,24 @@ fun run_instance deadline started (config : Refute_Core.config)
     val (_, _, pnf) = Refute_Cert.normalize_to_pnf Conv.QCONV closure
     val prefix_origins = Refute_Skolem.mark_source_ambiguities original
       (Refute_Skolem.prefix_binders pnf)
-    val context = MFH.make_context context_mf eval_terms
-    val _ = #prefix_origins context := prefix_origins
+    (* [deviation from upstream] indexed table or map in place of a list scan *)
+    fun fresh_context () =
+      let val context = MFH.make_context context_mf eval_terms
+      in #prefix_origins context := prefix_origins; context end
+    val context = fresh_context ()
     val fixpoint_refusal = MFH.first_fixpoint_refusal context original
     val _ = if Option.isSome fixpoint_refusal then
         MFH.print_wf_cache context else ()
     val _ = case fixpoint_refusal of
         SOME reason => raise Util.NOT_SUPPORTED reason
       | NONE => ()
-    val (nondef_ts, def_ts, need_ts, got_all_mono_user_axioms,
+    (* [deviation from upstream] indexed table or map in place of a list scan *)
+    val preprocessed as
+        (nondef_ts, def_ts, need_ts, got_all_mono_user_axioms,
          no_poly_user_axioms, binarize) =
       MFP.preprocess_formulas context [] negated
+    (* [deviation from upstream] a test's check of the result *)
+    val _ = (!MFP.preprocess_check) fresh_context context negated preprocessed
     val _ = check_deadline deadline
     (* A typedef morphism can enter through an unfolded wrapper even when it
        was absent from the surface goal.  Scan the complete preprocessed
@@ -991,7 +998,8 @@ fun run_instance deadline started (config : Refute_Core.config)
           MFM.reconstruct_both
           {context = context, formats = #format mf,
            scope = #scope extension, atoms = #atoms mf,
-           special_funs = !(#special_funs context),
+           (* [deviation from upstream] indexed table or map in place of a list scan *)
+           special_funs = #entries (!(#special_funs context)),
            real_frees = real_frees,
            eval_terms = eval_terms,
            free_names = #free_names extension,

@@ -8,7 +8,7 @@ open Refute
 open refutePersistentTypeTheory
 local open Refute_Rat Refute_Real in end
 
-(* Five deliberate reaches outside the [Refute] signature.  One is a
+(* Six deliberate reaches outside the [Refute] signature.  One is a
    registry entry point with no user outside these tests: the composed
    display callback a registration installs, aliased here.  The second is
    [Refute_QC.strategy_run], called by "an expired deadline never claims
@@ -24,7 +24,12 @@ local open Refute_Rat Refute_Real in end
    its counters, [Refute_ModelFinder_Preproc.box_check]), called by "the
    boxing pass works on shared terms" and "the shared boxing pass agrees
    with the unshared one": how often a memo computed cannot be observed
-   through a verdict. *)
+   through a verdict.  [deviation from upstream] The sixth is the lookups
+   the unfolding and the preprocessing consult ([Refute_ModelFinder_HOL]'s
+   context counters and swappable [lookups], [preprocess_check], and the
+   scanning reference in [refuteLookupReference.sml]): "how often a
+   registry is enumerated" is invisible in a verdict, and the old scanning
+   code is kept as the reference the indexed tables must agree with. *)
 val lookup_term_postprocessor =
   Refute_ModelFinder_Model.lookup_term_postprocessor
 
@@ -249,6 +254,40 @@ val _ = Refute_ModelFinder_Preproc.box_check :=
             | NONE => false)
       then ()
       else box_disagreed := Parse.term_to_string input :: !box_disagreed
+    end)
+
+(* [deviation from upstream] Every preprocessed problem from here on is
+   compared with the one the same problem gets when the unfolding asks its
+   questions about a constant the way it did before they were answered from
+   tables built once (the lookup reference module). *)
+val preprocess_compared = ref 0
+val preprocess_disagreed = ref ([] : string list)
+val _ = Refute_ModelFinder_Preproc.preprocess_check :=
+  (fn fresh => fn _ => fn negated => fn result =>
+    let
+      val reference = fresh ()
+      val _ = #lookups reference := refuteLookupReference.scanning reference
+      val expected =
+        SOME (Refute_ModelFinder_Preproc.preprocess_formulas
+                reference [] negated)
+        handle Interrupt => raise Interrupt | _ => NONE
+      fun same_terms (left, right) =
+        ListPair.allEq (fn (l, r) => Term.aconv l r) (left, right)
+    in
+      preprocess_compared := !preprocess_compared + 1;
+      if (case expected of
+              SOME (nondefs, defs, needs, mono, poly, binarize) =>
+                (case result of
+                     (nondefs', defs', needs', mono', poly', binarize') =>
+                       same_terms (nondefs, nondefs') andalso
+                       same_terms (defs, defs') andalso
+                       same_terms (needs, needs') andalso
+                       mono = mono' andalso poly = poly' andalso
+                       binarize = binarize')
+            | NONE => false)
+      then ()
+      else preprocess_disagreed :=
+             Parse.term_to_string negated :: !preprocess_disagreed
     end)
 
 (* Registered stub backends: their [configured] flag is cleared after the
@@ -6207,6 +6246,111 @@ val _ = mf_test "every boxing call of the selftest agrees with the unshared pass
   (fn () => !box_compared > 0 andalso null (!box_disagreed))
 
 (* ------------------------------------------------------------------- *)
+(* [deviation from upstream] Definition lookup and registries, once per *)
+(* context.                                                             *)
+(* ------------------------------------------------------------------- *)
+
+val _ = section "preprocessing lookups"
+
+local
+  structure MFH = Refute_ModelFinder_HOL
+  structure MFP = Refute_ModelFinder_Preproc
+
+  val zz_twice_def = Define `zz_twice (x : num) = x + x`
+
+  fun definitions context = !(#definitions (#counts context))
+  fun scans context = !(#registry_scans (#counts context))
+  fun equational_checks context = !(#equational_checks (#counts context))
+
+  (* [template] with each of [count] numerals in place of [i], as one
+     conjunction. *)
+  fun occurrences count template =
+    boolSyntax.list_mk_conj (List.tabulate (count, fn index =>
+      Term.subst [{redex = ``i : num``,
+                   residue = numSyntax.term_of_int index}] template))
+
+  (* A constant from each registry the unfolding consults per occurrence:
+     a case constant, a record field read and its update, a whacked
+     constant, a constant with an ersatz replacement, constants that are
+     defined by an equation and by simplification rules. *)
+  val template =
+    ``((case (opt : num option) of NONE => 0 | SOME k => k + i) = i) /\
+      (rg_field (r : rg_record) = i) /\
+      (rg_field (r with rg_field := i) = i) /\
+      (I (n : num) = i) /\
+      (CARD (s : num set) = i) /\
+      (DISJOINT s (t : num set)) /\
+      (MAX n i = i) /\
+      (zz_twice (n : num) = i)``
+
+  fun fresh_context () =
+    MFH.make_context (#mf (mf |> upd_whack [``I : 'a -> 'a``])) []
+in
+val _ = test "a definition is looked up once per constant instance" (fn () =>
+  let
+    val one = fresh_context ()
+    val many = fresh_context ()
+    val _ = MFH.unfold_defs_in_term one (occurrences 1 template)
+    val _ = MFH.unfold_defs_in_term many (occurrences 20 template)
+  in
+    definitions one > 1 andalso definitions many = definitions one andalso
+    equational_checks one > 0 andalso
+    equational_checks many = equational_checks one
+  end)
+
+val _ = test "unfolding enumerates no registry per occurrence" (fn () =>
+  let
+    val context = fresh_context ()
+    val start = scans context
+    val _ = MFH.unfold_defs_in_term context (occurrences 20 template)
+  in
+    scans context = start
+  end)
+
+val _ = test "the scanning lookups do enumerate registries per occurrence"
+  (fn () =>
+  let
+    fun counted count =
+      let
+        val context = fresh_context ()
+        val _ = #lookups context := refuteLookupReference.scanning context
+        val start = scans context
+        val _ = MFH.unfold_defs_in_term context (occurrences count template)
+      in (scans context - start, definitions context) end
+    val (scans_one, definitions_one) = counted 1
+    val (scans_many, definitions_many) = counted 20
+  in
+    (* The positive memo of [is_raw_equational_fun] lives in the context,
+       beside the lookups, so the definition count here stays flat; the
+       per-occurrence definition lookups of the old code are what the
+       first test of this section failed on before the change. *)
+    scans_one > 0 andalso scans_many > scans_one andalso
+    definitions_one > 0 andalso definitions_many >= definitions_one
+  end)
+
+val _ = test "the lookups from tables answer as the scanning ones do" (fn () =>
+  let
+    val term = occurrences 20 template
+    val indexed = fresh_context ()
+    val scanning = fresh_context ()
+    val _ = #lookups scanning := refuteLookupReference.scanning scanning
+  in
+    Term.aconv (MFH.unfold_defs_in_term indexed term)
+               (MFH.unfold_defs_in_term scanning term)
+  end)
+
+val _ = test "preprocessing enumerates no registry per occurrence" (fn () =>
+  let
+    val context = fresh_context ()
+    val start = scans context
+    val _ = MFP.preprocess_formulas context []
+      (boolSyntax.mk_neg (occurrences 20 template))
+  in
+    scans context = start
+  end)
+end
+
+(* ------------------------------------------------------------------- *)
 (* Potential counterexamples and retries.  Registers a restricted       *)
 (* ``:num list`` generator, so this stays last.                         *)
 (* ------------------------------------------------------------------- *)
@@ -6229,5 +6373,8 @@ val _ = test "a certifiable hit is upgraded to Genuine" (fn () =>
   refute (corpus_config |> upd_expect ExpectGenuine)
          ``~(HD (MAP (f : num -> num) xs) = f (HD xs))``
   |> cex_where (fn c => is_genuine c andalso Option.isSome (#cert c)))
+
+val _ = test "preprocessing from tables built once agrees with the scanning one"
+  (fn () => !preprocess_compared > 0 andalso null (!preprocess_disagreed))
 
 val _ = exit_count0 erc
