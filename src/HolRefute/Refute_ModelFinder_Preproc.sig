@@ -14,6 +14,11 @@ signature Refute_ModelFinder_Preproc = sig
 
   val is_generated_const : term -> bool
 
+  (* [deviation from upstream] A test sees each preprocessed problem. *)
+  val preprocess_check :
+    ((unit -> context) -> context -> term ->
+     term list * term list * term list * bool * bool * bool -> unit) ref
+
   val preprocess_formulas :
     context -> term list -> term ->
     term list * term list * term list * bool * bool * bool

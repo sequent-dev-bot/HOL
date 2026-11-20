@@ -1416,18 +1416,9 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
       recurse [] body
     end
 
-  fun is_ersatz_call ({ersatz_table, ...} : context) original candidate =
-    if not (Term.is_const candidate) then false
-    else
-      let
-        val original_key = MFH.const_key original
-        val candidate_key = MFH.const_key candidate
-      in
-        List.exists (fn ({original = source, replacement} : MFH.ersatz) =>
-          MFH.same_key source original_key andalso
-          MFH.same_key replacement candidate_key andalso
-          Term.type_of original = Term.type_of candidate) ersatz_table
-      end handle HOL_ERR _ => false
+  (* [deviation from upstream] indexed table or map in place of a list scan *)
+  fun is_ersatz_call ({lookups, ...} : context) original candidate =
+    #ersatz_call (!lookups) original candidate
 
   fun static_args_in_term context original term =
     let
@@ -1546,9 +1537,26 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
     ListPair.allEq (fn (left, right) => Term.aconv left right)
       (arguments1, arguments2)
 
-  fun special_cache_lookup entries key =
-    AList.lookup (fn (key, stored) => special_fun_aconv (stored, key))
-      entries key
+  (* [deviation from upstream] The special functions of a function, by the
+     function, newest first. *)
+  fun special_cache_lookup ({index, ...} : MFH.special_funs)
+        (key as (original, indices, arguments)) =
+    case Redblackmap.peek (index, original) of
+        NONE => NONE
+      | SOME stored =>
+          Option.map #2 (List.find (fn (stored_key, _) =>
+            special_fun_aconv ((original, #1 stored_key, #2 stored_key), key))
+            stored)
+
+  fun add_special_fun ({entries, count, index} : MFH.special_funs)
+        (key as (original, indices, arguments), special) =
+    {entries = (key, special) :: entries,
+     count = count + 1,
+     index = Redblackmap.insert (index, original,
+       ((indices, arguments), special) ::
+       (case Redblackmap.peek (index, original) of
+            SOME stored => stored
+          | NONE => []))}
 
   fun specialize_consts_in_term
         (context as {specialize, special_funs, simp_table, ...} : context)
@@ -1653,7 +1661,8 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
                     | NONE =>
                         let
                           val special = MFN.mk_special
-                            (length (!special_funs) + 1)
+                            (* [deviation from upstream] indexed table or map in place of a list scan *)
+                            (#count (!special_funs) + 1)
                             (function_name original) special_type
                           val axiom_extra_args = axiom_bounds
                           val new_axioms = map
@@ -1661,7 +1670,8 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
                               fixed_indices fixed_args_in_axiom
                               axiom_extra_args) old_axioms
                           val _ = special_funs :=
-                            (key, special) :: !special_funs
+                            (* [deviation from upstream] indexed table or map in place of a list scan *)
+                            add_special_fun (!special_funs) (key, special)
                           val _ = MFH.add_simps simp_table special new_axioms
                         in
                           Term.list_mk_comb (special, extra_args)
@@ -1759,15 +1769,28 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
   fun special_congruence_axioms
         (context as {special_funs, ...} : context) seen =
     let
-      fun add_group (((original, indices, terms), special), groups) =
-        case List.find (fn (other, _) => same_function original other)
-               groups of
-            NONE => (original, [(indices, terms, special)]) :: groups
-          | SOME (_, triples) =>
-              (original, (indices, terms, special) :: triples) ::
-              List.filter (fn (other, _) =>
-                not (same_function original other)) groups
-      val raw_groups = List.foldl add_group [] (!special_funs)
+      (* [deviation from upstream] The groups by function, each triple
+         consed on, the group of the last triple first: kept by function in
+         a map with the position of its last triple, and listed by that
+         position, latest first. *)
+      fun add_group ((position, ((original, indices, terms), special)),
+                     groups) =
+        let
+          val triples =
+            case Redblackmap.peek (groups, original) of
+                SOME (_, triples) => triples
+              | NONE => []
+        in
+          Redblackmap.insert (groups, original,
+            (position, (indices, terms, special) :: triples))
+        end
+      val raw_groups =
+        map (fn (original, (_, triples)) => (original, triples))
+          (Listsort.sort (fn ((_, (left, _)), (_, (right, _))) =>
+             Int.compare (right, left))
+             (Redblackmap.listItems
+                (List.foldl add_group (Redblackmap.mkDict Term.compare)
+                   (Lib.enumerate 0 (#entries (!special_funs))))))
       val groups = List.mapPartial (fn (original, triples) =>
         if MFH.is_equational_fun_surely_complete context original then NONE
         else
@@ -2078,14 +2101,17 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
         SOME {Thy, Name, ...} => Thy ^ MFN.name_sep ^ Name
       | NONE => #1 (Term.dest_var term)
 
+  (* [deviation from upstream] The uncurry table is a map from a constant
+     to the fewest arguments it was seen with. *)
+  fun empty_uncurry_table () = Redblackmap.mkDict Term.compare
+
   fun add_to_uncurry_table context term table =
     let
       fun update constant arity entries =
-        case List.find (Term.aconv constant o #1) entries of
-            NONE => (constant, arity) :: entries
-          | SOME (_, old) =>
-              (constant, Int.min (old, arity)) ::
-              List.filter (not o Term.aconv constant o #1) entries
+        case Redblackmap.peek (entries, constant) of
+            NONE => Redblackmap.insert (entries, constant, arity)
+          | SOME old =>
+              Redblackmap.insert (entries, constant, Int.min (old, arity))
       fun skippable candidate =
         MFH.is_built_in_const candidate orelse
         MFH.is_nonfree_constr candidate orelse
@@ -2109,8 +2135,8 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
 
   fun uncurry_term table term =
     let
-      fun lookup candidate =
-        AList.lookup (Lib.uncurry Term.aconv) table candidate
+      (* [deviation from upstream] indexed table or map in place of a list scan *)
+      fun lookup candidate = Redblackmap.peek (table, candidate)
       fun recurse candidate arguments =
         if Term.is_comb candidate then
           let val (function, argument) = Term.dest_comb candidate
@@ -2302,7 +2328,8 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
               MFH.box_type context MFH.InConstr ty
             else if (case Lib.total Term.dest_var candidate of
                         SOME (name, _) => MFN.is_sel name
-                      | NONE => MFH.is_record_get candidate) then
+                      (* [deviation from upstream] indexed table or map in place of a list scan *)
+                      | NONE => MFH.is_record_get context candidate) then
               MFH.box_type context MFH.InSel ty
             else MFH.box_type context MFH.InExpr ty
         in
@@ -2428,6 +2455,14 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
       |> close_form
     end
 
+  (* [deviation from upstream] A test sees each preprocessed problem: it is
+     given a function that makes a fresh context for the problem, the
+     context that was used, the negated goal and the result. *)
+  val preprocess_check :
+    ((unit -> context) -> context -> term ->
+     term list * term list * term list * bool * bool * bool -> unit) ref =
+    ref (fn _ => fn _ => fn _ => fn _ => ())
+
   fun preprocess_formulas
         (context as
           {binary_ints, boxes, destroy_constrs, needs, ...} : context)
@@ -2472,8 +2507,10 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
       val uncurry_table =
         if box then
           List.foldl (fn (term, table) =>
-            add_to_uncurry_table context term table) [] uncurry_terms
-        else []
+            (* [deviation from upstream] indexed table or map in place of a list scan *)
+            add_to_uncurry_table context term table)
+            (empty_uncurry_table ()) uncurry_terms
+        else empty_uncurry_table ()
       fun do_middle definitional term =
         let
           val binarized =

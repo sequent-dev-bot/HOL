@@ -11,7 +11,17 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
 
   type const_table = term list KNametab.table
   type special_fun = (term * int list * term list) * term
-  type wf_cache = (term * (bool * bool)) list
+  (* [deviation from upstream] The caches of one context are maps; the
+     well-foundedness cache numbers its entries, so that they are reported
+     in the order they were proved. *)
+  type wf_cache =
+    {entries : (term, int * (bool * bool)) Redblackmap.dict, next : int}
+
+  (* Every special function made so far, newest first, and the same by the
+     function each specializes. *)
+  type special_funs =
+    {entries : special_fun list, count : int,
+     index : (term, ((int list * term list) * term) list) Redblackmap.dict}
   type iterator_info =
     {pred : term, preds : term list, arg_tys : hol_type list,
      arg_tyss : hol_type list list, gfp : bool, token : string}
@@ -28,7 +38,8 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
      members : kname list,
      rules : term list,
      cases : term list}
-  type fixpoint_cache = (kname * fixpoint_group option) list
+  (* [deviation from upstream] indexed table or map in place of a list scan *)
+  type fixpoint_cache = fixpoint_group option KNametab.table
   type type_operator = {Thy : string, Tyop : string}
   type ersatz = {original : kname, replacement : kname}
   datatype registration_origin = Explicit | Harvested
@@ -250,6 +261,26 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
   fun install_input origin descriptor class =
     set_entry (Refute_RegistrationData.operator descriptor) class origin
       (SOME descriptor)
+  (* [deviation from upstream] How often a definition was looked up in the
+     tables, how often a registry was enumerated and how often the properties
+     of a constant were searched for, which the selftests
+     read. *)
+  type lookup_counts =
+    {definitions : int ref, registry_scans : int ref,
+     equational_checks : int ref}
+
+  (* The questions the unfolding asks per constant occurrence.  A context
+     answers them from tables built once ([indexed_lookups]); a test can
+     put others in the context's cell. *)
+  type lookups =
+    {case_info : term -> (int * int) option,
+     whacked : term -> bool,
+     replacement : term -> term option,
+     ersatz_call : term -> term -> bool,
+     record_get : term -> int option,
+     record_update : term -> int option,
+     definition : term -> (bool * term * int) option}
+
   type mf_context =
     {max_bisim_depth : int,
      boxes : (hol_type option * bool option) list,
@@ -279,18 +310,24 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
      ersatz_table : ersatz list,
      whack_weakening : bool ref,
      choice_guard_inserted : bool ref,
-     choice_empty_cache : (term * bool) list ref,
+     (* [deviation from upstream] indexed table or map in place of a list scan *)
+     choice_empty_cache : (term, bool) Redblackmap.dict ref,
      choice_predicate_attempts : int ref,
      prefix_origins : (string * hol_type) list ref,
      skolems : skolem_info list ref,
-     special_funs : special_fun list ref,
+     (* [deviation from upstream] indexed table or map in place of a list scan *)
+     special_funs : special_funs ref,
      wf_cache : wf_cache ref,
-     constr_cache : (hol_type * term list) list ref,
+     (* [deviation from upstream] indexed table or map in place of a list scan *)
+     constr_cache : (hol_type, term list) Redblackmap.dict ref,
      (* The word and char literals of the problem by
         type, and the word operations that had no table row at a fragment
         carrier, which became unknown values. *)
      word_literals : (hol_type * IntInf.int list) list ref,
-     unknown_ops : string list ref}
+     unknown_ops : string list ref,
+     counts : lookup_counts,
+     lookups : lookups ref,
+     equational_memo : (term, unit) Redblackmap.dict ref}
 
   (* Upstream's ground theorem hash and vestigial unrolled-predicate ref are
      deliberately absent: nothing in this port reads either. *)
@@ -894,15 +931,34 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
      ({Thy = "string", Name = "char_gt"}, 2),
      ({Thy = "string", Name = "char_ge"}, 2)]
 
-  fun key_lookup key table = Lib.op_assoc1 same_key key table
+  (* [deviation from upstream] The tables above are searched by key a few
+     times per constant occurrence, so each is indexed once, at load; the
+     first row of a key wins, as it did in the list. *)
+  fun first_row_index rows =
+    List.foldl (fn ((key, value), table) =>
+      if KNametab.defined table key then table
+      else KNametab.update (key, value) table) KNametab.empty rows
 
-  fun keyed_built_in_arity table key = key_lookup key table
+  val generic_index = first_row_index built_in_consts
+  val word_index = first_row_index word_built_in_consts
+  val char_index = first_row_index char_built_in_consts
 
-  val generic_built_in_arity = keyed_built_in_arity built_in_consts
+  (* Buckets are newest-first, as [KNametab.cons_list] leaves them. *)
+  val typed_index =
+    List.foldl (fn (((key, ty), arity), table) =>
+      KNametab.cons_list (key, (ty, arity)) table)
+      KNametab.empty built_in_typed_consts
+
+  (* [deviation from upstream] indexed table or map in place of a list scan *)
+  fun keyed_built_in_arity index key = KNametab.lookup index key
+
+  (* [deviation from upstream] indexed table or map in place of a list scan *)
+  val generic_built_in_arity = keyed_built_in_arity generic_index
 
   fun typed_built_in_arity key ty =
-    AList.lookup (fn ((key, ty), (other, other_ty)) =>
-      same_key key other andalso ty = other_ty) built_in_typed_consts (key, ty)
+    (* [deviation from upstream] indexed table or map in place of a list scan *)
+    Option.map #2 (List.find (fn (other_ty, _) => ty = other_ty)
+      (rev (KNametab.lookup_list typed_index key)))
 
   (* Both carriers' tables are single-theory, so the theory name decides
      before the type guard runs.  That matters: these two are reached
@@ -912,13 +968,15 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
   fun word_built_in_arity key ty =
     if #Thy key <> "words" then NONE
     else if Option.isSome (word_op_dimension ty) then
-      keyed_built_in_arity word_built_in_consts key
+      (* [deviation from upstream] indexed table or map in place of a list scan *)
+      keyed_built_in_arity word_index key
     else NONE
 
   fun char_built_in_arity key ty =
     if #Thy key <> "string" then NONE
     else if is_char_op_type ty then
-      keyed_built_in_arity char_built_in_consts key
+      (* [deviation from upstream] indexed table or map in place of a list scan *)
+      keyed_built_in_arity char_index key
     else NONE
 
   (* The four built-in tables searched in one order, first hit wins.  A
@@ -945,8 +1003,7 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
     in
       if (Thy = "words" orelse Thy = "fcp") andalso
          Option.isSome (word_op_dimension ty) andalso
-         not (List.exists (fn (other, _) => same_key key other)
-                word_built_in_consts) then
+         not (KNametab.defined word_index key) then
         (* the name only; the reason is worded where it is reported *)
         SOME (Thy ^ "$" ^ Name)
       else NONE
@@ -1109,9 +1166,10 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
         latest :: _ => normalized_rhs_of latest
       | [] => NONE
 
-  fun def_of_const_ext
-        ({def_tables = (unfold_table, fallback_table), ...} : mf_context)
-        constant =
+  (* [deviation from upstream] indexed table or map in place of a list scan *)
+  fun tick counter = counter := !counter + 1
+
+  fun raw_def_of_const_ext (unfold_table, fallback_table) constant =
     case Lib.total Term.dest_var constant of
         SOME (name, _) =>
           if Refute_ModelFinder_Names.is_reserved_name name andalso
@@ -1123,6 +1181,16 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
                SOME definition => SOME (true, definition)
              | NONE => Option.map (fn definition => (false, definition))
                  (get_def_of_const fallback_table constant))
+
+  (* [deviation from upstream] indexed table or map in place of a list scan *)
+  (* The definition of a constant instance, whether it is inlined whatever
+     its size, and its size; looked up in the tables once. *)
+  fun def_info_of_const ({lookups, ...} : mf_context) constant =
+    #definition (!lookups) constant
+
+  fun def_of_const_ext context constant =
+    Option.map (fn (force, definition, _) => (force, definition))
+      (def_info_of_const context constant)
 
   fun def_of_const context = Option.map #2 o def_of_const_ext context
 
@@ -1606,9 +1674,14 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
            to ignore a definition the equation can be derived from. *)
         fun cache_derived () =
           let val derived = derived_fixpoint_group context constant
-          in fixpoint_cache := (key, derived) :: !fixpoint_cache; derived end
+          (* [deviation from upstream] indexed table or map in place of a list scan *)
+          in
+            fixpoint_cache := KNametab.update (key, derived) (!fixpoint_cache);
+            derived
+          end
       in
-        case key_lookup key (!fixpoint_cache) of
+        (* [deviation from upstream] indexed table or map in place of a list scan *)
+        case KNametab.lookup (!fixpoint_cache) key of
             SOME result => result
           | NONE =>
               if kind = NoFp then cache_derived ()
@@ -1638,9 +1711,8 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
                            {kind = kind, stem = stem, members = members,
                             rules = rules, cases = cases}
                          fun install (member, entries) =
-                           (member, SOME group) ::
-                           List.filter (fn (other, _) =>
-                             not (same_key other member)) entries
+                           (* [deviation from upstream] indexed table or map in place of a list scan *)
+                           KNametab.update (member, SOME group) entries
                          val _ = fixpoint_cache :=
                            List.foldl install (!fixpoint_cache) members
                          val _ = intro_table := List.foldl
@@ -1758,11 +1830,34 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
   fun is_fixpoint_pred_const context constant =
     Term.is_const constant andalso is_raw_inductive_pred context constant
 
+  (* [deviation from upstream] Most constants have no row in either table,
+     so the key is looked up before the properties are searched for the
+     ones that match this instance, which is what costs.  Both keys a
+     lookup may use are tried, the constant's and its original's. *)
+  fun has_entries table constant =
+    (case Lib.total const_key constant of
+         SOME key => KNametab.defined table key
+       | NONE => false) orelse
+    (case Lib.total original_const_key constant of
+         SOME key => KNametab.defined table key
+       | NONE => false)
+
+  (* A constant instance that has such properties keeps them: tables only
+     gain rows, so a yes is remembered. *)
   fun is_raw_equational_fun
-        (context as {simp_table, psimp_table, ...} : mf_context) constant =
-    not (is_fixpoint_pred_const context constant) andalso
-    (not (null (def_props_for_const (!simp_table) constant)) orelse
-     not (null (def_props_for_const psimp_table constant)))
+        (* [deviation from upstream] indexed table or map in place of a list scan *)
+        (context as {simp_table, psimp_table, counts, equational_memo, ...}
+           : mf_context) constant =
+    Redblackmap.peek (!equational_memo, constant) = SOME () orelse
+    ((has_entries (!simp_table) constant orelse
+      has_entries psimp_table constant) andalso
+     (tick (#equational_checks counts);
+      not (is_fixpoint_pred_const context constant)) andalso
+     (not (null (def_props_for_const (!simp_table) constant)) orelse
+      not (null (def_props_for_const psimp_table constant))) andalso
+     (equational_memo :=
+        Redblackmap.insert (!equational_memo, constant, ());
+      true))
 
   fun is_equational_fun context constant =
     is_raw_equational_fun context constant orelse
@@ -2279,13 +2374,16 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
         else wf_override wfs constant
       fun cached [] = NONE
         | cached (member :: rest) =
-            (case List.find (fn (other, _) => Term.aconv other member)
-                    (!wf_cache) of
+            (* [deviation from upstream] indexed table or map in place of a list scan *)
+            (case Redblackmap.peek (#entries (!wf_cache), member) of
                  SOME (_, (_, result)) => SOME result
                | NONE => cached rest)
       fun remember kind result = wf_cache :=
-        List.foldl (fn (member, entries) =>
-          (member, (kind = Gfp, result)) :: entries)
+        (* [deviation from upstream] indexed table or map in place of a list scan *)
+        List.foldl (fn (member, {entries, next}) =>
+          {entries = Redblackmap.insert
+             (entries, member, (next, (kind = Gfp, result))),
+           next = next + 1})
           (!wf_cache) members
     in
       case override of
@@ -2351,7 +2449,12 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
               "was proved well-founded; Refute can compute it efficiently\n"
             else
               "could not be proved well-founded; Refute might need to " ^
-              "unroll it\n"))) (rev (!wf_cache))
+              (* [deviation from upstream] indexed table or map in place of a list scan *)
+              "unroll it\n")))
+        (map (fn (constant, (_, value)) => (constant, value))
+           (Listsort.sort (fn ((_, (left, _)), (_, (right, _))) =>
+              Int.compare (left, right))
+              (Redblackmap.listItems (#entries (!wf_cache)))))
 
   fun is_equational_fun_surely_complete context constant =
     case equational_fun_axioms context constant of
@@ -4889,12 +4992,14 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
 
   fun data_type_constrs
         ({constr_cache, ...} : mf_context) ty =
-    case List.find (fn (cached, _) => cached = ty) (!constr_cache) of
-        SOME (_, constructors) => constructors
+    (* [deviation from upstream] indexed table or map in place of a list scan *)
+    case Redblackmap.peek (!constr_cache, ty) of
+        SOME constructors => constructors
       | NONE =>
           let val constructors = uncached_data_type_constrs ty
           in
-            constr_cache := (ty, constructors) :: !constr_cache;
+            (* [deviation from upstream] indexed table or map in place of a list scan *)
+            constr_cache := Redblackmap.insert (!constr_cache, ty, constructors);
             constructors
           end
 
@@ -5175,29 +5280,50 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
       end)
       (first_unregistered_typedef terms)
 
-  fun find_field which term =
+  (* [deviation from upstream] The accessors and updaters of every record
+     type, by key, the position of the field in its record; indexed once
+     per context.  The first type in the type base that has the field
+     wins, as in the search it replaces. *)
+  fun record_field_indexes ({registry_scans, ...} : lookup_counts) =
     let
-      val key = original_const_key term
-      fun search_type info =
+      val _ = tick registry_scans
+      fun add_type (info, (accessors, updaters)) =
         let
-          val ty = TypeBasePure.ty_of info
-          fun search (_, []) = NONE
-            | search (index, (field, data) :: rest) =
-                if same_key (original_const_key (which data)) key then
-                  SOME {record_ty = ty, index = index,
-                        field = field, info = data}
-                else search (index + 1, rest)
+          fun add_field ((index, (_, data)), (accessors, updaters)) =
+            let
+              fun add which table =
+                let val key = original_const_key (which data)
+                in
+                  if KNametab.defined table key then table
+                  else KNametab.update (key, index) table
+                end
+            in
+              (add #accessor accessors, add #fupd updaters)
+            end
         in
-          search (0, TypeBasePure.fields_of info)
-        end
+          (* [deviation from upstream] indexed table or map in place of a list scan *)
+          List.foldl add_field (accessors, updaters)
+            (Lib.enumerate 0 (TypeBasePure.fields_of info))
+        end handle HOL_ERR _ => (accessors, updaters)
+      val (accessors, updaters) =
+        List.foldl add_type (KNametab.empty, KNametab.empty)
+          (Refute_TypeBase.elts ())
+      fun lookup table term =
+        KNametab.lookup table (original_const_key term)
+        handle HOL_ERR _ => NONE
     in
-      Lib.get_first search_type (Refute_TypeBase.elts ())
-    end handle HOL_ERR _ => NONE
+      (* [deviation from upstream] indexed table or map in place of a list scan *)
+      (lookup accessors, lookup updaters)
+    end handle HOL_ERR _ => (K NONE, K NONE)
 
-  fun dest_record_get term = find_field #accessor term
-  fun dest_record_update term = find_field #fupd term
-  fun is_record_get term = Option.isSome (dest_record_get term)
-  fun is_record_update term = Option.isSome (dest_record_update term)
+  fun dest_record_get ({lookups, ...} : mf_context) term =
+    #record_get (!lookups) term
+  fun dest_record_update ({lookups, ...} : mf_context) term =
+    #record_update (!lookups) term
+  fun is_record_get context term =
+    Option.isSome (dest_record_get context term)
+  fun is_record_update context term =
+    Option.isSome (dest_record_update context term)
 
   fun is_named_const expected term =
     same_key (original_const_key term) expected handle HOL_ERR _ => false
@@ -6211,8 +6337,9 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
     end
 
   fun optimized_record_get context accessor record =
-    case dest_record_get accessor of
-        SOME {index, ...} =>
+    (* [deviation from upstream] indexed table or map in place of a list scan *)
+    case dest_record_get context accessor of
+        SOME index =>
           let
             val record_ty = Term.type_of record
             val constructor = hd (data_type_constrs context record_ty)
@@ -6223,8 +6350,9 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
       | NONE => raise err "optimized_record_get" "not a record accessor"
 
   fun optimized_record_update context updater update record =
-    case dest_record_update updater of
-        SOME {index = updated_index, ...} =>
+    (* [deviation from upstream] indexed table or map in place of a list scan *)
+    case dest_record_update context updater of
+        SOME updated_index =>
           let
             val input_ty = Term.type_of record
             val output_ty = result_type_after 2 (Term.type_of updater)
@@ -6562,16 +6690,41 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
       Term.list_mk_abs (arguments, Term.list_mk_comb (term, arguments))
     end
 
-  fun replacement_for table constant =
-    let val key = const_key constant
+  (* [deviation from upstream] The ersatz table by original constant, the
+     first row of a constant winning, and by original and replacement
+     together. *)
+  fun ersatz_lookups ({registry_scans, ...} : lookup_counts) table =
+    let
+      val _ = tick registry_scans
+      val replacements =
+        List.foldl (fn ({original, replacement} : ersatz, index) =>
+          if KNametab.defined index original then index
+          else KNametab.update (original, replacement) index)
+          KNametab.empty table
+      val pairs =
+        List.foldl (fn ({original, replacement} : ersatz, index) =>
+          KNametab.cons_list (original, replacement) index)
+          KNametab.empty table
+      fun replacement constant =
+        case KNametab.lookup replacements (const_key constant) of
+            SOME {Thy, Name} =>
+              SOME (retype_constant "ersatz"
+                (Term.prim_mk_const {Thy = Thy, Name = Name})
+                (Term.type_of constant))
+          | NONE => NONE
+      fun ersatz_call original candidate =
+        Term.is_const candidate andalso
+        let
+          val candidate_key = const_key candidate
+        in
+          List.exists (fn replacement =>
+            same_key replacement candidate_key andalso
+            Term.type_of original = Term.type_of candidate)
+            (KNametab.lookup_list pairs (const_key original))
+        end handle HOL_ERR _ => false
     in
-      case List.find (fn ({original, ...} : ersatz) =>
-             same_key original key) table of
-          SOME {replacement = {Thy, Name}, ...} =>
-            SOME (retype_constant "ersatz"
-              (Term.prim_mk_const {Thy = Thy, Name = Name})
-              (Term.type_of constant))
-        | NONE => NONE
+      (* [deviation from upstream] indexed table or map in place of a list scan *)
+      (replacement, ersatz_call)
     end
 
   fun gspec_expansion function =
@@ -6664,9 +6817,9 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
   fun choice_predicate_provably_empty
         ({choice_empty_cache, choice_predicate_attempts, ...} : mf_context)
         predicate =
-    case List.find (fn (other, _) => Term.aconv other predicate)
-           (!choice_empty_cache) of
-        SOME (_, cached) => cached
+    (* [deviation from upstream] indexed table or map in place of a list scan *)
+    case Redblackmap.peek (!choice_empty_cache, predicate) of
+        SOME cached => cached
       | NONE =>
           let
             val eligible =
@@ -6682,7 +6835,9 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
                Lib.can bossLib.DECIDE
                  (boolSyntax.mk_neg (choice_predicate_nonempty predicate)))
           in
-            choice_empty_cache := (predicate, result) :: !choice_empty_cache;
+            (* [deviation from upstream] indexed table or map in place of a list scan *)
+            choice_empty_cache :=
+              Redblackmap.insert (!choice_empty_cache, predicate, result);
             result
           end
 
@@ -6701,22 +6856,13 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
       | _ => NONE
 
   fun unfold_defs_in_term
-        (context as {case_names, ersatz_table, whacks, total_consts,
-                     whack_weakening, choice_guard_inserted, ...}
+        (* [deviation from upstream] indexed table or map in place of a list scan *)
+        (context as {total_consts, whack_weakening, choice_guard_inserted,
+                     lookups, ...}
            : mf_context) term =
     let
-      fun whack_matches pattern candidate =
-        case (Lib.total Term.dest_thy_const pattern,
-              Lib.total Term.dest_thy_const candidate) of
-            (SOME {Thy = pattern_thy, Name = pattern_name, ...},
-             SOME {Thy = actual_thy, Name = actual_name, ...}) =>
-              pattern_thy = actual_thy andalso
-              pattern_name = actual_name andalso
-              type_matches_unboxed
-                (Term.type_of pattern, Term.type_of candidate)
-          | _ => Term.aconv pattern candidate
-      fun whacked candidate =
-        List.exists (fn pattern => whack_matches pattern candidate) whacks
+      (* [deviation from upstream] indexed table or map in place of a list scan *)
+      val {case_info, whacked, replacement, ...} = !lookups
       fun retyped_frac_constant candidate =
         Term.is_var candidate andalso
         Option.isSome (frac_target_for_constant candidate)
@@ -6777,9 +6923,9 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
             else if is_never_unfold_const constant then
               Term.list_mk_comb (constant, process_args depth arguments)
             else
-              case List.find (fn (other, _) => same_key key other)
-                     case_names of
-                  SOME (_, (constructor_count, scrutinee_index)) =>
+              (* [deviation from upstream] indexed table or map in place of a list scan *)
+              case case_info constant of
+                  SOME (constructor_count, scrutinee_index) =>
                     let val needed = constructor_count + 1
                     in
                       if length arguments < needed then
@@ -6879,7 +7025,8 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
                       raise Refute_ModelFinder_Util.NOT_SUPPORTED
                         ("(non-co)constructors of codatatypes (\"" ^
                          raw_constructor_name constant ^ "\")")
-                    else if is_record_get constant then
+                    (* [deviation from upstream] indexed table or map in place of a list scan *)
+                    else if is_record_get context constant then
                       if null arguments then
                         do_term depth (eta_expand constant 1)
                       else
@@ -6887,7 +7034,8 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
                           (optimized_record_get context constant
                              (do_term depth (hd arguments)),
                            process_args depth (tl arguments))
-                    else if is_record_update constant then
+                    (* [deviation from upstream] indexed table or map in place of a list scan *)
+                    else if is_record_update context constant then
                       if length arguments < 2 then
                         do_term depth
                           (eta_expand (Term.list_mk_comb
@@ -6903,8 +7051,9 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
                       Term.list_mk_comb
                         (constant, process_args depth arguments)
                     else
-                      case def_of_const_ext context constant of
-                          SOME (force, definition) =>
+                      (* [deviation from upstream] indexed table or map in place of a list scan *)
+                      case def_info_of_const context constant of
+                          SOME (force, definition, size) =>
                             if depth >= unfold_max_depth then
                               raise Refute_ModelFinder_Util.TOO_LARGE
                                 ("Refute_ModelFinder_HOL.unfold_defs_in_term",
@@ -6919,8 +7068,8 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
                                   else
                                     def_inline_threshold_for_non_booleans
                               in
-                                if not force andalso
-                                   Term.term_size definition > threshold then
+                                (* [deviation from upstream] indexed table or map in place of a list scan *)
+                                if not force andalso size > threshold then
                                   Term.list_mk_comb (constant,
                                     process_args depth arguments)
                                 else
@@ -7036,7 +7185,8 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
                (Refute_ModelFinder_Kodkod.sml); it is accounted for by
                the same sound/unsound problem pair each scope generates
                (run_batch, Refute_ModelFinder.sml). *)
-            case replacement_for ersatz_table constant of
+            (* [deviation from upstream] indexed table or map in place of a list scan *)
+            case replacement constant of
                 SOME replacement =>
                   if depth >= unfold_max_depth then
                     raise Refute_ModelFinder_Util.TOO_LARGE
@@ -7069,12 +7219,75 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
          nondef_table = const_nondef_table nondefs}
       end)
 
+  (* [deviation from upstream] The registries the unfolding asks about per
+     constant occurrence, each enumerated once, here, into a table, and the
+     definition of a constant instance looked up once and kept. *)
+  fun indexed_lookups
+        (counts as {definitions, registry_scans, ...} : lookup_counts)
+        def_tables case_names whacks ersatz_table : lookups =
+    let
+      val case_index =
+        (tick registry_scans;
+         List.foldl (fn ((key, info), index) =>
+           if KNametab.defined index key then index
+           else KNametab.update (key, info) index)
+           KNametab.empty case_names)
+      (* A constant is whacked by a constant of the same name and a type
+         that matches; any other term by an alpha-equivalent one. *)
+      val (constant_whacks, other_whacks) =
+        (tick registry_scans; List.partition Term.is_const whacks)
+      val whack_index =
+        List.foldl (fn (pattern, index) =>
+          let val {Thy, Name, ...} = Term.dest_thy_const pattern
+          in KNametab.cons_list ({Thy = Thy, Name = Name}, pattern) index end)
+          KNametab.empty constant_whacks
+      fun whacked candidate =
+        case Lib.total Term.dest_thy_const candidate of
+            SOME {Thy, Name, ...} =>
+              List.exists (fn pattern =>
+                type_matches_unboxed
+                  (Term.type_of pattern, Term.type_of candidate))
+                (KNametab.lookup_list whack_index {Thy = Thy, Name = Name})
+          | NONE =>
+              List.exists (fn pattern => Term.aconv pattern candidate)
+                other_whacks
+      val (replacement, ersatz_call) =
+        ersatz_lookups counts ersatz_table
+      val (record_get, record_update) = record_field_indexes counts
+      val definition_memo = ref (Redblackmap.mkDict Term.compare)
+      fun definition constant =
+        case Redblackmap.peek (!definition_memo, constant) of
+            SOME answer => answer
+          | NONE =>
+              let
+                val _ = tick definitions
+                val answer =
+                  Option.map (fn (force, definition) =>
+                    (force, definition, Term.term_size definition))
+                    (raw_def_of_const_ext def_tables constant)
+              in
+                definition_memo :=
+                  Redblackmap.insert (!definition_memo, constant, answer);
+                answer
+              end
+    in
+      {case_info = fn constant => KNametab.lookup case_index (const_key constant),
+       whacked = whacked, replacement = replacement,
+       ersatz_call = ersatz_call, record_get = record_get,
+       record_update = record_update, definition = definition}
+    end
+
   fun make_context (mf : Refute_Core.mf_config) evals =
     let
       val {tables = {def_tables, simp_table, psimp_table,
                      choice_spec_table},
            nondefs, nondef_table} = empty_context_fields ()
       val max_bisim_depth = List.foldl Int.max (~1) (#bisim_depth mf)
+      (* [deviation from upstream] indexed table or map in place of a list scan *)
+      val registered_cases = case_names ()
+      val ersatz_table = current_ersatz_table ()
+      val counts = {definitions = ref 0, registry_scans = ref 0,
+                    equational_checks = ref 0}
     in
       (* Mirrors Nitpick's params -> hol_context copy: config fields keep
          the option names (box, wf, ...), context fields hol_context's. *)
@@ -7092,7 +7305,8 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
        needs = #need mf,
        tac_timeout = Time.fromReal (#tac_timeout mf),
        evals = evals,
-       case_names = case_names (),
+       (* [deviation from upstream] indexed table or map in place of a list scan *)
+       case_names = registered_cases,
        def_tables = def_tables,
        nondef_table = nondef_table,
        nondefs = nondefs,
@@ -7101,20 +7315,29 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
        choice_spec_table = choice_spec_table,
        intro_table = ref KNametab.empty,
        case_table = ref KNametab.empty,
-       fixpoint_cache = ref [],
+       (* [deviation from upstream] indexed table or map in place of a list scan *)
+       fixpoint_cache = ref KNametab.empty,
        iterator_table = ref [],
-       ersatz_table = current_ersatz_table (),
+       (* [deviation from upstream] indexed table or map in place of a list scan *)
+       ersatz_table = ersatz_table,
        whack_weakening = ref false,
        choice_guard_inserted = ref false,
-       choice_empty_cache = ref [],
+       (* [deviation from upstream] indexed table or map in place of a list scan *)
+       choice_empty_cache = ref (Redblackmap.mkDict Term.compare),
        choice_predicate_attempts = ref 0,
        prefix_origins = ref [],
        skolems = ref [],
-       special_funs = ref [],
-       wf_cache = ref [],
-       constr_cache = ref [],
+       (* [deviation from upstream] indexed table or map in place of a list scan *)
+       special_funs = ref {entries = [], count = 0,
+                           index = Redblackmap.mkDict Term.compare},
+       wf_cache = ref {entries = Redblackmap.mkDict Term.compare, next = 0},
+       constr_cache = ref (Redblackmap.mkDict Type.compare),
        word_literals = ref [],
-       unknown_ops = ref []}
+       unknown_ops = ref [],
+       equational_memo = ref (Redblackmap.mkDict Term.compare),
+       counts = counts,
+       lookups = ref (indexed_lookups counts def_tables registered_cases
+                        (#whack mf) ersatz_table)}
     end
 
   fun registration_api f x =

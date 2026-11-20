@@ -235,7 +235,7 @@ struct
               MFH.box_type context MFH.InConstr ty
             else if (case Lib.total Term.dest_var candidate of
                         SOME (name, _) => MFN.is_sel name
-                      | NONE => MFH.is_record_get candidate) then
+                      | NONE => MFH.is_record_get context candidate) then
               MFH.box_type context MFH.InSel ty
             else MFH.box_type context MFH.InExpr ty
         in
