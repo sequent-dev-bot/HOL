@@ -3043,6 +3043,32 @@ in
       end)
 end
 
+(* The guard of a quantifier runs the representation
+   pass again on its body, and a connective of two optional formulas runs a
+   node at both polarities, so nested quantifiers on both sides of an
+   equivalence cost, without the memo, a multiple of the distinct nodes that
+   grows with the nesting (17848 calls for 1468 nodes at depth 7, 600 for
+   124 at depth 3).  With it a node of a given key is chosen once. *)
+local
+  structure MFK = Refute_ModelFinder_Kodkod
+in
+  val _ = mf_test "the representation pass chooses each distinct node once"
+    (fn () =>
+      let
+        val goal =
+          ``(!(a0:num) (a1:num) (a2:num) (a3:num) (a4:num).
+               (P : num -> num -> num -> num -> num -> bool) a0 a1 a2 a3 a4) =
+            (!(a0:num) (a1:num) (a2:num) (a3:num) (a4:num).
+               (Q : num -> num -> num -> num -> num -> bool) a0 a1 a2 a3 a4)``
+        val _ = refute (mf |> upd_card [(NONE, [2])] |> upd_timeout 60.0) goal
+        val {calls, hits, nodes, output_dag, output_tree, ...} =
+          !MFK.sharing_stats
+      in
+        calls <= 2 * nodes andalso hits > 0 andalso
+        IntInf.fromInt output_dag < output_tree
+      end)
+end
+
 local
   structure MFNT = Refute_ModelFinder_Nut
   structure MFR = Refute_ModelFinder_Rep
