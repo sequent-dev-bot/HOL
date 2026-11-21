@@ -39,6 +39,11 @@ signature Refute_ModelFinder_Kodkod = sig
   (* The number of [assemble_problem] calls so far,
      for the selftests. *)
   val assembly_calls : int ref
+  val check_sharing : bool ref
+  val sharing_checks : int ref
+  val sharing_stats :
+    {calls : int, hits : int, nodes : int, output_dag : int,
+     output_tree : IntInf.int, register_uses : int} ref
   (* [check_expression_arities names universe_card
      formula] raises TOO_LARGE when an expression of [formula] has more
      columns than a universe of [universe_card] atoms allows; [names] say

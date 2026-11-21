@@ -1425,7 +1425,346 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                SOME name => SOME (table_constant scope name ty)
              | NONE => NONE)
 
-  fun choose_reps_in_nut
+  (* The quantifier guard of [choose_reps_in_nut]
+     works on its body twice (once with the bound variable, once with an
+     unrepresentable value for it), and [triad_fn] runs a node at both
+     polarities, so the work and the output double with each nesting level
+     and most of both is repeated.  A cache keeps one canonical node for
+     each distinct nut (an interning table ordered by [nut_compare]) and
+     remembers, per node, the result of [choose_reps_in_nut] under each
+     choice of the representations of the node's free bound variables, of
+     the definition flag and of the polarity.  Equal results are one node:
+     the output is a DAG that [share_nut] turns into a tree with let
+     bindings, which Kodkodi's registers carry to the emitted problem.  A
+     cache serves one scope, one variant and one table of free names. *)
+  local
+    fun polarity_rank Util.Pos = 0
+      | polarity_rank Util.Neg = 1
+      | polarity_rank Util.Neut = 2
+
+    fun then_order EQUAL next = next ()
+      | then_order order _ = order
+
+    fun lex_order compare (xs, ys) =
+      case (xs, ys) of
+          ([], []) => EQUAL
+        | ([], _) => LESS
+        | (_, []) => GREATER
+        | (x :: xs', y :: ys') =>
+            then_order (compare (x, y)) (fn () => lex_order compare (xs', ys'))
+
+    fun rep_rank rep =
+      case rep of
+          MFR.Any => 0 | MFR.Formula _ => 1 | MFR.Atom _ => 2
+        | MFR.Struct _ => 3 | MFR.Vect _ => 4 | MFR.Func _ => 5
+        | MFR.Opt _ => 6
+
+    fun rep_compare (left, right) =
+      if Portable.pointer_eq (left, right) then EQUAL
+      else
+        case (left, right) of
+            (MFR.Formula p, MFR.Formula q) =>
+              Int.compare (polarity_rank p, polarity_rank q)
+          | (MFR.Atom (card, offset), MFR.Atom (card', offset')) =>
+              then_order (Int.compare (card, card'))
+                (fn () => Int.compare (offset, offset'))
+          | (MFR.Struct xs, MFR.Struct ys) => lex_order rep_compare (xs, ys)
+          | (MFR.Vect (n, r), MFR.Vect (m, s)) =>
+              then_order (Int.compare (n, m)) (fn () => rep_compare (r, s))
+          | (MFR.Func (d, r), MFR.Func (e, s)) =>
+              then_order (rep_compare (d, e)) (fn () => rep_compare (r, s))
+          | (MFR.Opt r, MFR.Opt s) => rep_compare (r, s)
+          | _ => Int.compare (rep_rank left, rep_rank right)
+
+    fun cst_rank constant =
+      case constant of
+          False => 0 | True => 1 | Iden => 2 | Num _ => 3 | Unknown => 4
+        | Unrep => 5 | Suc => 6 | Add => 7 | Oversized => 8 | Subtract => 9
+        | Multiply => 10 | Divide => 11 | Gcd => 12 | Lcm => 13
+        | Fracs => 14 | NormFrac => 15 | NatToInt => 16 | IntToNat => 17
+        | NatToWord => 18 | WordToNat => 19 | WordAnd => 20 | WordOr => 21
+        | WordXor => 22 | WordShl => 23 | WordShr => 24 | WordAsr => 25
+        | WordNeg => 26 | WordNot => 27 | WordRow _ => 28
+        | WordTable _ => 29 | NatToChar => 30 | CharToNat => 31
+
+    fun column_compare
+          ({width, values} : Refute_ModelFinder_Words.column,
+           {width = width', values = values'}) =
+      then_order (Int.compare (width, width'))
+        (fn () => lex_order IntInf.compare (values, values'))
+
+    fun cst_compare (left, right) =
+      case (left, right) of
+          (Num m, Num n) => Int.compare (m, n)
+        | (WordRow m, WordRow n) => String.compare (m, n)
+        | (WordTable (m, xs), WordTable (n, ys)) =>
+            then_order (String.compare (m, n))
+              (fn () => lex_order column_compare (xs, ys))
+        | _ => Int.compare (cst_rank left, cst_rank right)
+
+    fun op1_rank operator =
+      case operator of
+          Not => 0 | Finite => 1 | Converse => 2 | Closure => 3
+        | SingletonSet => 4 | IsUnknown => 5 | SafeThe => 6 | First => 7
+        | Second => 8 | Cast => 9
+
+    fun op2_rank operator =
+      case operator of
+          All => 0 | Exist => 1 | Or => 2 | And => 3 | Less => 4
+        | SignedLess => 5 | DefEq => 6 | Eq => 7 | Triad => 8
+        | Composition => 9 | Apply => 10 | Lambda => 11
+
+    fun op3_rank Let = 0
+      | op3_rank If = 1
+
+    fun nut_rank nut =
+      case nut of
+          Cst _ => 0 | Op1 _ => 1 | Op2 _ => 2 | Op3 _ => 3 | Tuple _ => 4
+        | Construct _ => 5 | BoundName _ => 6 | FreeName _ => 7
+        | ConstName _ => 8 | BoundRel _ => 9 | FreeRel _ => 10
+        | RelReg _ => 11 | FormulaReg _ => 12
+
+    fun type_rep_order (ty, representation) (ty', representation') () =
+      then_order (Type.compare (ty, ty'))
+        (fn () => rep_compare (representation, representation'))
+
+    fun index_compare ((a, b), (c, d)) =
+      then_order (Int.compare (a, c)) (fn () => Int.compare (b, d))
+  in
+    (* Pointer-equal nuts are equal at once, so on canonical nuts (whose
+       children are canonical) a comparison follows one differing path. *)
+    fun nut_compare (left, right) =
+      if Portable.pointer_eq (left, right) then EQUAL
+      else
+        case (left, right) of
+            (Cst (c, ty, r), Cst (c', ty', r')) =>
+              then_order (cst_compare (c, c'))
+                (type_rep_order (ty, r) (ty', r'))
+          | (Op1 (operator, ty, r, x), Op1 (operator', ty', r', x')) =>
+              then_order (Int.compare (op1_rank operator, op1_rank operator'))
+                (fn () => then_order (type_rep_order (ty, r) (ty', r') ())
+                   (fn () => nut_compare (x, x')))
+          | (Op2 (operator, ty, r, x, y), Op2 (operator', ty', r', x', y')) =>
+              then_order (Int.compare (op2_rank operator, op2_rank operator'))
+                (fn () => then_order (type_rep_order (ty, r) (ty', r') ())
+                   (fn () => then_order (nut_compare (x, x'))
+                      (fn () => nut_compare (y, y'))))
+          | (Op3 (operator, ty, r, x, y, z), Op3 (operator', ty', r', x', y', z')) =>
+              then_order (Int.compare (op3_rank operator, op3_rank operator'))
+                (fn () => then_order (type_rep_order (ty, r) (ty', r') ())
+                   (fn () => then_order (nut_compare (x, x'))
+                      (fn () => then_order (nut_compare (y, y'))
+                         (fn () => nut_compare (z, z')))))
+          | (Tuple (ty, r, xs), Tuple (ty', r', xs')) =>
+              then_order (type_rep_order (ty, r) (ty', r') ())
+                (fn () => lex_order nut_compare (xs, xs'))
+          | (Construct (ss, ty, r, xs), Construct (ss', ty', r', xs')) =>
+              then_order (type_rep_order (ty, r) (ty', r') ())
+                (fn () => then_order (lex_order nut_compare (ss, ss'))
+                   (fn () => lex_order nut_compare (xs, xs')))
+          | (BoundName (i, ty, r, s), BoundName (i', ty', r', s')) =>
+              then_order (Int.compare (i, i'))
+                (fn () => then_order (type_rep_order (ty, r) (ty', r') ())
+                   (fn () => String.compare (s, s')))
+          | (FreeName (s, ty, r), FreeName (s', ty', r')) =>
+              then_order (String.compare (s, s'))
+                (type_rep_order (ty, r) (ty', r'))
+          | (ConstName (s, ty, r), ConstName (s', ty', r')) =>
+              then_order (String.compare (s, s'))
+                (type_rep_order (ty, r) (ty', r'))
+          | (BoundRel (i, ty, r, s), BoundRel (i', ty', r', s')) =>
+              then_order (index_compare (i, i'))
+                (fn () => then_order (type_rep_order (ty, r) (ty', r') ())
+                   (fn () => String.compare (s, s')))
+          | (FreeRel (i, ty, r, s), FreeRel (i', ty', r', s')) =>
+              then_order (index_compare (i, i'))
+                (fn () => then_order (type_rep_order (ty, r) (ty', r') ())
+                   (fn () => String.compare (s, s')))
+          | (RelReg (i, ty, r), RelReg (i', ty', r')) =>
+              then_order (Int.compare (i, i'))
+                (type_rep_order (ty, r) (ty', r'))
+          | (FormulaReg (i, ty, r), FormulaReg (i', ty', r')) =>
+              then_order (Int.compare (i, i'))
+                (type_rep_order (ty, r) (ty', r'))
+          | _ => Int.compare (nut_rank left, nut_rank right)
+
+    fun rep_option_compare (NONE, NONE) = EQUAL
+      | rep_option_compare (NONE, SOME _) = LESS
+      | rep_option_compare (SOME _, NONE) = GREATER
+      | rep_option_compare (SOME left, SOME right) = rep_compare (left, right)
+
+    (* What a node's result depends on besides the node: the representation
+       of each of its free bound variables, the definition flag and the
+       polarity. *)
+    fun key_compare ((reps, definition, polarity),
+                     (reps', definition', polarity')) =
+      then_order (lex_order rep_option_compare (reps, reps'))
+        (fn () => then_order
+           (Int.compare (if definition then 1 else 0,
+                         if definition' then 1 else 0))
+           (fn () => Int.compare (polarity_rank polarity,
+                                  polarity_rank polarity')))
+  end
+
+  type memo_key = rep option list * bool * Util.polarity
+
+  (* [fv] is the free bound variables of [node] by level, as the variable
+     nuts.  A bound variable's index is its level, and nested binders have
+     distinct levels, so the level identifies the variable. *)
+  type entry =
+    {id : int, node : nut, fv : nut list,
+     memo : (memo_key, nut) Redblackmap.dict ref}
+
+  datatype cache = Cache of
+    {nodes : (nut, entry) Redblackmap.dict ref, next : int ref,
+     calls : int ref, hits : int ref}
+
+  fun new_cache () =
+    Cache {nodes = ref (Redblackmap.mkDict nut_compare), next = ref 0,
+           calls = ref 0, hits = ref 0}
+
+  fun cache_stats (Cache {nodes, calls, hits, ...}) =
+    {nodes = Redblackmap.numItems (!nodes), calls = !calls, hits = !hits}
+
+  fun level_of (BoundName (level, _, _, _)) = level
+    | level_of nut = raise NUT ("Refute_ModelFinder_Nut.level_of", [nut])
+
+  fun binder_variables (Tuple (_, _, nuts)) =
+        List.concat (map binder_variables nuts)
+    | binder_variables nut = [nut]
+
+  fun kids nut =
+    case nut of
+        Op1 (_, _, _, first) => [first]
+      | Op2 (_, _, _, first, second) => [first, second]
+      | Op3 (_, _, _, first, second, third) => [first, second, third]
+      | Tuple (_, _, nuts) => nuts
+      | Construct (selectors, _, _, arguments) => selectors @ arguments
+      | _ => []
+
+  fun with_kids nut new =
+    case (nut, new) of
+        (Op1 (operator, ty, representation, _), [first]) =>
+          Op1 (operator, ty, representation, first)
+      | (Op2 (operator, ty, representation, _, _), [first, second]) =>
+          Op2 (operator, ty, representation, first, second)
+      | (Op3 (operator, ty, representation, _, _, _),
+         [first, second, third]) =>
+          Op3 (operator, ty, representation, first, second, third)
+      | (Tuple (ty, representation, _), _) => Tuple (ty, representation, new)
+      | (Construct (selectors, ty, representation, _), _) =>
+          let val (selectors', arguments') =
+            (List.take (new, length selectors),
+             List.drop (new, length selectors))
+          in Construct (selectors', ty, representation, arguments') end
+      | _ => nut
+
+  fun fv_union ([], ys) = ys
+    | fv_union (xs, []) = xs
+    | fv_union (xs as x :: xs', ys as y :: ys') =
+        (case Int.compare (level_of x, level_of y) of
+             EQUAL => x :: fv_union (xs', ys')
+           | LESS => x :: fv_union (xs', ys)
+           | GREATER => y :: fv_union (xs, ys'))
+
+  fun fv_remove variables free =
+    let val levels = map level_of variables
+    in
+      List.filter (fn variable => not (Lib.mem (level_of variable) levels))
+        free
+    end
+
+  (* The free bound variables of a node from those of its children. *)
+  fun fv_of nut kid_fvs =
+    case (nut, kid_fvs) of
+        (BoundName _, _) => [nut]
+      | (Op2 (operator, _, _, binder, _), [_, body_fv]) =>
+          if operator = All orelse operator = Exist orelse
+             operator = Lambda
+          then fv_remove (binder_variables binder) body_fv
+          else List.foldl fv_union [] kid_fvs
+      | (Op3 (Let, _, _, binder, _, _), [_, value_fv, body_fv]) =>
+          fv_union (value_fv, fv_remove (binder_variables binder) body_fv)
+      | _ => List.foldl fv_union [] kid_fvs
+
+  (* The canonical entry of a nut: the nut itself when it is already in the
+     table, otherwise made from the canonical entries of its children. *)
+  fun canon_entry (cache as Cache {nodes, next, ...}) nut : entry =
+    case Redblackmap.peek (!nodes, nut) of
+        SOME entry => entry
+      | NONE =>
+          let
+            val children = kids nut
+            val entries = map (canon_entry cache) children
+            val nut' =
+              if null children orelse
+                 ListPair.all Portable.pointer_eq
+                   (children, map #node entries)
+              then nut
+              else with_kids nut (map #node entries)
+          in
+            case Redblackmap.peek (!nodes, nut') of
+                SOME entry => entry
+              | NONE =>
+                  let
+                    val entry =
+                      {id = !next, node = nut',
+                       fv = fv_of nut' (map #fv entries),
+                       memo = ref (Redblackmap.mkDict key_compare)}
+                  in
+                    next := !next + 1;
+                    nodes := Redblackmap.insert (!nodes, nut', entry);
+                    entry
+                  end
+          end
+
+  fun canon cache nut = #node (canon_entry cache nut)
+
+  (* [substitute_in_nut needle replacement body] over canonical nuts: the
+     same replacement at the same leaves, each distinct node visited once,
+     and nodes with no free occurrence of a bound-variable needle left
+     alone. *)
+  fun substitute_in_dag cache needle replacement body =
+    let
+      val needle_level = case needle of
+          BoundName (level, _, _, _) => SOME level
+        | _ => NONE
+      val done = ref (Redblackmap.mkDict Int.compare)
+      fun visit (entry : entry) =
+        case Redblackmap.peek (!done, #id entry) of
+            SOME result => result
+          | NONE =>
+              let
+                val nut = #node entry
+                val untouched = case needle_level of
+                    SOME level =>
+                      not (List.exists (fn variable =>
+                             level_of variable = level) (#fv entry))
+                  | NONE => false
+                val result =
+                  if untouched then nut
+                  else
+                    case kids nut of
+                        [] => if nut = needle then replacement else nut
+                      | children =>
+                          canon cache
+                            (with_kids nut
+                               (map (visit o canon_entry cache) children))
+              in
+                done := Redblackmap.insert (!done, #id entry, result);
+                result
+              end
+    in
+      visit (canon_entry cache body)
+    end
+
+  (* With a cache the work is the cache's: every
+     call of [aux] is looked up by its node, the representations of the
+     node's free bound variables, the definition flag and the polarity, and
+     the guard's body is substituted over the DAG.  Without one the pass is
+     upstream's tree recursion, which [check_sharing] in the assembly and the
+     selftests compare the DAG's expansion against. *)
+  fun choose_reps_with cache
         (scope as {card_assigns, data_types, ofs, ...} : scope)
         unsound table definition nut =
     let
@@ -1447,13 +1786,38 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
       fun triad_fn f = triad (f Util.Pos) (f Util.Neg)
       fun unrepify table definition polarity needle body =
         let val ty = type_of needle
+          val replacement = Cst (if MFH.is_fun_type ty then Unknown else Unrep,
+                                 ty, MFR.Any)
         in
           aux table definition polarity
-            (substitute_in_nut needle
-              (Cst (if MFH.is_fun_type ty then Unknown else Unrep,
-                    ty, MFR.Any)) body)
+            (case cache of
+                 NONE => substitute_in_nut needle replacement body
+               | SOME c => substitute_in_dag c needle replacement body)
         end
       and aux table definition polarity candidate =
+        case cache of
+            NONE => compute table definition polarity candidate
+          | SOME (c as Cache {calls, hits, ...}) =>
+              let
+                val entry = canon_entry c candidate
+                val key =
+                  (map (NameTable.lookup table) (#fv entry),
+                   definition, polarity)
+                val _ = calls := !calls + 1
+              in
+                case Redblackmap.peek (!(#memo entry), key) of
+                    SOME result => (hits := !hits + 1; result)
+                  | NONE =>
+                      let
+                        val result = canon c
+                          (compute table definition polarity (#node entry))
+                      in
+                        #memo entry :=
+                          Redblackmap.insert (!(#memo entry), key, result);
+                        result
+                      end
+              end
+      and compute table definition polarity candidate =
         let
           fun gsub definition polarity item =
             aux table definition polarity item
@@ -1947,6 +2311,226 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
         end
     in
       aux table definition Util.Pos nut
+    end
+
+  val choose_reps_in_nut = choose_reps_with NONE
+  fun choose_reps_in_nut_shared cache = choose_reps_with (SOME cache)
+
+  (* The distinct nodes below a canonical nut and
+     the size of the tree they stand for. *)
+  fun dag_size cache nut =
+    let
+      val sizes = ref (Redblackmap.mkDict Int.compare)
+      fun size (entry : entry) =
+        case Redblackmap.peek (!sizes, #id entry) of
+            SOME total => total
+          | NONE =>
+              let
+                val total = List.foldl (fn (kid, sum) =>
+                  sum + size (canon_entry cache kid))
+                  (1 : IntInf.int) (kids (#node entry))
+              in
+                sizes := Redblackmap.insert (!sizes, #id entry, total);
+                total
+              end
+      val tree = size (canon_entry cache nut)
+    in
+      (Redblackmap.numItems (!sizes), tree)
+    end
+
+  (* The levels of the let-bound names that stand
+     for shared nodes lie above those of any bound variable. *)
+  val register_level = 1000000
+
+  (* The positions of a node whose child may be a shared register: the
+     operands of the connectives and the body of a quantifier, which read
+     their formula operands without looking at the operand's polarity or
+     structure.  A node that reads its parts as relations is left out. *)
+  fun register_positions nut =
+    case nut of
+        Op1 (Not, _, MFR.Formula _, _) => [0]
+      | Op2 (operator, _, representation, _, _) =>
+          if operator = And orelse operator = Or orelse operator = Triad then
+            [0, 1]
+          else if (operator = All orelse operator = Exist) andalso
+                  (case representation of MFR.Formula _ => true
+                                        | _ => false) then
+            [1]
+          else []
+      | Op3 (If, _, MFR.Formula _, _, _, _) => [1, 2]
+      | _ => []
+
+  fun can_register nut =
+    (case nut of Op1 _ => true | Op2 _ => true | Op3 _ => true | _ => false)
+    andalso (case rep_of nut of MFR.Formula _ => true | _ => false)
+
+  fun indexed items = ListPair.zip (List.tabulate (length items, fn i => i), items)
+
+  (* [share_nut cache nut] is [nut], a canonical DAG, as a tree: a Formula
+     node that two or more registered positions of the DAG hold becomes a
+     let-bound name, bound as deep as its free bound variables allow (just
+     inside the binder of the innermost one), the bindings of one place in
+     the order their uses need.  [expand_shared] undoes it. *)
+  fun share_nut cache root =
+    let
+      val counts = ref (Redblackmap.mkDict Int.compare)
+      val seen = ref (Redblackmap.mkDict Int.compare)
+      fun count_visit (entry : entry) =
+        if Option.isSome (Redblackmap.peek (!seen, #id entry)) then ()
+        else
+          let val nut = #node entry
+              val positions = register_positions nut
+          in
+            seen := Redblackmap.insert (!seen, #id entry, ());
+            List.app (fn (index, kid) =>
+              let val kid_entry = canon_entry cache kid
+              in
+                (if Lib.mem index positions andalso can_register kid then
+                   counts := Redblackmap.insert (!counts, #id kid_entry,
+                     1 + Option.getOpt
+                       (Redblackmap.peek (!counts, #id kid_entry), 0))
+                 else ());
+                count_visit kid_entry
+              end) (indexed (kids nut))
+          end
+      val _ = count_visit (canon_entry cache root)
+      fun shared (entry : entry) =
+        case Redblackmap.peek (!counts, #id entry) of
+            SOME count => count >= 2
+          | NONE => false
+      fun home (entry : entry) =
+        case List.rev (#fv entry) of
+            [] => NONE
+          | variable :: _ => SOME (level_of variable)
+      fun leaf (entry : entry) =
+        BoundName (register_level + #id entry, type_of (#node entry),
+                   MFR.Formula Util.Neut, "share" ^ Int.toString (#id entry))
+      (* shared id -> (entry, value, ids it uses, order of completion) *)
+      val defined = ref (Redblackmap.mkDict Int.compare)
+      val bodies = ref (Redblackmap.mkDict Int.compare)
+      val completed = ref 0
+      fun merge_ids ([], ys) = ys
+        | merge_ids (xs, []) = xs
+        | merge_ids (xs as x :: xs', ys as y :: ys') =
+            (case Int.compare (x, y) of
+                 EQUAL => x :: merge_ids (xs', ys')
+               | LESS => x :: merge_ids (xs', ys)
+               | GREATER => y :: merge_ids (xs, ys'))
+      fun definition_of (entry : entry) =
+        case Redblackmap.peek (!defined, #id entry) of
+            SOME definition => definition
+          | NONE =>
+              let
+                val (value, uses) = expand_body entry
+                val definition = (entry, value, uses, !completed)
+              in
+                completed := !completed + 1;
+                defined := Redblackmap.insert (!defined, #id entry, definition);
+                definition
+              end
+      and expand_kid nut index (entry : entry) =
+        if shared entry andalso Lib.mem index (register_positions nut) then
+          (ignore (definition_of entry); (leaf entry, [#id entry]))
+        else expand_body entry
+      and expand_body (entry : entry) =
+        case Redblackmap.peek (!bodies, #id entry) of
+            SOME result => result
+          | NONE =>
+              let
+                val nut = #node entry
+                val results = map (fn (index, kid) =>
+                  expand_kid nut index (canon_entry cache kid))
+                  (indexed (kids nut))
+                val uses = List.foldl merge_ids [] (map #2 results)
+                val trees = map #1 results
+                val result =
+                  case nut of
+                      Op2 (operator, _, _, binder, _) =>
+                        if operator = All orelse operator = Exist orelse
+                           operator = Lambda
+                        then bind_in nut (binder_variables binder) 1 trees uses
+                        else (with_kids nut trees, uses)
+                    | Op3 (Let, _, _, binder, _, _) =>
+                        bind_in nut (binder_variables binder) 2 trees uses
+                    | _ => (with_kids nut trees, uses)
+              in
+                bodies := Redblackmap.insert (!bodies, #id entry, result);
+                result
+              end
+      (* Wrap the body of a binder in the bindings whose names depend on the
+         binder's variables. *)
+      and bind_in nut variables body_index trees uses =
+        let
+          val levels = map level_of variables
+          val (here, outside) =
+            place (fn SOME level => Lib.mem level levels | NONE => false) uses
+          val body = wrap here (List.nth (trees, body_index))
+        in
+          (with_kids nut
+             (List.take (trees, body_index) @ body ::
+              List.drop (trees, body_index + 1)),
+           outside)
+        end
+      (* Split [uses] and what they use into those bound at a place, in
+         the order of their completion, and the rest. *)
+      and place is_here uses =
+        let
+          val placed = ref (Redblackmap.mkDict Int.compare)
+          val visited = ref (Redblackmap.mkDict Int.compare)
+          fun loop [] outside = outside
+            | loop (id :: work) outside =
+                if Option.isSome (Redblackmap.peek (!visited, id)) then
+                  loop work outside
+                else
+                  let
+                    val (entry, _, deeper, order) =
+                      Redblackmap.find (!defined, id)
+                  in
+                    visited := Redblackmap.insert (!visited, id, ());
+                    if is_here (home entry) then
+                      (placed := Redblackmap.insert (!placed, order, id);
+                       loop (deeper @ work) outside)
+                    else loop work (id :: outside)
+                  end
+          val outside = loop uses []
+        in
+          (map #2 (Redblackmap.listItems (!placed)),
+           List.foldl (fn (id, result) => merge_ids ([id], result))
+             [] outside)
+        end
+      and wrap here body =
+        List.foldl (fn (id, inner) =>
+          let val (entry, value, _, _) = Redblackmap.find (!defined, id)
+          in
+            Op3 (Let, type_of inner, rep_of inner, leaf entry, value, inner)
+          end) body (List.rev here)
+      val (tree, uses) = expand_body (canon_entry cache root)
+      val (here, outside) = place (fn NONE => true | SOME _ => false) uses
+    in
+      if null outside then wrap here tree
+      else raise NUT ("Refute_ModelFinder_Nut.share_nut", [root])
+    end
+
+  fun expand_shared nut =
+    let
+      val values = ref (Redblackmap.mkDict Int.compare)
+      fun go nut =
+        case nut of
+            Op3 (Let, _, _, BoundName (level, _, _, _), value, body) =>
+              if level >= register_level then
+                (values := Redblackmap.insert (!values, level, go value);
+                 go body)
+              else with_kids nut (map go (kids nut))
+          | BoundName (level, _, _, _) =>
+              if level >= register_level then
+                (case Redblackmap.peek (!values, level) of
+                     SOME value => value
+                   | NONE => raise NUT
+                       ("Refute_ModelFinder_Nut.expand_shared", [nut]))
+              else nut
+          | _ => (case kids nut of [] => nut | ks => with_kids nut (map go ks))
+    in
+      go nut
     end
 
   fun fresh_n_ary_index arity [] previous =
