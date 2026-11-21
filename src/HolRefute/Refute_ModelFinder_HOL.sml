@@ -1331,8 +1331,13 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
     standard_user_props presentations
     |> List.mapPartial (equationalize_term "user definition")
 
-  fun make_tables () =
+  (* how often the theory ancestry was scanned *)
+  val ancestry_scans : int ref = ref 0
+
+  (* built once per theory state, see below *)
+  fun build_tables () =
     let
+      val _ = ancestry_scans := !ancestry_scans + 1
       val presentations = live_userdefs ()
       val fallback_props = standard_user_props presentations @
         raw_standard_props presentations
@@ -1367,6 +1372,74 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
        choice_spec_table = choice_table}
     end
 
+  (* The theory-wide tables are built from the
+     whole theory ancestry, which takes seconds on a large theory, so they
+     are kept across calls.  What they were built from is the theory (every
+     event of the theory database but a temporary binding changes
+     [theory_generation]) and the three theorem sets they read.  A call
+     finds its tables again only when neither changed, and otherwise builds
+     them anew.  [ancestry_scans] counts the builds, which the selftests
+     read. *)
+  val theory_generation : int Synchronized.var =
+    Synchronized.var "Refute theory generation" 0
+
+  val _ = Theory.register_hook
+    ("Refute_ModelFinder_HOL.theory_generation", fn delta =>
+      let
+        val temporary =
+          case delta of
+              TheoryDelta.NewBinding (name, _) => Theory.is_temp_binding name
+            | TheoryDelta.UpdBinding (name, _) => Theory.is_temp_binding name
+            | TheoryDelta.DelBinding name => Theory.is_temp_binding name
+            | _ => false
+      in
+        if temporary then ()
+        else Synchronized.change theory_generation (fn n => n + 1)
+      end)
+
+  type theory_stamp = {generation : int, sets : thm list list}
+
+  fun theory_stamp () : theory_stamp =
+    {generation = Synchronized.value theory_generation,
+     sets = map (fn set => #getDB set ())
+       [Refute_Core.refute_unfold, Refute_Core.refute_simp,
+        Refute_Core.refute_psimp]}
+
+  fun same_theory_stamp (left : theory_stamp) (right : theory_stamp) =
+    #generation left = #generation right andalso
+    ListPair.allEq (fn (lefts, rights) =>
+      ListPair.allEq (fn (l, r) =>
+        Portable.pointer_eq (l, r) orelse
+        (Term.aconv (Thm.concl l) (Thm.concl r) andalso
+         HOLset.equal (Thm.hypset l, Thm.hypset r))) (lefts, rights))
+      (#sets left, #sets right)
+
+  (* Concurrent calls may build the same value twice; either is right for
+     the stamp it was taken under, and the later store wins. *)
+  fun cached_over_theory (cell : (theory_stamp * 'a) option Synchronized.var)
+        (build : unit -> 'a) : 'a =
+    let
+      val stamp = theory_stamp ()
+      fun rebuild () =
+        let val value = build ()
+        in Synchronized.change cell (fn _ => SOME (stamp, value)); value end
+    in
+      case Synchronized.value cell of
+          SOME (stored, value) =>
+            if same_theory_stamp stored stamp then value else rebuild ()
+        | NONE => rebuild ()
+    end
+
+  type tables =
+    {def_tables : const_table * const_table,
+     simp_table : const_table, psimp_table : const_table,
+     choice_spec_table : term list KNametab.table}
+
+  val tables_cache : (theory_stamp * tables) option Synchronized.var =
+    Synchronized.var "Refute tables cache" NONE
+
+  fun make_tables () = cached_over_theory tables_cache build_tables
+
   val core_theories = "bool" :: Theory.ancestry "bool"
 
   fun is_core_theory theory = Lib.mem theory core_theories
@@ -1374,11 +1447,17 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
   val nondefs_key : term list Refute_Core.call_key = Refute_Core.call_key ()
 
   (* Shared by every backend of one Refute call. *)
+  (* kept across calls, see [make_tables] *)
+  val nondefs_cache : (theory_stamp * term list) option Synchronized.var =
+    Synchronized.var "Refute nondefs cache" NONE
+
   fun all_nondefs_of () =
     Refute_Core.call_memo nondefs_key (fn () =>
-      oldest_first_theories ()
-      |> List.filter (not o is_core_theory)
-      |> List.concat o map (map (theorem_term o #2) o axioms_of))
+      cached_over_theory nondefs_cache (fn () =>
+        (ancestry_scans := !ancestry_scans + 1;
+         oldest_first_theories ()
+         |> List.filter (not o is_core_theory)
+         |> List.concat o map (map (theorem_term o #2) o axioms_of))))
 
   fun is_poly_term term = not (null (Term.type_vars_in_term term))
 
@@ -7200,24 +7279,33 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
       do_term 0 term
     end
 
-  val context_fields_key :
+  (* the tables and axiom list of a call, kept *)
+  type context_fields =
     {tables : {def_tables : const_table * const_table,
                simp_table : const_table, psimp_table : const_table,
                choice_spec_table : term list KNametab.table},
-     nondefs : term list, nondef_table : const_table} Refute_Core.call_key =
+     nondefs : term list, nondef_table : const_table}
+
+  val context_fields_key : context_fields Refute_Core.call_key =
     Refute_Core.call_key ()
+
+  (* kept across calls, see [make_tables] *)
+  val context_fields_cache :
+      (theory_stamp * context_fields) option Synchronized.var =
+    Synchronized.var "Refute context fields cache" NONE
 
   (* The tables depend on the theory alone, not on registrations, so one
      build serves every context of a call, harvest restarts included. *)
   fun empty_context_fields () =
     Refute_Core.call_memo context_fields_key (fn () =>
-      let
-        val tables = make_tables ()
-        val nondefs = all_nondefs_of ()
-      in
-        {tables = tables, nondefs = nondefs,
-         nondef_table = const_nondef_table nondefs}
-      end)
+      cached_over_theory context_fields_cache (fn () =>
+        let
+          val tables = make_tables ()
+          val nondefs = all_nondefs_of ()
+        in
+          {tables = tables, nondefs = nondefs,
+           nondef_table = const_nondef_table nondefs}
+        end))
 
   (* [deviation from upstream] The registries the unfolding asks about per
      constant occurrence, each enumerated once, here, into a table, and the

@@ -3566,6 +3566,36 @@ val _ = test "an empty custom generator is refused" (fn () =>
   (register_generator ``:ind`` {enumerate = NONE, random = NONE}; false)
   handle Fail _ => true)
 
+(* Before "harvest_registrations reaches beyond a type's home theory", which
+   harvests every typedef of the session. *)
+local
+  structure MFH = Refute_ModelFinder_HOL
+  val zz_restart_def = Define `zz_restart (x : num) = x + x + x`
+  fun scans_during action =
+    let
+      val before = !MFH.ancestry_scans
+      val result = action ()
+    in (!MFH.ancestry_scans - before, result) end
+  fun call goal = refute (mf |> upd_timeout 30.0) goal
+in
+val _ = mf_test "a restart after a harvest scans no ancestor again"
+  (fn () =>
+    let
+      val goal = ``refute_harvest_hidden_id (n : num) = n``
+      fun unharvested () = Option.isSome
+        (MFH.first_unregistered_typedef
+           [``refute_harvest_hidden_abs (0 : num)``])
+      val _ = call ``zz_restart (x : num) = x + x + x``
+      val was = unharvested ()
+      val (first, _) = scans_during (fn () => call goal)
+      val now = unharvested ()
+      val (second, _) = scans_during (fn () => call goal)
+    in
+      was andalso not now andalso first = 0 andalso second = 0
+    end)
+
+end
+
 val _ = test "harvest_registrations reaches beyond a type's home theory"
   (fn () =>
   let
@@ -6348,6 +6378,121 @@ val _ = test "preprocessing enumerates no registry per occurrence" (fn () =>
   in
     scans context = start
   end)
+end
+
+(* ------------------------------------------------------------------- *)
+(* The theory-wide tables, kept across calls, and *)
+(* the passes of preprocessing.                                             *)
+(* ------------------------------------------------------------------- *)
+
+val _ = section "theory tables across calls"
+
+local
+  structure MFH = Refute_ModelFinder_HOL
+  structure MFP = Refute_ModelFinder_Preproc
+
+  val zz_cached_def = Define `zz_cached (x : num) = x + x`
+  val zz_rec_def = Define `(zz_rec 0 = 1) /\ (zz_rec (SUC n) = 2 * zz_rec n)`
+
+  fun call goal = refute (mf |> upd_timeout 30.0) goal
+
+  fun scans_during action =
+    let
+      val before = !MFH.ancestry_scans
+      val result = action ()
+    in (!MFH.ancestry_scans - before, result) end
+
+  (* A call builds the axiom list and the tables once each, whatever the
+     theory state. *)
+  val per_call = 2
+in
+val _ = mf_test "a constant defined after a call is seen by the next call"
+  (fn () =>
+    let
+      val _ = call ``zz_cached (x : num) = x + x``
+      val _ = Define `zz_defined_late (x : num) = x + 1`
+      val seen = MFH.def_of_const (MFH.make_context (#mf mf) [])
+                   ``zz_defined_late``
+    in
+      Option.isSome seen andalso
+      not (Option.isSome (first_cex
+        (call ``zz_defined_late (x : num) = x + 1``)))
+    end)
+
+val _ = mf_test "an axiom added after a call is seen by the next call"
+  (fn () =>
+    let
+      val _ = call ``zz_cached (x : num) = x + x``
+      val before = length (MFH.all_nondefs_of ())
+      val _ = Theory.new_axiom ("zz_late_axiom", ``(zz_late_free : num) = 3``)
+      val added = length (MFH.all_nondefs_of ())
+      (* The axiom would change every later goal; take it out again. *)
+      val _ = Theory.delete_binding "zz_late_axiom"
+      val removed = length (MFH.all_nondefs_of ())
+    in
+      added = before + 1 andalso removed = before
+    end)
+
+val _ = mf_test "a second call on an unchanged theory scans no ancestor"
+  (fn () =>
+    let
+      val goal = ``zz_cached (x : num) = x + x``
+      val (first, _) = scans_during (fn () => call goal)
+      val (second, _) = scans_during (fn () => call goal)
+      val (outside, _) = scans_during (fn () =>
+        (MFH.make_context (#mf mf) []; MFH.all_nondefs_of ()))
+    in
+      first <= per_call andalso second = 0 andalso outside = 0
+    end)
+
+val _ = mf_test "a definition changes the tables of the next call"
+  (fn () =>
+    let
+      val _ = call ``zz_cached (x : num) = x + x``
+      val (scans, _) = scans_during (fn () =>
+        (Define `zz_changed (x : num) = x + 2`;
+         call ``zz_changed (x : num) = x + 2``))
+    in
+      scans = per_call
+    end)
+
+(* A preprocessing pass that outruns the deadline ends the call with its
+   name and the count it had reached. *)
+val _ = mf_test "a goal ended in a preprocessing pass names the pass and counts"
+  (fn () =>
+    let
+      fun observe text =
+        if String.isPrefix "choosing binary integers over " text then
+          OS.Process.sleep (Time.fromReal 3.0)
+        else ()
+      val _ = MFP.pass_observer := observe
+      val result = Portable.finally
+        (fn () => MFP.pass_observer := (fn _ => ()))
+        (fn () => refute (mf |> upd_timeout 1.0)
+           ``zz_cached (x : num) = x + x``) ()
+    in
+      unknown_with "timed out" result andalso
+      progress_has ["phase reached: preprocessing (choosing binary integers over ",
+                    " axioms and ", " definitions)"] result
+    end)
+
+val _ = mf_test "a goal ended in a pass over the definitions names the count"
+  (fn () =>
+    let
+      fun observe text =
+        if String.isPrefix "boxing the definitions, 1 of " text then
+          OS.Process.sleep (Time.fromReal 3.0)
+        else ()
+      val _ = MFP.pass_observer := observe
+      val result = Portable.finally
+        (fn () => MFP.pass_observer := (fn _ => ()))
+        (fn () => refute (mf |> upd_timeout 1.0)
+           ``zz_rec (n : num) = zz_cached n``) ()
+    in
+      unknown_with "timed out" result andalso
+      progress_has ["phase reached: preprocessing (boxing the definitions, 1 of "]
+        result
+    end)
 end
 
 (* ------------------------------------------------------------------- *)

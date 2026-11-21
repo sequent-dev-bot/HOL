@@ -22,4 +22,12 @@ signature Refute_ModelFinder_Preproc = sig
   val preprocess_formulas :
     context -> term list -> term ->
     term list * term list * term list * bool * bool * bool
+
+  (* The same, reporting each pass, and each
+     axiom of a pass over the axioms, to the function before it starts;
+     the observer of a test sees the text after it. *)
+  val pass_observer : (string -> unit) ref
+  val preprocess_formulas_noting :
+    (string -> unit) -> context -> term list -> term ->
+    term list * term list * term list * bool * bool * bool
 end

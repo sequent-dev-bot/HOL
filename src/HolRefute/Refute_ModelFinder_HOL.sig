@@ -165,6 +165,9 @@ signature Refute_ModelFinder_HOL = sig
   val def_of_const : mf_context -> term -> term option
   val fixpoint_kind_of_rhs : term -> fixpoint_kind
   val all_nondefs_of : unit -> term list
+  (* The theory-wide tables are kept across calls;
+     how often they were built from the theory ancestry. *)
+  val ancestry_scans : int ref
   val is_poly_term : term -> bool
   val choice_spec_props_for_const : mf_context -> term -> term list
   val is_choice_spec_fun : mf_context -> term -> bool

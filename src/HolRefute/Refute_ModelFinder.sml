@@ -695,6 +695,12 @@ fun progress_reason (progress : progress) rejected =
   Int.toString (!(#dropped_msec progress)) ^ " ms; " ^
   MFH.sharing_summary ()
 
+(* A preprocessing pass names itself as the phase reached, with the count it
+   has done, and ends the call when its deadline has passed. *)
+fun preprocessing_pass (progress : progress) deadline text =
+  (enter_phase progress ("preprocessing (" ^ text ^ ")");
+   check_deadline deadline)
+
 fun run_instance deadline started (config : Refute_Core.config)
       incremental solver (initial_max_potential, initial_max_genuine)
       reject_problem (progress : progress)
@@ -730,10 +736,12 @@ fun run_instance deadline started (config : Refute_Core.config)
     val preprocessed as
         (nondef_ts, def_ts, need_ts, got_all_mono_user_axioms,
          no_poly_user_axioms, binarize) =
-      MFP.preprocess_formulas context [] negated
+      MFP.preprocess_formulas_noting (preprocessing_pass progress deadline)
+        context [] negated
     (* [deviation from upstream] a test's check of the result *)
     val _ = (!MFP.preprocess_check) fresh_context context negated preprocessed
     val _ = check_deadline deadline
+    val _ = enter_phase progress "preprocessing (scanning for typedefs)"
     (* A typedef morphism can enter through an unfolded wrapper even when it
        was absent from the surface goal.  Scan the complete preprocessed
        problem as well as the early surface-goal guard in [run]. *)
@@ -749,6 +757,9 @@ fun run_instance deadline started (config : Refute_Core.config)
             raise RESTART_AFTER_HARVEST
         | (NONE, false) => ()
     val _ = bump (#definitions progress) (length def_ts)
+    val _ = enter_phase progress ("preprocessing (translating " ^
+      Int.toString (length nondef_ts) ^ " axioms and " ^
+      Int.toString (length def_ts) ^ " definitions)")
     val _ = MFH.refresh_iterator_arg_types context (nondef_ts @ def_ts)
     val _ = MFH.print_wf_cache context
     val nondef_us = map (MFNT.nut_from_term context MFNT.Eq) nondef_ts
