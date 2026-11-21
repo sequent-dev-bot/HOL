@@ -52,4 +52,17 @@ signature Refute_ModelFinder_Util = sig
   val aconv_member : Term.term -> Term.term list -> bool
   val distinct_terms : Term.term list -> Term.term list
   val update_term : Term.term -> Term.term -> Term.term -> Term.term
+
+  (* [identity_memo f] remembers the last result of
+     [f], by the physical identity of its argument: a table built from a
+     list that stays the same across the many lookups of a scope. *)
+  val identity_memo : ('a -> 'b) -> 'a -> 'b
+  (* [by_context compare f context key] is [f
+     context key] computed once per context (by identity) and key. *)
+  val by_context :
+    ('k * 'k -> order) -> ('c -> 'k -> 'v) -> 'c -> 'k -> 'v
+  (* The counter of how often a named assembly
+     stage has run, for the selftests. *)
+  val stage_count : string -> int ref
+  val count_stage : string -> unit
 end

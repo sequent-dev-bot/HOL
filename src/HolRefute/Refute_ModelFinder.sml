@@ -321,8 +321,7 @@ fun actual_solver incremental (mf : Refute_Core.mf_config) =
 fun solver_arguments deadline solver =
   #2 (Refute_ForlSat.sat_solver_spec (Refute_Util.remaining deadline) solver)
 
-(* The assembly parameters of a scope are shared
-   by the check that a scope can fit and by its assembly. *)
+(* The assembly parameters of a scope. *)
 fun assembly_params deadline (mf : Refute_Core.mf_config)
       all_types solver free_names nonsel_names nondef_us def_us need_us
       (scope : MFS.scope) : MFK.assembly_params =
@@ -346,17 +345,12 @@ fun assembly_params deadline (mf : Refute_Core.mf_config)
   end
 
 (* [reject_too_large] hears of the rejections for
-   size, which a larger scope would meet too; [reject_problem] of the rest. *)
-fun problem_for_scope params reject_problem reject_too_large unsound scope =
-  SOME (MFK.assemble_problem params unsound scope)
+   size, which a larger scope would meet too; [reject_problem] of the rest.
+   [assemble] is a scope's function from a variant to its problem. *)
+fun problem_for_scope assemble reject_problem reject_too_large unsound =
+  SOME (assemble unsound)
   handle Util.TOO_LARGE reason => (reject_too_large reason; NONE)
        | Util.TOO_SMALL reason => (reject_problem reason; NONE)
-
-(* The reason a scope's relations cannot fit,
-   found without assembling anything. *)
-fun scope_too_large params scope =
-  (MFK.check_scope_fits params scope; NONE)
-  handle Util.TOO_LARGE reason => SOME reason
 
 (* [bigger] has at least the cardinality of every
    type that [smaller] has.  What does not fit at [smaller] does not fit at
@@ -615,6 +609,9 @@ exception RESTART_AFTER_HARVEST
 
 (* See [add_problem]. *)
 exception NO_SCOPE_FITS of string * string
+
+(* A scope's assembly, or why it cannot fit. *)
+datatype 'a fit = Fits of 'a | Too_large of string * string
 
 val scope_limit_hint =
   "scope limit reached; consider using \"mono\" or \"merge_type_vars\" " ^
@@ -1408,7 +1405,7 @@ fun run_instance deadline started (config : Refute_Core.config)
         val _ = check_deadline deadline
         val params = assembly_params deadline mf all_types solver
           free_names nonsel_names nondef_us def_us need_us scope
-        fun add unsound (kept, unknown) =
+        fun add assemble unsound (kept, unknown) =
           let
               (* progress tracking. *)
               val _ = enter_phase progress "assembly"
@@ -1423,8 +1420,8 @@ fun run_instance deadline started (config : Refute_Core.config)
                   (reject_problem reason; lost_since begun;
                    (kept, unknown + 1))
               | NONE =>
-            case problem_for_scope params reject_problem rejected_for_size
-                   unsound scope of
+            case problem_for_scope assemble reject_problem rejected_for_size
+                   unsound of
                 NONE => (lost_since begun; (kept, unknown + 1))
               | SOME problem =>
                   if rich_member problem (!generated_problems) then
@@ -1439,23 +1436,28 @@ fun run_instance deadline started (config : Refute_Core.config)
                        | [] => ([problem], unknown))
           end
         val begun = Time.now ()
-        val too_large =
+        (* The work the variants of a scope share
+           is done once, and it is the check that the scope can fit. *)
+        val assembled =
           if null flags then NONE else
           case known_too_large NONE scope of
-              SOME reason => SOME reason
+              SOME reason => SOME (Too_large reason)
             | NONE =>
-                (case scope_too_large params scope of
-                     SOME reason =>
-                       (remember_too_large NONE scope reason; SOME reason)
-                   | NONE => NONE)
+                (SOME (Fits (MFK.assemble_scope params scope))
+                 handle Util.TOO_LARGE reason =>
+                   (remember_too_large NONE scope reason;
+                    SOME (Too_large reason)))
       in
-        case too_large of
-            SOME reason =>
+        (* A scope that cannot fit is rejected here, before any of its
+           problems is assembled. *)
+        case assembled of
+            NONE => (problems, donno)
+          | SOME (Too_large reason) =>
               (reject_problem reason; lost_since begun;
                if first then raise NO_SCOPE_FITS reason
                else (problems, donno + length flags))
-          | NONE =>
-              List.foldl (fn (flag, result) => add flag result)
+          | SOME (Fits assemble) =>
+              List.foldl (fn (flag, result) => add assemble flag result)
                 (problems, donno) flags
       end
 

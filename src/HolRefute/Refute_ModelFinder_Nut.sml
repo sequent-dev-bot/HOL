@@ -272,6 +272,22 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
                accumulator arguments) selectors
       | _ => f nut accumulator
 
+  (* Like [fold_nut] with a test, in the same
+     order, but it stops at the first leaf that passes. *)
+  fun exists_leaf p nut =
+    case nut of
+        Op1 (_, _, _, first) => exists_leaf p first
+      | Op2 (_, _, _, first, second) =>
+          exists_leaf p first orelse exists_leaf p second
+      | Op3 (_, _, _, first, second, third) =>
+          exists_leaf p first orelse exists_leaf p second orelse
+          exists_leaf p third
+      | Tuple (_, _, nuts) => List.exists (exists_leaf p) nuts
+      | Construct (selectors, _, _, arguments) =>
+          List.exists (exists_leaf p) arguments orelse
+          List.exists (exists_leaf p) selectors
+      | _ => p nut
+
   fun map_nut f nut =
     case nut of
         Op1 (operator, ty, representation, first) =>
@@ -1074,21 +1090,32 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
       choose_rep_for_const scope total_consts constant result)
       ([], table) constants
 
-  fun generated_names_for_constructor scope constructor =
-    let
-      val raw_arguments = MFH.constructor_arg_types constructor
-      val flattened = List.concat (map MFH.factor_types raw_arguments)
-      val selectors =
-        if length raw_arguments = length flattened then
-          MFH.binarized_and_boxed_nth_sel_for_constr
-            (#hol_ctxt scope) (#binarize scope) constructor ~1 ::
-          List.tabulate (length raw_arguments, fn index =>
+  (* The names of a constructor's selectors do not
+     depend on the scope: they are made once per context. *)
+  val generated_names_of_constructor = Util.by_context
+    (fn ((left_binarize, left), (right_binarize, right)) =>
+      if left_binarize = right_binarize then Term.compare (left, right)
+      else if left_binarize then GREATER else LESS)
+    (fn context => fn (binarize, constructor) =>
+      let
+        val _ = Util.count_stage "selector names"
+        val raw_arguments = MFH.constructor_arg_types constructor
+        val flattened = List.concat (map MFH.factor_types raw_arguments)
+        val selectors =
+          if length raw_arguments = length flattened then
             MFH.binarized_and_boxed_nth_sel_for_constr
-              (#hol_ctxt scope) (#binarize scope) constructor index)
-        else selector_names_for constructor
-    in
-      map const_name_for selectors
-    end
+              context binarize constructor ~1 ::
+            List.tabulate (length raw_arguments, fn index =>
+              MFH.binarized_and_boxed_nth_sel_for_constr
+                context binarize constructor index)
+          else selector_names_for constructor
+      in
+        map const_name_for selectors
+      end)
+
+  fun generated_names_for_constructor (scope : scope) constructor =
+    generated_names_of_constructor (#hol_ctxt scope)
+      (#binarize scope, constructor)
 
   fun choose_rep_for_selector scope index selector (selectors, table) =
     let
@@ -1298,20 +1325,14 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
   fun untuple f (Tuple (_, _, nuts)) = List.concat (map (untuple f) nuts)
     | untuple f nut = [f nut]
 
+  (* The constructor is looked up in the scope's
+     map of constructors, not by a search through every data type. *)
   fun constructor_for_construct data_types selectors ty =
     let
       val original = MFN.original_name (nickname_of (hd selectors))
-      fun matches (spec : MFS.constr_spec) =
-        MFH.constructor_name (#const spec) = original andalso
-        MFH.constructor_result_type (#const spec) = ty
-      fun search [] = NONE
-        | search ((data_type : MFS.data_type_spec) :: rest) =
-            (case List.find matches (#constrs data_type) of
-                 SOME spec => SOME (#const spec)
-               | NONE => search rest)
     in
-      case search data_types of
-          SOME constructor => constructor
+      case MFS.find_constr_spec data_types original ty of
+          SOME spec => #const spec
         | NONE => raise NUT
             ("Refute_ModelFinder_Nut.constructor_for_construct", selectors)
     end

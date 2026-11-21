@@ -37,6 +37,10 @@ signature Refute_ModelFinder_Scope = sig
   val type_arguments : hol_type -> hol_type list
   val data_type_spec : data_type_spec list -> hol_type -> data_type_spec option
   val constr_spec : data_type_spec list -> term -> constr_spec
+  (* The constructor of a given name and result
+     type, if a data type has one. *)
+  val find_constr_spec :
+    data_type_spec list -> string -> hol_type -> constr_spec option
   (* these three take the scope: a word type on a value-list carrier
      is incomplete *)
   val is_complete_type : scope -> bool -> hol_type -> bool

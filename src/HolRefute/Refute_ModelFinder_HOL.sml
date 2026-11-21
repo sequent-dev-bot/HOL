@@ -6469,13 +6469,24 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
           (numeric_type_card index_ty))
       (cart_type_parts ty)
 
+  (* The cardinality assignments of a scope as a
+     map, built once per assignment list. *)
+  val card_assignments = Refute_ModelFinder_Util.identity_memo
+    (fn (assigns : (hol_type * int) list) =>
+      List.foldr (fn ((ty, card), table) =>
+        Redblackmap.insert (table, ty, card))
+        (Redblackmap.mkDict Type.compare) assigns)
+
+  fun card_assignment assigns ty =
+    Redblackmap.peek (card_assignments assigns, ty)
+
   fun card_of_type assigns ty =
     if is_boolean_type ty then 2
     else if is_itself_type ty then 1
     (* [:char] is on a value-list carrier like a
        word: its assigned card, which is below 256 unless it is exact. *)
     else if is_char_type ty then
-      Option.getOpt (assignment_lookup assigns ty, char_card)
+      Option.getOpt (card_assignment assigns ty, char_card)
     else
       case Lib.total Type.dom_rng ty of
           SOME (domain, range) =>
@@ -6503,7 +6514,7 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
                             (* A word type is on a
                                value-list carrier: its assigned card, which
                                is below 2^width unless the carrier is exact. *)
-                            (case assignment_lookup assigns ty of
+                            (case card_assignment assigns ty of
                                  SOME card => card
                                | NONE =>
                                    Refute_ModelFinder_Util.reasonable_power
@@ -6514,7 +6525,7 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
                                    Refute_ModelFinder_Util.reasonable_power
                                      (card_of_type assigns element) dimension
                                | NONE =>
-                                   (case assignment_lookup assigns ty of
+                                   (case card_assignment assigns ty of
                                         SOME card => card
                                       | NONE => raise err "card_of_type"
                                           "type has no exact cardinality"))))
