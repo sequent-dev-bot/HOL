@@ -72,22 +72,47 @@ structure Refute_ModelFinder_Scope :> Refute_ModelFinder_Scope = struct
     MFH.is_iterator_type ty orelse MFH.is_integer_type ty orelse
     MFH.is_bit_type ty
 
-  fun data_type_spec (data_types : data_type_spec list) ty =
-    List.find (fn spec => Util.same_type (#typ spec) ty) data_types
+  (* The data types of a scope by type, and its
+     constructors by name and result type, as maps built once per list of
+     data types.  The first of equal entries wins, as in a list search. *)
+  val data_type_map = Util.identity_memo
+    (fn (data_types : data_type_spec list) =>
+      List.foldr (fn (spec, table) =>
+        Redblackmap.insert (table, #typ spec, spec))
+        (Redblackmap.mkDict Type.compare) data_types)
+
+  fun compare_constructor_keys ((left_name, left_ty), (right_name, right_ty)) =
+    case String.compare (left_name, right_name) of
+        EQUAL => Type.compare (left_ty, right_ty)
+      | order => order
+
+  val constr_map = Util.identity_memo
+    (fn (data_types : data_type_spec list) =>
+      List.foldr (fn (data_type, table) =>
+        List.foldr (fn (spec : constr_spec, table) =>
+          Redblackmap.insert
+            (table, (MFH.constructor_name (#const spec),
+                     MFH.constructor_result_type (#const spec)), spec))
+          table (#constrs data_type))
+        (Redblackmap.mkDict compare_constructor_keys) data_types)
+
+  fun data_type_spec data_types ty =
+    Redblackmap.peek (data_type_map data_types, ty)
+
+  fun find_constr_spec data_types name ty =
+    Redblackmap.peek (constr_map data_types, (name, ty))
 
   fun same_constructor left right =
     MFH.constructor_name left = MFH.constructor_name right andalso
     Util.same_type (MFH.constructor_result_type left)
       (MFH.constructor_result_type right)
 
-  fun constr_spec ([] : data_type_spec list) constructor =
-      raise err "constr_spec" "constructor has no scope specification"
-    | constr_spec (data_type :: data_types) constructor =
-      (case List.find (fn spec =>
-               same_constructor (#const spec) constructor)
-              (#constrs data_type) of
-           SOME spec => spec
-         | NONE => constr_spec data_types constructor)
+  fun constr_spec data_types constructor =
+    case find_constr_spec data_types (MFH.constructor_name constructor)
+           (MFH.constructor_result_type constructor) of
+        SOME spec => spec
+      | NONE =>
+          raise err "constr_spec" "constructor has no scope specification"
 
   fun is_complete_type (scope : scope) facto ty =
     case Lib.total Type.dom_rng ty of

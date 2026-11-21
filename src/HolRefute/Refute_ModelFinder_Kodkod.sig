@@ -28,11 +28,14 @@ signature Refute_ModelFinder_Kodkod = sig
   val assemble_problem :
     assembly_params -> bool -> Refute_ModelFinder_Scope.scope ->
     rich_problem
-  (* Raises ModelFinder_Util.TOO_LARGE when the
-     relations of a scope cannot fit, as [assemble_problem] would, but
-     assembles nothing. *)
-  val check_scope_fits :
-    assembly_params -> Refute_ModelFinder_Scope.scope -> unit
+  (* [assemble_scope params scope] does the work
+     of assembly that the variants of a scope share, once, and raises
+     ModelFinder_Util.TOO_LARGE when the relations of a scope cannot fit; it
+     returns the function that assembles the problem of a variant, the sound
+     one for [false] and the liberal for [true]. *)
+  val assemble_scope :
+    assembly_params -> Refute_ModelFinder_Scope.scope ->
+    bool -> rich_problem
   (* The number of [assemble_problem] calls so far,
      for the selftests. *)
   val assembly_calls : int ref

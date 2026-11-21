@@ -3030,13 +3030,22 @@ fun needed_value_axioms_for_data_type _ _ _ (_, NONE) = [KK.False]
              else List.mapPartial (atom_equation_for_nut offsets kk) fixed
          | NONE => [])
 
+(* The constructors a data type is expected to have
+   do not depend on the scope: they are made once per context. *)
+val expected_constructors = Util.by_context
+  (fn ((left_binarize, left), (right_binarize, right)) =>
+    if left_binarize = right_binarize then Type.compare (left, right)
+    else if left_binarize then GREATER else LESS)
+  (fn context => fn (binarize, ty) =>
+    (Util.count_stage "expected constructors";
+     MFH.binarized_and_boxed_data_type_constrs context binarize ty))
+
 fun declarative_axioms_for_data_types context binarize need_us need_values
       sym_break bits offsets kk relation_table data_types =
   let
     fun check_constructors (spec : data_type_spec) =
       let
-        val expected = MFH.binarized_and_boxed_data_type_constrs
-          context binarize (#typ spec)
+        val expected = expected_constructors context (binarize, #typ spec)
         fun present ({const, ...} : MFS.constr_spec) =
           List.exists (fn constructor =>
             MFH.constructor_name constructor =
@@ -3099,6 +3108,7 @@ fun scope_representations
       ({total_consts, free_names, nonsel_names, ...} : assembly_params)
       (scope : MFS.scope) =
   let
+    val _ = Util.count_stage "representations"
     val offsets = #ofs scope
     val main_j0 = MFS.offset_of_type offsets Type.bool
     val (nat_card, nat_j0) = MFS.spec_of_type scope MFH.num_type
@@ -3107,6 +3117,8 @@ fun scope_representations
       if nat_j0 = main_j0 andalso int_j0 = main_j0 then ()
       else raise Util.BAD
         ("Refute_ModelFinder_Kodkod.assemble_problem", "bad offsets")
+    (* The Kodkod constructors are built in [scope_stage], as nothing
+       below needs them. *)
     val (free_names, rep_table) = MFNT.choose_reps_for_free_vars scope
       free_names MFNT.NameTable.empty
     val (sel_names, rep_table) =
@@ -3140,20 +3152,29 @@ fun scope_representations
     (free_names, sel_names, nonsel_names, rep_table)
   end
 
-(* Raises TOO_LARGE when the scope's relations
-   cannot fit, as assembly would, without assembling anything. *)
-fun check_scope_fits params scope =
-  with_arity_retry (#ofs scope) (fn offsets =>
-    ignore (scope_representations params (scope_with_offsets scope offsets)))
+(* [memo f] runs [f] when its result is first
+   asked for, and keeps it; a [f] that raises is run again next time. *)
+fun memo f =
+  let val result = ref NONE
+  in
+    fn () =>
+      case !result of
+          SOME value => value
+        | NONE => let val value = f () in result := SOME value; value end
+  end
 
-val assembly_calls = ref 0
-
-fun assemble_problem_once
-      (params as {debug, peephole_optim, total_consts, datatype_sym_break,
-        kodkod_sym_break,
-        comment, solver, unsound_delay, free_names, nonsel_names,
-        nondef_us, def_us, need_us} : assembly_params)
-      unsound (scope : MFS.scope) : rich_problem =
+(* What the sound and the liberal problem of one
+   scope (at one offset table) share: the representations of the relations,
+   their renaming, their bounds and axioms, and the axioms of the data types.
+   The renaming, the plain relations and the data types' axioms are built
+   when a variant first needs them.  The data types' axioms depend on the
+   variant only through its needed nuts, which come out equal unless the
+   variants' choices of representations differ: they are kept with the nuts
+   they were made from, and made again for different nuts. *)
+fun scope_stage
+      (params as {debug, peephole_optim, datatype_sym_break, ...}
+         : assembly_params)
+      (scope : MFS.scope) =
   let
     val offsets = #ofs scope
     val data_types = #data_types scope
@@ -3161,10 +3182,74 @@ fun assemble_problem_once
     val main_j0 = MFS.offset_of_type offsets Type.bool
     val (nat_card, _) = MFS.spec_of_type scope MFH.num_type
     val (int_card, _) = MFS.spec_of_type scope MFH.int_type
-    val kk = MFP.kodkod_constrs peephole_optim nat_card int_card main_j0
     val (free_names, sel_names, nonsel_names, rep_table) =
       scope_representations params scope
+    val kk = MFP.kodkod_constrs peephole_optim nat_card int_card main_j0
+    val renaming = memo (fn () =>
+      let
+        val _ = Util.count_stage "renaming"
+        val (free_rels, pool, rel_table) = MFNT.rename_free_vars free_names
+          MFP.initial_pool MFNT.NameTable.empty
+        val (sel_rels, pool, rel_table) = MFNT.rename_free_vars sel_names
+          pool rel_table
+        val (other_rels, pool, rel_table) = MFNT.rename_free_vars
+          nonsel_names pool rel_table
+      in
+        (free_rels, sel_rels, other_rels, pool, rel_table)
+      end)
+    val plain = memo (fn () =>
+      let
+        val _ = Util.count_stage "plain relations"
+        val (free_rels, _, other_rels, _, _) = renaming ()
+        val plain_rels = free_rels @ other_rels
+      in
+        (map (bound_for_plain_rel debug) plain_rels,
+         map (declarative_axiom_for_plain_rel kk) plain_rels)
+      end)
+    val need_cache = ref NONE
+    fun make_need need_us =
+      let
+        val _ = Util.count_stage "datatype axioms"
+        val (_, sel_rels, _, _, rel_table) = renaming ()
+        val need_values = map (fn (spec : data_type_spec) =>
+          (#typ spec,
+           needed_values_for_data_type need_us offsets spec)) data_types
+        val sel_bounds = map
+          (bound_for_sel_rel debug need_values data_types) sel_rels
+        val datatype_axioms = declarative_axioms_for_data_types
+          (#hol_ctxt scope) (#binarize scope) need_us need_values
+          datatype_sym_break bits offsets kk rel_table data_types
+        val part = (need_values, sel_bounds, datatype_axioms)
+      in
+        need_cache := SOME (need_us, part); part
+      end
+    fun need need_us =
+      case !need_cache of
+          SOME (shared, part) =>
+            if shared = need_us then part else make_need need_us
+        | NONE => make_need need_us
+  in
+    (scope, kk, free_names, sel_names, nonsel_names, rep_table, renaming,
+     plain, need)
+  end
 
+(* The problem of one variant of a scope: what
+   depends on the variant's choice of representations, on top of what the
+   scope's [stage] holds. *)
+fun assemble_variant_in
+      ({debug, kodkod_sym_break, comment, solver, unsound_delay, nondef_us,
+        def_us, need_us, ...} : assembly_params)
+      (scope, kk, free_names, sel_names, nonsel_names, rep_table, renaming,
+       plain, need)
+      unsound : rich_problem =
+  let
+    val offsets = #ofs scope
+    val data_types = #data_types scope
+    val bits = #bits scope
+    val main_j0 = MFS.offset_of_type offsets Type.bool
+    val (nat_card, _) = MFS.spec_of_type scope MFH.num_type
+    val (int_card, _) = MFS.spec_of_type scope MFH.int_type
+    val _ = Util.count_stage "variant representations"
     val def_us = map (MFNT.choose_reps_in_nut scope unsound rep_table true)
       def_us
     val nondef_us = map
@@ -3177,42 +3262,28 @@ fun assemble_problem_once
        position it becomes an absent optional instead, and absence is
        restrictive in both problems -- the liberal problem stops
        over-approximating, so its UNSAT no longer means "no model exists"
-       (total_scope_search, Refute_ModelFinder.sml). *)
-    val unknown_value = List.exists (fn nut =>
-      MFNT.fold_nut (fn item => fn found =>
-        found orelse
-        (case item of
-             MFNT.Cst (MFNT.Unknown, _, representation) =>
-               (case representation of
-                    MFR.Formula _ => false
-                  | _ => true)
-           | _ => false)) nut false)
+       (total_scope_search, Refute_ModelFinder.sml).
+       The scan stops at its first hit. *)
+    val unknown_value = List.exists (MFNT.exists_leaf (fn item =>
+      case item of
+          MFNT.Cst (MFNT.Unknown, _, representation) =>
+            (case representation of
+                 MFR.Formula _ => false
+               | _ => true)
+        | _ => false))
       (def_us @ nondef_us @ need_us)
-    val (free_rels, pool, rel_table) = MFNT.rename_free_vars free_names
-      MFP.initial_pool MFNT.NameTable.empty
-    val (sel_rels, pool, rel_table) = MFNT.rename_free_vars sel_names
-      pool rel_table
-    val (other_rels, pool, rel_table) = MFNT.rename_free_vars nonsel_names
-      pool rel_table
+    val (free_rels, sel_rels, other_rels, pool, rel_table) = renaming ()
     val def_us = map (MFNT.rename_vars_in_nut pool rel_table) def_us
     val nondef_us = map (MFNT.rename_vars_in_nut pool rel_table) nondef_us
     val need_us = map (MFNT.rename_vars_in_nut pool rel_table) need_us
+    val _ = Util.count_stage "variant formula"
     val def_fs = map (kodkod_formula_from_nut offsets kk) def_us
     val nondef_fs = map (kodkod_formula_from_nut offsets kk) nondef_us
     val formula = List.foldl (fn (formula, result) =>
       MFP.s_and result formula) KK.True (def_fs @ nondef_fs)
 
-    val plain_rels = free_rels @ other_rels
-    val plain_bounds = map (bound_for_plain_rel debug) plain_rels
-    val plain_axioms = map (declarative_axiom_for_plain_rel kk) plain_rels
-    val need_values = map (fn (spec : data_type_spec) =>
-      (#typ spec,
-       needed_values_for_data_type need_us offsets spec)) data_types
-    val sel_bounds = map
-      (bound_for_sel_rel debug need_values data_types) sel_rels
-    val datatype_axioms = declarative_axioms_for_data_types
-      (#hol_ctxt scope) (#binarize scope) need_us need_values
-      datatype_sym_break bits offsets kk rel_table data_types
+    val (plain_bounds, plain_axioms) = plain ()
+    val (_, sel_bounds, datatype_axioms) = need need_us
     val declarative_axioms = plain_axioms @ datatype_axioms
     val universe_card = Int.max
       (univ_card nat_card int_card main_j0
@@ -3257,10 +3328,44 @@ fun assemble_problem_once
     (problem, metadata)
   end
 
+(* *)
+val assembly_calls = ref 0
+
+(* The scope's work that every variant shares.  A
+   scope that cannot fit raises as assembly would; the check and the stage
+   are the same work, done once.  The result makes the problem of a variant;
+   one that fails the arity check retries with the stage at the empty offset
+   table, built once. *)
+fun assemble_scope params (scope : MFS.scope) =
+  let
+    val offsets = #ofs scope
+    fun empty_stage () =
+      scope_stage params (scope_with_offsets scope (empty_offset_table ()))
+    val (stage, fallback) =
+      (scope_stage params (scope_with_offsets scope offsets),
+       if offset_table_is_empty offsets then NONE
+       else SOME (memo empty_stage))
+      handle error as (Util.TOO_LARGE (location, _)) =>
+        if location = "Refute_ModelFinder_Kodkod.check_arity" andalso
+           not (offset_table_is_empty offsets) then
+          (empty_stage (), NONE)
+        else raise error
+  in
+    fn unsound =>
+      (assembly_calls := !assembly_calls + 1;
+       assemble_variant_in params stage unsound
+       handle error as (Util.TOO_LARGE (location, _)) =>
+         case fallback of
+             SOME retry =>
+               if location = "Refute_ModelFinder_Kodkod.check_arity" then
+                 assemble_variant_in params (retry ()) unsound
+               else raise error
+           | NONE => raise error)
+  end
+
+(* *)
 fun assemble_problem params unsound scope =
-  (assembly_calls := !assembly_calls + 1;
-  with_arity_retry (#ofs scope) (fn offsets =>
-    assemble_problem_once params unsound (scope_with_offsets scope offsets)))
+  assemble_scope params scope unsound
 
 (* Upstream to_set_bool_op and kk_vect_set_bool_op are intentionally
    omitted: no representation reachable in this port dispatches to them,

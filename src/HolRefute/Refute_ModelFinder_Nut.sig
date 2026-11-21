@@ -61,6 +61,9 @@ signature Refute_ModelFinder_Nut = sig
   val is_eval_name : nut -> bool
   val is_Cst : cst -> nut -> bool
   val fold_nut : (nut -> 'a -> 'a) -> nut -> 'a -> 'a
+  (* Whether a leaf passes the test; it stops at
+     the first that does, in [fold_nut]'s order. *)
+  val exists_leaf : (nut -> bool) -> nut -> bool
   val untuple : (nut -> 'a) -> nut -> 'a list
   val add_free_and_const_names :
     nut -> nut list * nut list -> nut list * nut list

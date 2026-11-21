@@ -29,7 +29,12 @@ local open Refute_Rat Refute_Real in end
    context counters and swappable [lookups], [preprocess_check], and the
    scanning reference in [refuteLookupReference.sml]): "how often a
    registry is enumerated" is invisible in a verdict, and the old scanning
-   code is kept as the reference the indexed tables must agree with. *)
+   code is kept as the reference the indexed tables must agree with.
+   The seventh is assembly's stages ([Refute_ModelFinder_Util]'s stage
+   counters, [Refute_ModelFinder_Kodkod.assembly_calls] and
+   [Refute_ModelFinder_Nut.exists_leaf]): that a stage ran once per
+   instance, scope or variant, and where the unknown-value scan stopped,
+   cannot be seen in a verdict. *)
 val lookup_term_postprocessor =
   Refute_ModelFinder_Model.lookup_term_postprocessor
 
@@ -2869,6 +2874,107 @@ in
     (fn () =>
       Option.isSome
         (message_for 72 (F.LT (F.Cardinality (F.Product (a, b)), F.Num 1))))
+end
+
+(* The work of assembly that does not depend on the
+   scope is done once per instance, what the sound and the liberal problem of
+   a scope share once per scope, and only the choice of representations and
+   the formula once per variant. *)
+local
+  structure MFK = Refute_ModelFinder_Kodkod
+  structure Util = Refute_ModelFinder_Util
+  fun counts names = map (fn name => !(Util.stage_count name)) names
+  val instance_stages = ["expected constructors", "selector names"]
+  val scope_stages = ["representations", "renaming", "plain relations",
+                      "datatype axioms"]
+  val variant_stages = ["variant representations", "variant formula"]
+  val goal = ``!(xs : bool list) (n : num).
+                 LENGTH (APPEND xs [T]) = SUC (LENGTH xs) /\ ~(SUC n = 0)``
+  fun staged binary cards =
+    let
+      val before = counts (instance_stages @ scope_stages @ variant_stages)
+      val calls = !MFK.assembly_calls
+      val result = refute (mf |> upd_card [(NONE, cards)]
+                              |> upd_binary_ints (if binary then SOME true
+                                                  else NONE)
+                              |> upd_timeout 120.0) goal
+      val after = counts (instance_stages @ scope_stages @ variant_stages)
+      val delta = ListPair.map op- (after, before)
+      val n = length instance_stages
+      val m = length scope_stages
+    in
+      (result, !MFK.assembly_calls - calls, List.take (delta, n),
+       List.take (List.drop (delta, n), m), List.drop (delta, n + m))
+    end
+in
+  (* Two scopes with a sound and a liberal problem each: four problems, two
+     scope stages, and the scope-independent stages as for one scope. *)
+  val _ = mf_test "assembly does each stage once per instance, scope or variant"
+    (fn () =>
+      let
+        val (_, one_calls, one_instance, _, _) = staged false [2]
+        val (_, calls, instance, scope, variant) = staged false [2, 3]
+      in
+        one_calls = 2 andalso calls = 4 andalso instance = one_instance andalso
+        List.exists (fn n => n > 0) instance andalso
+        List.all (fn n => n = 2) scope andalso
+        List.all (fn n => n = calls) variant
+      end)
+
+  (* With binary integers, more scopes and the constructors checked too: the
+     instance's stages still ran fewer times than there are scopes. *)
+  val _ = mf_test "the stages that do not depend on the scope run once per instance"
+    (fn () =>
+      let
+        val (_, calls, instance, scope, variant) = staged true [2, 3]
+        val scopes = calls div 2
+      in
+        scopes > 2 andalso List.all (fn n => n = scopes) scope andalso
+        List.all (fn n => n = calls) variant andalso
+        List.all (fn n => n > 0 andalso n < scopes) instance
+      end)
+end
+
+local
+  structure MFNT = Refute_ModelFinder_Nut
+  structure MFR = Refute_ModelFinder_Rep
+  val bool_ty = ``:bool``
+  fun leaf constant = MFNT.Cst (constant, bool_ty, MFR.Any)
+  fun unknown_value nut =
+    case nut of
+        MFNT.Cst (MFNT.Unknown, _, MFR.Formula _) => false
+      | MFNT.Cst (MFNT.Unknown, _, _) => true
+      | _ => false
+  (* The leaves the scan looked at, with the answer. *)
+  fun scan nut =
+    let
+      val visited = ref 0
+      val found = MFNT.exists_leaf
+        (fn item => (visited := !visited + 1; unknown_value item)) nut
+    in (found, !visited) end
+  fun conjunction [] = leaf MFNT.True
+    | conjunction (first :: rest) =
+        MFNT.Op2 (MFNT.And, bool_ty, MFR.Formula Refute_ModelFinder_Util.Neut,
+                  first, conjunction rest)
+  val unknown = leaf MFNT.Unknown
+  val others = List.tabulate (50, fn _ => leaf MFNT.False)
+in
+  val _ = test "the unknown-value scan stops at the first unknown"
+    (fn () =>
+      scan (conjunction (unknown :: others)) = (true, 1) andalso
+      scan (conjunction (others @ [unknown])) = (true, 51) andalso
+      scan (conjunction others) = (false, 51))
+
+  val _ = test "the unknown-value scan agrees with a fold over every leaf"
+    (fn () =>
+      List.all (fn nut =>
+        #1 (scan nut) =
+          MFNT.fold_nut (fn item => fn found =>
+            found orelse unknown_value item) nut false)
+        [conjunction (unknown :: others), conjunction others,
+         MFNT.Op1 (MFNT.Not, bool_ty, MFR.Formula Refute_ModelFinder_Util.Neut,
+                   conjunction (others @ [unknown])),
+         MFNT.Tuple (bool_ty, MFR.Any, [leaf MFNT.True, unknown])])
 end
 
 val _ = mf_test "a declined goal names the phase and counts"

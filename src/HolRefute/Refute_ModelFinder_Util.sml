@@ -275,4 +275,58 @@ structure Refute_ModelFinder_Util :> Refute_ModelFinder_Util = struct
   val distinct_terms = Refute_Util.distinct_terms
   val update_term = Refute_Util.update_term
 
+  (* *)
+  fun identity_memo f =
+    let
+      val last = ref NONE
+    in
+      fn argument =>
+        case !last of
+            SOME (previous, result) =>
+              if Portable.pointer_eq (previous, argument) then result
+              else
+                let val result = f argument
+                in last := SOME (argument, result); result end
+          | NONE =>
+              let val result = f argument
+              in last := SOME (argument, result); result end
+    end
+
+  (* *)
+  fun by_context compare f =
+    let
+      val state = ref NONE
+      fun table_for context =
+        case !state of
+            SOME (previous, table) =>
+              if Portable.pointer_eq (previous, context) then table
+              else fresh context
+          | NONE => fresh context
+      and fresh context =
+        let val table = ref (Redblackmap.mkDict compare)
+        in state := SOME (context, table); table end
+    in
+      fn context => fn key =>
+        let val table = table_for context
+        in
+          case Redblackmap.peek (!table, key) of
+              SOME result => result
+            | NONE =>
+                let val result = f context key
+                in table := Redblackmap.insert (!table, key, result); result
+                end
+        end
+    end
+
+  (* *)
+  val stage_counts = ref ([] : (string * int ref) list)
+  fun stage_count name =
+    case List.find (fn (other, _) => other = name) (!stage_counts) of
+        SOME (_, counter) => counter
+      | NONE =>
+          let val counter = ref 0
+          in stage_counts := (name, counter) :: !stage_counts; counter end
+  fun count_stage name =
+    let val counter = stage_count name in counter := !counter + 1 end
+
 end
