@@ -2463,19 +2463,50 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
      term list * term list * term list * bool * bool * bool -> unit) ref =
     ref (fn _ => fn _ => fn _ => fn _ => ())
 
-  fun preprocess_formulas
+  (* The passes of preprocessing report to
+     [note] before each starts, the passes over the axioms before each
+     axiom, and [note] may end the call there.  [pass_observer] sees the
+     same text after it; a test makes a pass slow with it. *)
+  val pass_observer : (string -> unit) ref = ref (fn _ => ())
+
+  fun counted pass done total =
+    pass ^ ", " ^ Int.toString done ^ " of " ^ Int.toString total
+
+  fun preprocess_formulas_noting (note : string -> unit)
         (context as
           {binary_ints, boxes, destroy_constrs, needs, ...} : context)
         assumptions negated =
     let
-      val prepared = negated
-        |> MFH.unfold_defs_in_term context
+      (* a pass reports to [note] *)
+      fun pass text = (note text; !pass_observer text)
+      (* [f] over [items], each counted before it starts. *)
+      fun map_counted name f items =
+        let
+          val total = length items
+          val done = ref 0
+        in
+          map (fn item =>
+            (pass (counted name (!done) total);
+             done := !done + 1;
+             f item)) items
+        end
+      (* the passes over the goal, one by one *)
+      val _ = pass "unfolding the goal"
+      val unfolded = MFH.unfold_defs_in_term context negated
+      val _ = pass "closing and skolemizing the goal"
+      val skolemized = unfolded
         |> close_form
         |> skolemize_term_and_more context max_skolem_depth
-        |> specialize_consts_in_term context false 0
+      val _ = pass "specializing constants of the goal"
+      val prepared = specialize_consts_in_term context false 0 skolemized
+      (* a pass reports before it starts *)
+      val _ = pass "collecting axioms"
       val (nondefinitions, definitions, got_all_mono_user_axioms,
            no_poly_user_axioms) =
         axioms_for_term context assumptions prepared
+      val _ = pass ("choosing binary integers over " ^
+        Int.toString (length nondefinitions) ^ " axioms and " ^
+        Int.toString (length definitions) ^ " definitions")
       (* A concrete-width word is its own numeric carrier: the encoder reads
          a word atom's value from its universe index, which is its Kodkod
          integer only while [int_bounds] stays sequential - that is, while
@@ -2506,10 +2537,18 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
         else all_axioms
       val uncurry_table =
         if box then
-          List.foldl (fn (term, table) =>
-            (* [deviation from upstream] indexed table or map in place of a list scan *)
-            add_to_uncurry_table context term table)
-            (empty_uncurry_table ()) uncurry_terms
+          let
+            val total = length uncurry_terms
+            val done = ref 0
+          in
+            (* each term is counted *)
+            List.foldl (fn (term, table) =>
+              (pass (counted "building the uncurry table" (!done) total);
+               done := !done + 1;
+               (* indexed table or map in place of a list scan *)
+               add_to_uncurry_table context term table))
+              (empty_uncurry_table ()) uncurry_terms
+          end
         else empty_uncurry_table ()
       fun do_middle definitional term =
         let
@@ -2524,19 +2563,25 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
         end
       val need_ts =
         case needs of
-            SOME terms => map (fn term =>
+            (* counted *)
+            SOME terms => map_counted "boxing the needed values" (fn term =>
               do_middle false (MFH.unfold_defs_in_term context term)) terms
           (* Upstream leaves automatic needed-value inference as a FIXME.
              NONE therefore deliberately enables no needed-value reasoning. *)
           | NONE => []
-      val nondefinitions' = map (fn term =>
+      (* the axioms and definitions are counted *)
+      val nondefinitions' = map_counted "boxing the axioms" (fn term =>
         do_tail context false destroy_constrs (do_middle false term))
         nondefinitions
-      val definitions' = map (fn term =>
+      val definitions' = map_counted "boxing the definitions" (fn term =>
         do_tail context true destroy_constrs (do_middle true term))
         definitions
     in
       (nondefinitions', definitions', need_ts, got_all_mono_user_axioms,
        no_poly_user_axioms, binarize)
     end
+
+  (* the unnoted form *)
+  fun preprocess_formulas context assumptions negated =
+    preprocess_formulas_noting (fn _ => ()) context assumptions negated
 end
