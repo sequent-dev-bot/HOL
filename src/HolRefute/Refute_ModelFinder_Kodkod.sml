@@ -3236,6 +3236,34 @@ fun scope_stage
 (* The problem of one variant of a scope: what
    depends on the variant's choice of representations, on top of what the
    scope's [stage] holds. *)
+(* Whether [assemble_variant_in] checks each
+   shared nut against the tree pass (the selftests do), how many it has
+   checked, and what the last variant did: calls of the pass, those answered
+   from the cache, distinct nodes, the output as a DAG and as a tree, and the
+   uses of let-bound registers in the formula it came to. *)
+val check_sharing = ref false
+val sharing_checks = ref 0
+val sharing_stats = ref {calls = 0, hits = 0, nodes = 0, output_dag = 0,
+                         output_tree = 0 : IntInf.int, register_uses = 0}
+
+fun note_sharing cache chosen =
+  let
+    val {calls, hits, nodes} = MFNT.cache_stats cache
+    val (dag, tree) = MFNT.dag_size cache chosen
+    val {output_dag, output_tree, register_uses, ...} = !sharing_stats
+  in
+    sharing_stats := {calls = calls, hits = hits, nodes = nodes,
+                      output_dag = output_dag + dag,
+                      output_tree = output_tree + tree,
+                      register_uses = register_uses}
+  end
+
+fun count_register_uses formula =
+  KK.fold_formula
+    {formula_func = fn KK.FormulaReg _ => (fn n => n + 1) | _ => (fn n => n),
+     rel_expr_func = fn _ => fn n => n, int_expr_func = fn _ => fn n => n}
+    formula 0
+
 fun assemble_variant_in
       ({debug, kodkod_sym_break, comment, solver, unsound_delay, nondef_us,
         def_us, need_us, ...} : assembly_params)
@@ -3250,10 +3278,31 @@ fun assemble_variant_in
     val (nat_card, _) = MFS.spec_of_type scope MFH.num_type
     val (int_card, _) = MFS.spec_of_type scope MFH.int_type
     val _ = Util.count_stage "variant representations"
-    val def_us = map (MFNT.choose_reps_in_nut scope unsound rep_table true)
-      def_us
-    val nondef_us = map
-      (MFNT.choose_reps_in_nut scope unsound rep_table false) nondef_us
+    (* The definitions and nondefinitions are
+       chosen over the DAG of one cache per variant and shared as let
+       bindings; the needed nuts are small and stay trees. *)
+    val cache = MFNT.new_cache ()
+    val _ = sharing_stats := {calls = 0, hits = 0, nodes = 0, output_dag = 0,
+                              output_tree = 0, register_uses = 0}
+    fun choose_shared definition nut =
+      let
+        val chosen = MFNT.choose_reps_in_nut_shared cache scope unsound
+          rep_table definition nut
+        val shared = MFNT.share_nut cache chosen
+        val _ = if !check_sharing then
+            (sharing_checks := !sharing_checks + 1;
+            if MFNT.expand_shared shared =
+               MFNT.choose_reps_in_nut scope unsound rep_table definition nut
+            then ()
+            else raise Util.BAD ("Refute_ModelFinder_Kodkod.assemble_variant",
+              "the shared nut does not expand to the nut of the tree pass"))
+          else ()
+        val _ = note_sharing cache chosen
+      in
+        shared
+      end
+    val def_us = map (choose_shared true) def_us
+    val nondef_us = map (choose_shared false) nondef_us
     val need_us = map
       (MFNT.choose_reps_in_nut scope unsound rep_table false) need_us
     (* [refute$unknown] at a formula position is weakened by polarity, and
@@ -3281,6 +3330,14 @@ fun assemble_variant_in
     val nondef_fs = map (kodkod_formula_from_nut offsets kk) nondef_us
     val formula = List.foldl (fn (formula, result) =>
       MFP.s_and result formula) KK.True (def_fs @ nondef_fs)
+    val _ =
+      let val {calls, hits, nodes, output_dag, output_tree, ...} =
+        !sharing_stats
+      in
+        sharing_stats := {calls = calls, hits = hits, nodes = nodes,
+                          output_dag = output_dag, output_tree = output_tree,
+                          register_uses = count_register_uses formula}
+      end
 
     val (plain_bounds, plain_axioms) = plain ()
     val (_, sel_bounds, datatype_axioms) = need need_us

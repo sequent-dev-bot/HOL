@@ -82,6 +82,18 @@ signature Refute_ModelFinder_Nut = sig
     scope -> rep NameTable.table -> nut list * rep NameTable.table
   val choose_reps_in_nut :
     scope -> bool -> rep NameTable.table -> bool -> nut -> nut
+  (* The same pass over a cache of canonical
+     nuts: it runs on the DAG, and [share_nut] turns the result into a
+     tree with let bindings that [expand_shared] undoes. *)
+  type cache
+  val new_cache : unit -> cache
+  val cache_stats : cache -> {nodes : int, calls : int, hits : int}
+  val choose_reps_in_nut_shared :
+    cache -> scope -> bool -> rep NameTable.table -> bool -> nut -> nut
+  val share_nut : cache -> nut -> nut
+  val expand_shared : nut -> nut
+  val dag_size : cache -> nut -> int * IntInf.int
+  val nut_compare : nut * nut -> order
   val rename_free_vars :
     nut list -> name_pool -> nut NameTable.table ->
     nut list * name_pool * nut NameTable.table

@@ -34,7 +34,11 @@ local open Refute_Rat Refute_Real in end
    counters, [Refute_ModelFinder_Kodkod.assembly_calls] and
    [Refute_ModelFinder_Nut.exists_leaf]): that a stage ran once per
    instance, scope or variant, and where the unknown-value scan stopped,
-   cannot be seen in a verdict. *)
+   cannot be seen in a verdict.  The eighth is the
+   representation pass's DAG ([Refute_ModelFinder_Nut]'s cache, [share_nut]
+   and [expand_shared], and [Refute_ModelFinder_Kodkod.check_sharing] and
+   its counters): that equal results are one node and that the shared form
+   expands to the tree pass's output cannot be seen in a verdict. *)
 val lookup_term_postprocessor =
   Refute_ModelFinder_Model.lookup_term_postprocessor
 
@@ -243,6 +247,11 @@ fun mf_test name pred =
 (* From here on every call of the boxing pass is compared with the unshared
    implementation's (the reference module), after the pass that follows
    boxing, so that every model-finder goal below checks the shared pass. *)
+(* Likewise every nut the representation pass chooses for a definition or
+   nondefinition is expanded from its shared form and compared with the tree
+   pass's. *)
+val _ = Refute_ModelFinder_Kodkod.check_sharing := true
+
 val box_compared = ref 0
 val box_disagreed = ref ([] : string list)
 val _ = Refute_ModelFinder_Preproc.box_check :=
@@ -2932,6 +2941,105 @@ in
         scopes > 2 andalso List.all (fn n => n = scopes) scope andalso
         List.all (fn n => n = calls) variant andalso
         List.all (fn n => n > 0 andalso n < scopes) instance
+      end)
+end
+
+(* The representation pass works on a DAG of
+   canonical nuts, so that the guard of a quantifier and the triad of an
+   optional formula, which each use their operand twice, cost what the
+   distinct work costs; [share_nut] puts the DAG into a tree with let
+   bindings, which Kodkodi's registers carry to the problem. *)
+local
+  structure MFNT = Refute_ModelFinder_Nut
+  structure MFR = Refute_ModelFinder_Rep
+  structure Util = Refute_ModelFinder_Util
+  val bool_ty = ``:bool``
+  val num_ty = ``:num``
+  val neut = MFR.Formula Util.Neut
+  val truth = MFNT.Cst (MFNT.True, bool_ty, neut)
+  fun not_ nut = MFNT.Op1 (MFNT.Not, bool_ty, neut, nut)
+  fun and_ left right = MFNT.Op2 (MFNT.And, bool_ty, neut, left, right)
+  (* A chain whose every level holds the level below twice: a tree of
+     3 * 2^n - 2 nodes over 2n + 1 distinct ones. *)
+  fun chain 0 = truth
+    | chain n = let val below = chain (n - 1) in and_ below (not_ below) end
+  val big = chain 60
+  val small_chain = chain 8
+  fun lets nut =
+    case nut of
+        MFNT.Op3 (MFNT.Let, _, _, _, value, body) => 1 + lets value + lets body
+      | MFNT.Op1 (_, _, _, first) => lets first
+      | MFNT.Op2 (_, _, _, first, second) => lets first + lets second
+      | MFNT.Op3 (_, _, _, first, second, third) =>
+          lets first + lets second + lets third
+      | _ => 0
+  fun size nut =
+    case nut of
+        MFNT.Op1 (_, _, _, first) => 1 + size first
+      | MFNT.Op2 (_, _, _, first, second) => 1 + size first + size second
+      | MFNT.Op3 (_, _, _, first, second, third) =>
+          1 + size first + size second + size third
+      | _ => 1
+  val x = MFNT.BoundName (1, num_ty, MFR.Atom (2, 0), "x")
+  val y = MFNT.FreeName ("y", num_ty, MFR.Atom (2, 0))
+  fun equality left right = MFNT.Op2 (MFNT.Eq, bool_ty, neut, left, right)
+  (* [eq] holds [x], so it is bound inside the quantifier; [q] does not, so
+     it is bound at the top. *)
+  val eq = equality x y
+  val q = equality y y
+  val inner = and_ eq (not_ eq)
+  val quantified = MFNT.Op2 (MFNT.Exist, bool_ty, neut, x, inner)
+  val root = and_ quantified (and_ q (not_ q))
+  fun inverse LESS = GREATER | inverse GREATER = LESS | inverse EQUAL = EQUAL
+in
+  val _ = test "a DAG of repeated operands is shared as let bindings"
+    (fn () =>
+      let
+        val cache = MFNT.new_cache ()
+        val (distinct, tree) = MFNT.dag_size cache big
+        val shared = MFNT.share_nut cache big
+        val small = MFNT.share_nut (MFNT.new_cache ()) small_chain
+      in
+        distinct = 121 andalso tree = 3 * IntInf.pow (2, 60) - 2 andalso
+        lets shared = 59 andalso size shared < 1000 andalso
+        lets small = 7 andalso MFNT.expand_shared small = small_chain
+      end)
+
+  val _ = test "a shared node is bound just inside the binder of its variables"
+    (fn () =>
+      let
+        val shared = MFNT.share_nut (MFNT.new_cache ()) root
+      in
+        lets shared = 2 andalso MFNT.expand_shared shared = root andalso
+        (case shared of
+             MFNT.Op3 (MFNT.Let, _, _, _, value, MFNT.Op2 (_, _, _, bound, _)) =>
+               value = q andalso
+               (case bound of
+                    MFNT.Op2 (MFNT.Exist, _, _, _,
+                              MFNT.Op3 (MFNT.Let, _, _, _, value, _)) =>
+                      value = eq
+                  | _ => false)
+           | _ => false)
+      end)
+
+  val _ = test "the order on nuts is total and agrees with equality"
+    (fn () =>
+      let
+        val nuts = [truth, x, y, eq, q, not_ eq, inner, quantified, root,
+                    MFNT.Cst (MFNT.Num 1, num_ty, MFR.Atom (2, 0)),
+                    MFNT.Cst (MFNT.Num 2, num_ty, MFR.Atom (2, 0)),
+                    MFNT.Cst (MFNT.Num 1, num_ty, MFR.Atom (3, 0)),
+                    MFNT.Tuple (num_ty, MFR.Any, [x, y]),
+                    MFNT.Tuple (num_ty, MFR.Any, [y, x]), chain 3, chain 4]
+        val compare = MFNT.nut_compare
+      in
+        List.all (fn a =>
+          List.all (fn b =>
+            (compare (a, b) = EQUAL) = (a = b) andalso
+            compare (a, b) = inverse (compare (b, a)) andalso
+            List.all (fn c =>
+              compare (a, b) <> LESS orelse compare (b, c) <> LESS orelse
+              compare (a, c) = LESS) nuts) nuts) nuts
       end)
 end
 
@@ -6627,5 +6735,8 @@ val _ = test "a certifiable hit is upgraded to Genuine" (fn () =>
 
 val _ = test "preprocessing from tables built once agrees with the scanning one"
   (fn () => !preprocess_compared > 0 andalso null (!preprocess_disagreed))
+
+val _ = mf_test "every shared nut expanded to the tree pass's"
+  (fn () => !Refute_ModelFinder_Kodkod.sharing_checks > 0)
 
 val _ = exit_count0 erc
