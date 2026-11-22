@@ -2766,6 +2766,27 @@ val _ = mf_test "a size rejection names the relation, the limit, phase and count
                     "problems offered 0, finished 0, rejected 1"] result
     end)
 
+(* A relation over set-typed arguments is over
+   box atoms: four boxes of 256 atoms are four columns of a 256-atom
+   universe, past the limit, and the rejection names the relation. *)
+val boxed_arity_goal =
+  ``(r : num set -> num set -> num set -> num set -> bool) a b c d``
+
+val _ = mf_test "a relation over boxed sets past the limit is rejected, naming the relation and the limit"
+  (fn () =>
+    let
+      val result = refute
+        (arity_config |> upd_card
+          [(SOME ``:(num, bool) refute$funbox``, [256]), (NONE, [8])])
+        boxed_arity_goal
+    in
+      unknown_with "associated with \"r\"" result andalso
+      unknown_with "(limit: arity 3)" result andalso
+      unknown_with "arity 4" result andalso
+      progress_has ["phase reached: assembly",
+                    "problems offered 0, finished 0, rejected 1"] result
+    end)
+
 (* A scope that cannot fit is rejected, once,
    before either of its problems is assembled.  A scope with at least its
    cardinalities is rejected with it, and a window whose first scope cannot
@@ -3302,6 +3323,17 @@ val _ = mf_test "hand-rolled fixed points are recognised" (fn () =>
     val cfg = mf |> upd_timeout 60.0
     fun refuted goal = genuine (refute cfg goal)
     fun holds goal = refute cfg goal == NoCounterexample
+    (* A fixed point's predicate argument is a box
+       whose card is searched: it is exact, so that "no counterexample" can
+       be concluded, only where it is given as the 2^2 functions of bool. *)
+    val noise_cfg = cfg |> upd_card
+      [(SOME ``:(bool, bool) refute$funbox``, [4]),
+       (NONE, List.tabulate (10, fn i => i + 1))]
+    fun noise_holds goal = refute noise_cfg goal == NoCounterexample
+    (* A box below its exact card first gives an unconfirmed candidate; the
+       genuine model follows it. *)
+    fun some_genuine (Counterexample cs) = List.exists is_genuine cs
+      | some_genuine _ = false
     val (_, text) = capture 2 (fn () => refute (cfg |> upd_quiet false)
                                                ``~ hand_lfp_noise F``)
   in
@@ -3312,8 +3344,9 @@ val _ = mf_test "hand-rolled fixed points are recognised" (fn () =>
     holds ``poly_lfp_top ((T, F) : bool # bool)`` andalso
     refuted ``poly_lfp_top T ==> ~ poly_lfp_top ((T, F) : bool # bool)``
     andalso
-    holds ``hand_lfp_noise F`` andalso holds ``!x. hand_lfp_noise x`` andalso
-    refuted ``~ hand_lfp_noise F`` andalso
+    noise_holds ``hand_lfp_noise F`` andalso
+    noise_holds ``!x. hand_lfp_noise x`` andalso
+    some_genuine (refute cfg ``~ hand_lfp_noise F``) andalso
     String.isSubstring "monoton" text andalso
     String.isSubstring "hand_lfp_noise" text
   end)
@@ -4242,6 +4275,11 @@ fun mf_group group configure rows = List.app (mf_row group configure) rows
 fun cards cs = upd_card [(NONE, cs)]
 fun num_card n cs = upd_card [(SOME ``:num``, [n]), (NONE, cs)]
 val no_box = upd_box [(NONE, SOME false)]
+(* Sets are boxes, whose card is searched: a box
+   over [n] atoms is exact at 2^n, which a row asking for exactness names. *)
+fun set_box_exact n =
+  upd_card [(SOME ``:('a, bool) refute$funbox``, [List.foldl (fn (_, p) => 2 * p) 1 (List.tabulate (n, fn i => i))]),
+            (NONE, [n])]
 val no_specialize = upd_specialize false
 val no_star = upd_star_linear_preds false
 fun wf b = upd_wf [(NONE, SOME b)]
@@ -4653,7 +4691,7 @@ val _ = mf_group "Typedef_Nits" (cards [1, 2, 3, 4]) [
   ("one_or_two distinct card 1", ``?x y : bool zoo_one_or_two. x <> y``,
    cards [1], GenuineOrPotential, CAny),
   ("one_or_two distinct card 2", ``?x y : bool zoo_one_or_two. x <> y``,
-   cards [2], V ExpectNone, CAny),
+   no_box o cards [2], V ExpectNone, CAny),
   ("unit bounded", ``(x : unit zoo_bounded) = y``, I, V ExpectNone, CAny),
   ("bool bounded", ``(x : bool zoo_bounded) = y``, I, V ExpectGenuine, CNone),
   ("bool bounded two values",
@@ -4840,9 +4878,11 @@ val _ = mf_group "Refute_Nits" (cards [1, 2, 3, 4, 5, 6] o upd_max_potential 0)
    ("mutual even odd", ``zoo_ref_odd n``, I, V ExpectGenuine, CNone),
    ("abstract even odd", ``zoo_ref_a_odd f (x : 'a)``, I, V ExpectGenuine,
     CNone),
-   ("lfp equation", ``f (fixedPoint$lfp f) = fixedPoint$lfp f``, cards [2],
+   ("lfp equation", ``f (fixedPoint$lfp f) = fixedPoint$lfp f``,
+    set_box_exact 2,
     V ExpectGenuine, CNone),
-   ("gfp equation", ``f (fixedPoint$gfp f) = fixedPoint$gfp f``, cards [2],
+   ("gfp equation", ``f (fixedPoint$gfp f) = fixedPoint$gfp f``,
+    set_box_exact 2,
     V ExpectGenuine, CNone),
    ("lfp gfp equality", ``fixedPoint$lfp f = fixedPoint$gfp f``, cards [2],
     V ExpectGenuine, CNone),
@@ -5179,10 +5219,39 @@ val _ = mf_test "polymorphic box patterns box concrete function arguments"
           Option.isSome (scope_of c ``:(num, bool) refute$funbox``)
           = expected)
     in
-      check I false andalso
+      check no_box false andalso
       check (upd_box [(SOME ``:num -> bool``, SOME true)]) true andalso
       check (upd_box [(SOME ``:'a -> bool``, SOME true)]) true
     end)
+
+(* A function-typed argument is boxed whatever its
+   result: a set or relation argument is an atom of a box type, whose card is
+   searched like any other type's and honoured when [upd_card] names it. *)
+local
+  val set_box_ty = ``:(num, bool) refute$funbox``
+  val set_goal = ``(f : num set -> bool) s``
+  fun box_card c =
+    case #model c of
+        SOME {types, ...} =>
+          Option.map (fn (_, values, _) => length values)
+            (List.find (fn (ty, _, _) =>
+              Type.compare (ty, set_box_ty) = EQUAL) types)
+      | NONE => NONE
+in
+  val _ = mf_level2 "a set-typed argument is a box type of the model"
+    (fn () =>
+      refute (mf |> cards [1, 2]) set_goal
+        |> cex_where (fn c => Option.isSome (box_card c)) andalso
+      refute (mf |> cards [1, 2] |> no_box) set_goal
+        |> cex_where (fn c => not (Option.isSome (box_card c))))
+
+  val _ = mf_level2 "an explicit card of a set-typed argument's box is honoured"
+    (fn () =>
+      refute (mf |> upd_card [(SOME set_box_ty, [3]), (NONE, [2])])
+        set_goal
+        |> cex_where (fn c => scope_of c set_box_ty = SOME 3 andalso
+                              box_card c = SOME 3))
+end
 
 val clean_certificate = certifies
 

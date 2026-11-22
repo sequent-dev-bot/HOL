@@ -4537,8 +4537,12 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
 
   fun is_boxing_worth_it context position ty =
     if is_fun_type ty then
-      (position = InPair orelse position = InFunLHS) andalso
-      not (is_boolean_type (#2 (boolSyntax.strip_fun ty)))
+      (* A function type is boxed whatever its
+         result, so sets and relations are boxes too: a set argument is one
+         atom instead of a column per element, which keeps relations under
+         Kodkod's tuple limit.  Decided here once, from the shape of the
+         type. *)
+      position = InPair orelse position = InFunLHS
     else if is_pair_type ty then
       let val (left, right) = pairSyntax.dest_prod ty
       in
