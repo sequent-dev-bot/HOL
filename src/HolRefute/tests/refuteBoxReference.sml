@@ -133,6 +133,9 @@ struct
   fun reference_box context def original =
     let
       val original_vars = Term.all_vars original
+      fun positive_existential polarity existential =
+        (polarity = Util.Pos andalso existential) orelse
+        (polarity = Util.Neg andalso not existential)
       fun type_size ty =
         if Type.is_vartype ty then 1
         else 1 + List.foldl (op +) 0
@@ -154,9 +157,14 @@ struct
             if existential then boolSyntax.dest_exists candidate
             else boolSyntax.dest_forall candidate
           val old_ty = Term.type_of variable
-          (* every binder is boxed, as in the
-             pass it is compared with *)
-          val new_ty = MFH.box_type context MFH.InFunLHS old_ty
+          (* a function-typed binder is boxed whatever its polarity, as in
+             the pass it is compared with *)
+          val new_ty =
+            if MFH.is_fun_type old_ty orelse
+               polarity = Util.Neut orelse
+               positive_existential polarity existential then
+              MFH.box_type context MFH.InFunLHS old_ty
+            else old_ty
           val (variable', body', environment') =
             rebind environment variable new_ty body
           val transformed = recurse environment' polarity body'
@@ -271,9 +279,12 @@ struct
         else if Term.is_abs candidate then
           let
             val (variable, body) = Term.dest_abs candidate
+            val variable_ty = Term.type_of variable
             val (variable', body', environment') =
               rebind environment variable
-                (MFH.box_type context MFH.InFunLHS (Term.type_of variable))
+                (if MFH.is_fun_type variable_ty then
+                   MFH.box_type context MFH.InFunLHS variable_ty
+                 else variable_ty)
                 body
           in
             Term.mk_abs (variable', recurse environment' Util.Neut body')
