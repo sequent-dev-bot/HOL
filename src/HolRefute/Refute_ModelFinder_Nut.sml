@@ -434,7 +434,9 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
           | NONE => rev result
       fun add (arg_ty, (index, avoids, variables)) =
         let
-          val candidate = Term.mk_var ("x" ^ Int.toString index, arg_ty)
+          (* a generated binder, named as one *)
+          val candidate = MFN.mk_generated_binder
+            ("x" ^ Int.toString index) arg_ty
           val variable = Term.variant avoids candidate
         in
           (index + 1, variable :: avoids, variable :: variables)
@@ -1164,9 +1166,14 @@ structure Refute_ModelFinder_Nut :> Refute_ModelFinder_Nut = struct
       if arity > Refute_Forl.max_arity min_univ_card then
         raise Util.TOO_LARGE
           ("Refute_ModelFinder_Nut.choose_rep_for_bound_var",
-           (* The reason names the bound variable and the limit that was
-              exceeded. *)
-           "arity " ^ Int.toString arity ^ " of bound variable \"" ^
+           (* The reason names the bound variable, whether it comes from the
+              goal or a definition or was made by preprocessing, and the
+              limit that was exceeded. *)
+           "arity " ^ Int.toString arity ^ " of " ^
+           (if MFN.is_generated_binder_name
+                 (nickname_of variable handle NUT _ => "")
+            then "generated" else "source") ^
+           " bound variable \"" ^
            (MFN.original_name (nickname_of variable) handle NUT _ => "?") ^
            "\" too large (limit: arity " ^
            Int.toString (Refute_Forl.max_arity min_univ_card) ^ ")")

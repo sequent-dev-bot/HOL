@@ -2212,7 +2212,8 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
     MFH.with_sharing_memo (fn () =>
     let
       val original_vars = Term.all_vars original
-      fun positive_existential polarity existential =
+      fun boxes_by_polarity polarity existential =
+        polarity = Util.Neut orelse
         (polarity = Util.Pos andalso existential) orelse
         (polarity = Util.Neg andalso not existential)
       fun type_size ty =
@@ -2250,9 +2251,14 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
             if existential then boolSyntax.dest_exists candidate
             else boolSyntax.dest_forall candidate
           val old_ty = Term.type_of variable
+          (* A function-typed binder is boxed, whatever the quantifier and
+             its polarity: a universal over a box below its exact card keeps
+             the incomplete-type guard of [choose_reps_in_nut].  Other types
+             keep the polarity rule: a boxed pair-typed universal is one box
+             atom that is never split. *)
           val new_ty =
-            if polarity = Util.Neut orelse
-               positive_existential polarity existential then
+            if MFH.is_fun_type old_ty orelse
+               boxes_by_polarity polarity existential then
               MFH.box_type context MFH.InFunLHS old_ty
             else old_ty
           val (variable', body', environment') =
@@ -2389,8 +2395,14 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
         else if Term.is_abs candidate then
           let
             val (variable, body) = Term.dest_abs candidate
+            (* A function-typed lambda binder is boxed like a quantifier's. *)
+            val variable_ty = Term.type_of variable
             val (variable', body', environment') =
-              rebind environment variable (Term.type_of variable) body
+              rebind environment variable
+                (if MFH.is_fun_type variable_ty then
+                   MFH.box_type context MFH.InFunLHS variable_ty
+                 else variable_ty)
+                body
           in
             Term.mk_abs (variable', recurse environment' Util.Neut body')
           end

@@ -69,6 +69,9 @@ signature Refute_ModelFinder_Names = sig
   val fake_atom : int -> hol_type -> term
   val variable_name : term -> string
   val is_reserved_name : string -> bool
+  val generated_binder_prefix : string
+  val mk_generated_binder : string -> hol_type -> term
+  val is_generated_binder_name : string -> bool
   val reserved_frees : term -> term list
   val assert_user_goal : term -> unit
   val assert_no_reserved_in_theorem : string -> Thm.thm -> unit

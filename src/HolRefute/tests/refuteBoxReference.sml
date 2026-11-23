@@ -157,8 +157,11 @@ struct
             if existential then boolSyntax.dest_exists candidate
             else boolSyntax.dest_forall candidate
           val old_ty = Term.type_of variable
+          (* a function-typed binder is boxed whatever its polarity, as in
+             the pass it is compared with *)
           val new_ty =
-            if polarity = Util.Neut orelse
+            if MFH.is_fun_type old_ty orelse
+               polarity = Util.Neut orelse
                positive_existential polarity existential then
               MFH.box_type context MFH.InFunLHS old_ty
             else old_ty
@@ -276,8 +279,13 @@ struct
         else if Term.is_abs candidate then
           let
             val (variable, body) = Term.dest_abs candidate
+            val variable_ty = Term.type_of variable
             val (variable', body', environment') =
-              rebind environment variable (Term.type_of variable) body
+              rebind environment variable
+                (if MFH.is_fun_type variable_ty then
+                   MFH.box_type context MFH.InFunLHS variable_ty
+                 else variable_ty)
+                body
           in
             Term.mk_abs (variable', recurse environment' Util.Neut body')
           end
