@@ -259,12 +259,16 @@ val _ = Refute_ModelFinder_Preproc.box_check :=
     let
       val expected = SOME (refuteBoxReference.reference_box context def input)
                      handle Interrupt => raise Interrupt | _ => NONE
+      (* Both sides are simplified to a fixed point: the reference leaves the
+         beta redex of a coerced lambda binder (a function-typed [LET]
+         variable, say) that the shared pass reduces, and one simplification
+         pass does not reach a projection of the reduced term. *)
+      val simplified = Refute_ModelFinder_Preproc.after_boxing context o
+                       Refute_ModelFinder_Preproc.after_boxing context
     in
       box_compared := !box_compared + 1;
       if (case expected of
-              SOME e => Term.aconv
-                (Refute_ModelFinder_Preproc.after_boxing context e)
-                (Refute_ModelFinder_Preproc.after_boxing context output)
+              SOME e => Term.aconv (simplified e) (simplified output)
             | NONE => false)
       then ()
       else box_disagreed := Parse.term_to_string input :: !box_disagreed
@@ -2842,18 +2846,70 @@ in
         fun run cards =
           let
             val previous = !MFK.assembly_calls
-            val result = refute (arity_config |> upd_card [(NONE, cards)])
+            (* Binders of the goal are boxed
+               unless boxing is off. *)
+            val result = refute (arity_config |> upd_card [(NONE, cards)]
+                                   |> upd_box [(NONE, SOME false)])
                            bound_goal
           in (result, !MFK.assembly_calls - previous) end
         val (_, fitting) = run [2, 3]
         val (result, calls) = run [2, 3, 4, 5, 6]
       in
         calls = fitting + 2 andalso
-        unknown_with "2 problems rejected: arity 64 of bound variable" result
+        unknown_with "2 problems rejected: arity 64 of source bound variable" result
         andalso
         unknown_with "4 problems rejected: cardinalities no smaller than \
-          \those of a scope that was rejected: arity 64 of bound variable"
+          \those of a scope that was rejected: arity 64 of source bound variable"
           result
+      end)
+
+  (* A bound variable of function type that comes
+     from the goal is a box atom, whatever its quantifier or polarity: the
+     goal's three-argument binders, 64 columns at card 4, reach the solver
+     instead of being rejected, as do lambdas over them. *)
+  fun level2_test name pred =
+    if selftest_level >= 2 then mf_test name pred else ()
+  fun reaches_solver outcome =
+    cex_where (fn c =>
+      List.exists (fn (key, value) =>
+        key = "kodkod_calls" andalso value > 0) (#stats c) andalso
+      List.exists (fn (key, value) =>
+        key = "problems_rejected" andalso value = 0) (#stats c)) outcome
+  val e_bound_goal =
+    ``(h : 'a -> 'a -> 'a -> bool) x y z ==>
+      (?(g : 'a -> 'a -> 'a -> bool). g x y z)``
+  val l_bound_goal =
+    ``(\(g : 'a -> 'a -> 'a -> bool). g x y z) = (\g. ~ g x y z)``
+  val _ = level2_test "a universal over a function-typed binder reaches the solver"
+    (fn () =>
+      reaches_solver
+        (refute (arity_config |> upd_card [(NONE, [4])]) bound_goal))
+  val _ = level2_test "an existential over a function-typed binder reaches the solver"
+    (fn () =>
+      reaches_solver
+        (refute (arity_config |> upd_card [(NONE, [4])]) e_bound_goal))
+  val _ = level2_test "a lambda over a function-typed binder reaches the solver"
+    (fn () =>
+      reaches_solver
+        (refute (arity_config |> upd_card [(NONE, [4])]) l_bound_goal))
+
+  (* A universal over a box below its exact card (the four functions of
+     bool, so card 4) keeps the incomplete-type guard: the one function
+     of a box of card 1 may equal the identity, but that is no genuine
+     counterexample to the goal, which holds; only the exact card concludes
+     that there is none. *)
+  val box_guard_goal = ``(!(g : bool -> bool). g = I) ==> F``
+  val _ = level2_test "a universal over a box below its exact card keeps the incomplete-type guard"
+    (fn () =>
+      let
+        val box_ty = ``:(bool, bool) refute$funbox``
+        fun run n = refute (arity_config
+          |> upd_card [(SOME box_ty, [n]), (NONE, [2])]) box_guard_goal
+      in
+        potential (run 1) andalso
+        List.all (fn n => not (genuine (run n)) andalso
+                          not (run n == NoCounterexample)) [1, 2, 3] andalso
+        run 4 == NoCounterexample
       end)
 
   val _ = mf_test "no scope of the window fitting stops the search, naming the relation and the limit"
@@ -5404,7 +5460,12 @@ val _ = mf_level2 "a registered codatatype gets cyclic countermodels"
     in
       genuine (refute (base |> upd_expect ExpectGenuine)
                       ``(s : num zoo_stream) <> zoo_scons a s``) andalso
-      let val outcome = refute (base |> upd_expect ExpectUnknown) eta in
+      (* The stream's representation is a function
+         type, a box whose card is below its exact one at these scopes: the
+         guarded universal gives an unconfirmed candidate, which the law's
+         refutation is not asked to report. *)
+      let val outcome = refute (base |> upd_max_potential 0
+                                     |> upd_expect ExpectUnknown) eta in
         bounds_clean outcome andalso
         unknown_with "card num zoo_stream" outcome
       end

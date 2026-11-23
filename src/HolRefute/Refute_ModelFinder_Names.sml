@@ -334,6 +334,21 @@ structure Refute_ModelFinder_Names :> Refute_ModelFinder_Names = struct
 
   fun is_reserved_name name = String.isPrefix reserved_prefix name
 
+  (* The binders that preprocessing makes after the
+     boxing pass (the lambdas of a coercion, the variables of an extensional
+     equation) are named with [generated_binder_prefix], which is not a
+     reserved name, so that a binder that comes from the goal or a
+     definition can be told from one preprocessing made.  Binders of
+     reserved names are generated too. *)
+  val generated_binder_prefix = "generated_"
+
+  fun mk_generated_binder name ty =
+    Term.mk_var (generated_binder_prefix ^ name, ty)
+
+  fun is_generated_binder_name name =
+    is_reserved_name name orelse
+    String.isPrefix generated_binder_prefix name
+
   fun reserved_frees term =
     List.filter (is_reserved_name o variable_name)
       (Term.free_vars_lr term)

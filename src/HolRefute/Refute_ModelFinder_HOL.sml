@@ -6104,8 +6104,9 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
       let
         val (new_domain, new_range) = Type.dom_rng new_ty
         val (old_domain, old_range) = Type.dom_rng old_ty
+        (* a generated binder, named as one *)
         val variable = Term.variant (Term.all_vars term)
-          (Term.mk_var ("x", new_domain))
+          (Refute_ModelFinder_Names.mk_generated_binder "x" new_domain)
         val old_argument = coerce_term context old_domain new_domain variable
         (* The application is reduced when [term] is an abstraction, so that
            coercing its result to a pair does not copy the unreduced redex
