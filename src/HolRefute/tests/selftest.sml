@@ -2893,6 +2893,42 @@ in
       reaches_solver
         (refute (arity_config |> upd_card [(NONE, [4])]) l_bound_goal))
 
+  (* A successor relation is keyed by its atom
+     sequence, whatever its offset: [suc_tree] sits after the 50 atoms of
+     [suc_chain], at offset 50, where the arithmetic key of upstream refused
+     the problem ("too large cardinality (50)").  The scope is assembled and
+     solved. *)
+  val _ = Datatype.Datatype `suc_chain = SucEnd | SucLink suc_chain`
+  val _ = Datatype.Datatype `suc_tree = SucLeaf | SucNode suc_tree suc_tree`
+  val high_offset_goal =
+    ``(!t : suc_chain. t = SucEnd) /\ (!t : suc_tree. t = SucLeaf)``
+  val _ = mf_test "a successor relation at an atom offset above 49 is assembled and solved"
+    (fn () =>
+      let
+        val result = refute (arity_config
+          |> upd_card [(SOME ``:suc_chain``, [50]), (SOME ``:suc_tree``, [8])])
+          high_offset_goal
+      in
+        reaches_solver result andalso
+        not (unknown_with "squeeze" result)
+      end)
+
+  val _ = mf_test "successor relations are distinct per (card, offset) and read back"
+    (fn () =>
+      let
+        val keys = [(8, 0), (8, 50), (50, 8), (8, 120), (3, 4000), (8, 0)]
+        val relations = map Refute_ModelFinder_Peephole.suc_rel_for_atom_seq keys
+        val distinct = List.foldl (fn (r, seen) =>
+          if List.exists (fn s => s = r) seen then seen else r :: seen)
+          [] relations
+      in
+        ListPair.allEq (fn (key, relation) =>
+          Refute_ModelFinder_Peephole.atom_seq_for_suc_rel relation = key) (keys, relations) andalso
+        hd relations = List.last relations andalso
+        length distinct = 5 andalso
+        List.all (fn (_, relation) => relation <= Refute_ModelFinder_Peephole.suc_rels_base) relations
+      end)
+
   (* A universal over a box below its exact card (the four functions of
      bool, so card 4) keeps the incomplete-type guard: the one function
      of a box of card 1 may equal the identity, but that is no genuine
