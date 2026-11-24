@@ -75,21 +75,42 @@ fun bit_width_for bits word_width =
   if bits = 0 then Int.max (default_bit_width, 2 * word_width + 2)
   else bits + 1
 
-val max_squeeze_card = 49
+(* A successor relation is named by its (card, offset) through a table, not
+   by packing the pair into one integer, which refused an atom offset above
+   49 (a problem whose atoms sit past that point, such as a datatype after
+   wide word carriers, was rejected outright).  The table gives each pair the
+   next free even index below [suc_rels_base] the first time it is asked
+   for, so no offset is out of range.  The table is process-wide and only
+   grows, one entry per distinct (card, offset); the index is a name in the
+   problem and is read back only through the table. *)
+local
+  val lock = Mutex.mutex ()
+  val by_pair : (int * int, int) Redblackmap.dict ref =
+    ref (Redblackmap.mkDict (Portable.pair_compare (Int.compare, Int.compare)))
+  val by_index : (int, int * int) Redblackmap.dict ref =
+    ref (Redblackmap.mkDict Int.compare)
+in
+  (* Successor relations sit at even offsets below [suc_rels_base]. *)
+  fun suc_rel_for_atom_seq x =
+    Multithreading.synchronized "Refute successor relations" lock (fn () =>
+      case Redblackmap.peek (!by_pair, x) of
+        SOME j => (2, j)
+      | NONE =>
+          let val j = suc_rels_base - 2 * Redblackmap.numItems (!by_pair)
+          in
+            by_pair := Redblackmap.insert (!by_pair, x, j);
+            by_index := Redblackmap.insert (!by_index, j, x);
+            (2, j)
+          end)
 
-fun squeeze (m, n) =
-  if n > max_squeeze_card then
-    raise TOO_LARGE ("Refute_ModelFinder_Peephole.squeeze",
-                     "too large cardinality (" ^ Int.toString n ^ ")")
-  else
-    (max_squeeze_card + 1) * m + n
-
-fun unsqueeze p = (p div (max_squeeze_card + 1), p mod (max_squeeze_card + 1))
-
-(* Successor relations sit at even offsets below [suc_rels_base]. *)
-fun suc_rel_for_atom_seq x = (2, suc_rels_base - 2 * squeeze x)
-
-fun atom_seq_for_suc_rel (_, j) = unsqueeze ((~j + suc_rels_base) div 2)
+  fun atom_seq_for_suc_rel (_, j) =
+    Multithreading.synchronized "Refute successor relations" lock (fn () =>
+      case Redblackmap.peek (!by_index, j) of
+        SOME x => x
+      | NONE =>
+          raise ARG ("Refute_ModelFinder_Peephole.atom_seq_for_suc_rel",
+                     "unknown successor relation"))
+end
 
 fun is_none_product (Product (r1, r2)) =
     is_none_product r1 orelse is_none_product r2
