@@ -1329,7 +1329,10 @@ structure Refute_Core :> Refute_Core = struct
                      val (equation, rest) = split_at index conjuncts
                      val others =
                        List.filter (not o is_binder variables) binders
-                     val _ = if List.exists (fixes others) rest
+                     (* a flat match's other binders stay outside the
+                        case, so one-point unwinding takes them first *)
+                     val _ = if null tests andalso
+                                List.exists (fixes others) rest
                              then raise Conv.UNCHANGED else ()
                      (* a nested match's other binders are each fixed by
                         a test or another equation of the branch, so they
