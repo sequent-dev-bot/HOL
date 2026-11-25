@@ -7,6 +7,7 @@ signature Refute_QC = sig
      discarded : int ref,
      instance : Refute_Core.instance,
      pnf_prefix : (Refute_Eval.quant * term) list option,
+     report_potential : Refute_Core.counterexample -> unit,
      retain_replay_potential : Refute_Core.counterexample -> unit,
      retry : bool -> Refute_Eval.candidate list -> unit,
      retry_potential : bool -> Refute_Eval.candidate list -> unit,

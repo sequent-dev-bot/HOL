@@ -1091,6 +1091,7 @@ structure Refute_QC :> Refute_QC = struct
          discarded : int ref,
          run_depth : int option,
          pnf_prefix : (quant * term) list option,
+         report_potential : Refute_Core.counterexample -> unit,
          retain_replay_potential : Refute_Core.counterexample -> unit,
          retry : bool -> candidate list -> unit,
          retry_potential : bool -> candidate list -> unit}
@@ -1167,8 +1168,7 @@ structure Refute_QC :> Refute_QC = struct
         else if genuine_only then
           (retry_potential true next; false)
         else
-          (Refute_Core.report_outcome config
-             (Refute_Core.Counterexample [potential]);
+          (report_potential potential;
            retry_potential true next;
            false)
     in
@@ -1674,6 +1674,15 @@ structure Refute_QC :> Refute_QC = struct
                   else true))
               val counterexamples = ref []
               val replay_potential = ref NONE
+              (* Potential candidates found while the run may still hand
+                 over are reported only once it ends without doing so. *)
+              val held_reports = ref []
+              fun report_potential potential =
+                if Refute_Eval.hands_over () then
+                  held_reports := potential :: !held_reports
+                else
+                  Refute_Core.report_outcome config
+                    (Refute_Core.Counterexample [potential])
               val discarded = ref 0
               val gave_up = ref []
               val frontier = ref (NONE : (int * int) option)
@@ -1743,6 +1752,7 @@ structure Refute_QC :> Refute_QC = struct
                             discarded = discarded,
                             run_depth = NONE,
                             pnf_prefix = NONE,
+                            report_potential = report_potential,
                             (* Only replay failures accepted by the ordinary
                                keep-potential policy may enter the fallback;
                                genuine-only and continuing retries never do. *)
@@ -1852,6 +1862,10 @@ structure Refute_QC :> Refute_QC = struct
                  these, one per backend. *)
               val counter_reason = #reason counters ()
             in
+              List.app (fn potential =>
+                  Refute_Core.report_outcome config
+                    (Refute_Core.Counterexample [potential]))
+                (List.rev (!held_reports));
               finish_outcome (strategy_name strategy) (!counterexamples)
                 (!replay_potential) counter_reason (fn () =>
                   if !complete then Refute_Core.NoCounterexample

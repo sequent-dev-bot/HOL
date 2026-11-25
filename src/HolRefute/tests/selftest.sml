@@ -3154,6 +3154,18 @@ in
             | _ => false)
           [NativeSML, Compute]
       end)
+
+  (* Narrowing has no substrate to hand over to: [b = T] is stuck. *)
+  val _ = test "narrowing names the constant its samples were stuck on"
+    (fn () =>
+      let
+        val outcome = refute (nar |> upd_size 2 |> upd_timeout 30.0)
+                        ``b ==> rf_stub_pick s``
+      in
+        unknown_with "narrowing search exhausted" outcome andalso
+        unknown_with "native code has no equations for pred_set$CHOICE"
+          outcome
+      end)
 end
 
 (* ------------------------------------------------------------------- *)

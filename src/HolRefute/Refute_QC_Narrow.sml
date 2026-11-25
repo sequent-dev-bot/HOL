@@ -226,6 +226,10 @@ structure Refute_QC_Narrow :> Refute_QC_Narrow = struct
                                  discarded = discarded,
                                  run_depth = SOME size,
                                  pnf_prefix = SOME (prefix_for card),
+                                 report_potential = fn potential =>
+                                   Refute_Core.report_outcome config
+                                     (Refute_Core.Counterexample
+                                        [potential]),
                                  retain_replay_potential =
                                    QC.retain_potential replay_potential,
                                  retry = fn go => fn ignored =>
