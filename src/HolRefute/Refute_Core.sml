@@ -1183,7 +1183,7 @@ structure Refute_Core :> Refute_Core = struct
        by, and [P] is then instantiated to the branch; [tm] is the
        instance's left side up to rearranging its matrix ([rearrange]).
        With [tests] (a nested pattern's), the split's branch is [tests]
-       connected to [P], under the binders [inner] the tests mention,
+       connected to [P], under the binders [inner] left in the branch,
        and is rearranged to [tested] once [P] is instantiated. *)
     fun prove_case existential binders equation rest branch tests inner
                    tested make e tm target =
@@ -1329,11 +1329,12 @@ structure Refute_Core :> Refute_Core = struct
                        List.filter (not o is_binder variables) binders
                      val _ = if List.exists (fixes others) rest
                              then raise Conv.UNCHANGED else ()
-                     (* a binder a test mentions is quantified next to it,
-                        in the branch, where the test unwinds it *)
+                     (* a nested match's other binders are each fixed by
+                        a test or another equation of the branch, so they
+                        are quantified in the branch, where those unwind
+                        them; outside the case they would stay *)
                      val (inner, outer) =
-                       List.partition
-                         (fn b => List.exists (Term.free_in b) tests) others
+                       if null tests then ([], others) else (others, [])
                      fun make body =
                        let
                          val target =
