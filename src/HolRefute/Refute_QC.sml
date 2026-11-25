@@ -1705,9 +1705,11 @@ structure Refute_QC :> Refute_QC = struct
                       ignored = ignored }
                   val msec = elapsed_msec start
                   val _ = #absorb counters (!(#last_stats compiled))
-                  val _ = List.app (fn reason =>
-                      add_reason reason stuck_reasons)
-                    (Refute_Eval.take_stuck_reasons ())
+                  (* Taken and kept in one step, so a deadline loses
+                     neither. *)
+                  val _ = Thread_Attributes.uninterruptible (fn _ => fn () =>
+                    List.app (fn reason => add_reason reason stuck_reasons)
+                      (Refute_Eval.take_stuck_reasons ())) ()
                 in
                   case result of
                       Exhausted {complete = entry_complete} =>
@@ -1864,26 +1866,31 @@ structure Refute_QC :> Refute_QC = struct
               val body_result = Exn.capture (fn () =>
                 Refute_Eval.with_hand_over (Option.isSome hand_over)
                   selected_body) ()
-              val close_result = bounded_close (#close compiled)
+              fun handover_reason name =
+                substrate ^ " handed over at " ^ name ^ " (no equations)"
+              fun report reason (Refute_Core.Unknown reasons) =
+                    Refute_Core.Unknown (reasons @ [reason])
+                | report _ outcome = outcome
               (* Native's results are withdrawn and the reason is in
-                 place before a cleanup interrupt is released, so the
-                 deadline reports neither native's results nor less. *)
+                 place before the cleanup runs, so a deadline from here
+                 on reports neither native's results nor less. *)
+              val _ =
+                case (body_result, hand_over) of
+                    (Exn.Exn (Refute_Eval.HandOver name), SOME _) =>
+                      Thread_Attributes.uninterruptible (fn _ => fn () =>
+                        (Refute_Core.withdraw_published ();
+                         Refute_Core.set_backend_diagnostics (fn () => [])
+                           (report (handover_reason name)))) ()
+                  | _ => ()
+              val close_result = bounded_close (#close compiled)
               fun handed_over name passed =
-                let
-                  val reason =
-                    substrate ^ " handed over at " ^ name ^ " (no equations)"
-                  fun report (Refute_Core.Unknown reasons) =
-                        Refute_Core.Unknown (reasons @ [reason])
-                    | report outcome = outcome
-                in
-                  Refute_Core.Private.say 2
-                    ("Refute substrate selection: " ^ reason ^ "\n");
-                  Refute_Core.withdraw_published ();
-                  Refute_Core.set_backend_diagnostics (fn () => []) report;
-                  Exn.release close_result;
-                  report (strategy_run_body (skip @ passed) strategy config
-                    instances)
-                end
+                (Refute_Core.Private.say 2
+                   ("Refute substrate selection: " ^ handover_reason name ^
+                    "\n");
+                 Exn.release close_result;
+                 report (handover_reason name)
+                   (strategy_run_body (skip @ passed) strategy config
+                      instances))
             in
               case (body_result, hand_over) of
                   (Exn.Exn (Refute_Eval.HandOver name), SOME passed) =>

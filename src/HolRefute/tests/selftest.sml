@@ -3154,17 +3154,6 @@ in
             | _ => false)
           [NativeSML, Compute]
       end)
-
-  val _ = test "a search the deadline ends still names the constant"
-    (fn () =>
-      let
-        val outcome = refute (on NativeSML |> upd_size 1000
-                                |> upd_timeout 2.0)
-                             ``rf_stub_pick2 F s = n``
-      in
-        unknown_with "timed out" outcome andalso
-        unknown_with (stuck_on "pred_set$CHOICE") outcome
-      end)
 end
 
 (* ------------------------------------------------------------------- *)

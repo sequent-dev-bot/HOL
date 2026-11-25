@@ -202,9 +202,11 @@ structure Refute_QC_Narrow :> Refute_QC_Narrow = struct
                            size = size, draws = 0, ignored = ignored}
                         val msec = Refute_Util.elapsed_msec start
                         val _ = #absorb counters (!(#last_stats compiled))
-                        val _ = List.app (fn reason =>
-                            QC.add_reason reason stuck_reasons)
-                          (Refute_Eval.take_stuck_reasons ())
+                        val _ = Thread_Attributes.uninterruptible
+                          (fn _ => fn () =>
+                            List.app (fn reason =>
+                                QC.add_reason reason stuck_reasons)
+                              (Refute_Eval.take_stuck_reasons ())) ()
                       in
                         case result of
                             Exhausted {complete} =>
