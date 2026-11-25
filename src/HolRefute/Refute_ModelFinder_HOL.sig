@@ -302,6 +302,11 @@ signature Refute_ModelFinder_HOL = sig
   val box_counts : sharing_counts
   val coerce_counts : sharing_counts
   val eta_counts : sharing_counts
+  val binder_checked : int ref
+  val binder_unboxed : int ref
+  val strict_binder_check : bool ref
+  val unboxed_binders : term -> term list
+  val check_boxed_binders : term list -> unit
   val reset_sharing_counts : unit -> unit
   val sharing_summary : unit -> string
   val tally : sharing_counts -> unit

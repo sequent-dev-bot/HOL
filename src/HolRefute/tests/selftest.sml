@@ -252,6 +252,10 @@ fun mf_test name pred =
    pass's. *)
 val _ = Refute_ModelFinder_Kodkod.check_sharing := true
 
+(* Every problem preprocessed from here on is
+   checked for the box invariant, and a violation raises. *)
+val _ = Refute_ModelFinder_HOL.strict_binder_check := true
+
 val box_compared = ref 0
 val box_disagreed = ref ([] : string list)
 val _ = Refute_ModelFinder_Preproc.box_check :=
@@ -2946,6 +2950,140 @@ in
         List.all (fn n => not (genuine (run n)) andalso
                           not (run n == NoCounterexample)) [1, 2, 3] andalso
         run 4 == NoCounterexample
+      end)
+
+  (* The binders that preprocessing makes get the
+     rule the goal's binders get: after preprocessing no bound variable has
+     an unboxed function type.  [preprocessed] is what a goal's terms are
+     after it, the invariant being asserted off so that a violation can be
+     read instead of ending the call. *)
+  val _ = Datatype.Datatype `bx_fun = BxFun (num -> num) | BxOther`
+  structure MFHb = Refute_ModelFinder_HOL
+  fun preprocessed goal =
+    let
+      val captured = ref ([] : term list)
+      val saved = !Refute_ModelFinder_Preproc.preprocess_check
+      val strict = !MFHb.strict_binder_check
+      val _ = Refute_ModelFinder_Preproc.preprocess_check :=
+        (fn fresh => fn context => fn negated => fn result =>
+          ((case result of
+                (nondefs, defs, needs, _, _, _) =>
+                  captured := nondefs @ defs @ needs);
+           saved fresh context negated result))
+      val _ = MFHb.strict_binder_check := false
+    in
+      Portable.finally
+        (fn () => (Refute_ModelFinder_Preproc.preprocess_check := saved;
+                   MFHb.strict_binder_check := strict))
+        (fn () => (refute (arity_config |> upd_card [(NONE, [2])]) goal;
+                   !captured)) ()
+    end
+  fun unboxed_in terms = List.concat (map MFHb.unboxed_binders terms)
+  fun boxed_binder_in terms =
+    List.exists (fn term =>
+      List.exists (fn abstraction =>
+        MFHb.is_funbox_type (Term.type_of (#1 (Term.dest_abs abstraction))))
+        (HolKernel.find_terms Term.is_abs term)) terms
+  fun invariant_holds goal =
+    let val terms = preprocessed goal
+    in not (null terms) andalso null (unboxed_in terms) end
+
+  val _ = level2_test "the box invariant check fires on a hand-built term with an unboxed binder"
+    (fn () =>
+      let
+        val unboxed = ``\(f : num -> num). f 0 = 0``
+        val boxed = Term.mk_abs
+          (Term.mk_var ("f", ``:(num, num) refute$funbox``),
+           boolSyntax.T)
+        val strict = !MFHb.strict_binder_check
+        val raises = (MFHb.strict_binder_check := true;
+                      (MFHb.check_boxed_binders [unboxed]; false)
+                      handle HOL_ERR _ => true)
+        val _ = MFHb.strict_binder_check := strict
+      in
+        raises andalso length (MFHb.unboxed_binders unboxed) = 1 andalso
+        null (MFHb.unboxed_binders boxed) andalso
+        (MFHb.check_boxed_binders [boxed]; true)
+      end)
+
+  (* Every goal of the selftests is preprocessed with the invariant asserted
+     (see the top of this file); the counter says it was looked at. *)
+  val _ = level2_test "the box invariant check runs on every preprocessed problem"
+    (fn () =>
+      let
+        val _ = MFHb.reset_sharing_counts ()
+        val _ = refute (arity_config |> upd_card [(NONE, [2])])
+                  ``(!(g : num -> num). g 0 = g 1) ==> (f : num -> num) 0 = 0``
+        val checked = !MFHb.binder_checked
+        val unboxed = !MFHb.binder_unboxed
+      in checked > 0 andalso unboxed = 0 end)
+
+  (* The coercion lambdas that a built-in's signature makes: [TC] over sets
+     takes relations whose domains are boxes, and its own signature over the
+     sets themselves needs a lambda over a set to coerce between them. *)
+  val _ = level2_test "TC over sets has no binder over an unboxed function type"
+    (fn () => invariant_holds
+      ``TC (R : (num -> bool) -> (num -> bool) -> bool) s t ==> TC R t s``)
+  val _ = level2_test "inv, O and COND over sets have no binder over an unboxed function type"
+    (fn () =>
+      List.all invariant_holds
+        [``inv (R : (num -> bool) -> (num -> bool) -> bool) a b ==> R a b``,
+         ``((R : (num -> bool) -> (num -> bool) -> bool) O
+            (Q : (num -> bool) -> (num -> bool) -> bool)) a b ==> R a b``,
+         ``(if b then (f : (num -> bool) -> bool) else g) = h``])
+
+  (* The stand-in variables that specialization makes for a bound variable
+     inside a function's static argument are closed over by [close_form]; one
+     of function type is a box like the binders it replaces. *)
+  val bx_app_def = TotalDefn.Define
+    `(bx_app (g : num -> num) 0 (h : num -> num) = h 0) /\
+     (bx_app g (SUC n) h = bx_app g n (\x. g (h x)))`
+  val _ = level2_test "the close_form quantifiers of function-typed stand-in variables are boxed"
+    (fn () =>
+      let
+        val terms = preprocessed
+          ``(!(k : bool -> bool) n (h : num -> num).
+               bx_app (\x. if k (x = 0) then 1 else 2) n h =
+               bx_app (\x. if k (x = 1) then 1 else 2) n h) ==> F``
+      in
+        not (null terms) andalso null (unboxed_in terms) andalso
+        boxed_binder_in terms
+      end)
+
+  (* A constructor or built-in taking a function, with no argument: the
+     encoder would expand it over a binder of the signature's own, unboxed
+     type.  Preprocessing expands it first, so that its binder is boxed. *)
+  fun bare_in name terms =
+    let
+      fun walk candidate =
+        if Term.is_comb candidate then
+          let val (head, arguments) = HolKernel.strip_comb candidate
+          in (if Term.is_const head then false else walk head) orelse
+             List.exists walk arguments
+          end
+        else if Term.is_abs candidate then
+          walk (#2 (Term.dest_abs candidate))
+        else Term.is_const candidate andalso
+             #Name (Term.dest_thy_const candidate) = name
+    in List.exists walk terms end
+  val _ = level2_test "a constructor of function type is eta-expanded over a boxed binder"
+    (fn () =>
+      let
+        val terms = preprocessed
+          ``(COND b BxFun (K BxOther) : (num -> num) -> bx_fun) g = BxOther``
+      in
+        not (null terms) andalso null (unboxed_in terms) andalso
+        not (bare_in "BxFun" terms)
+      end)
+  val _ = level2_test "a built-in taking a relation, with no argument, is eta-expanded over a boxed binder"
+    (fn () =>
+      let
+        val terms = preprocessed
+          ``(COND b (TC : (num -> num -> bool) -> num -> num -> bool) (K R))
+              P s t = R s t``
+      in
+        not (null terms) andalso null (unboxed_in terms) andalso
+        not (bare_in "TC" terms)
       end)
 
   val _ = mf_test "no scope of the window fitting stops the search, naming the relation and the limit"

@@ -233,7 +233,8 @@ struct
               in
                 Type.-->(Type.-->(boxed_result, Type.bool), boxed_result)
               end
-            else if MFH.is_built_in_const candidate then ty
+            else if MFH.is_built_in_const candidate then
+              built_in_signature candidate ty
             else if MFH.is_nonfree_constr candidate then
               MFH.box_type context MFH.InConstr ty
             else if (case Lib.total Term.dest_var candidate of
@@ -244,6 +245,30 @@ struct
         in
           MFH.retype_constant "box" candidate new_ty
         end
+      (* a built-in's signature with the types
+         that have a function type in them boxed, as in the pass this is
+         compared with *)
+      and built_in_signature candidate ty =
+        case Lib.total Term.dest_thy_const candidate of
+            NONE => ty
+          | SOME {Thy, Name, ...} =>
+              let
+                fun has_function candidate_ty =
+                  MFH.is_fun_type candidate_ty orelse
+                  (not (Type.is_vartype candidate_ty) andalso
+                   List.exists has_function
+                     (#Args (Type.dest_thy_type candidate_ty)))
+                val generic = Term.type_of
+                  (Term.prim_mk_const {Thy = Thy, Name = Name})
+                val boxed = map (fn {redex, residue} =>
+                  {redex = redex,
+                   residue =
+                     if has_function residue then
+                       MFH.box_type context MFH.InFunLHS residue
+                     else residue})
+                  (Type.match_type generic ty)
+              in Type.type_subst boxed generic end
+              handle Feedback.HOL_ERR _ => ty
       and recurse environment polarity candidate =
         if boolSyntax.is_forall candidate then
           quantifier environment polarity false candidate

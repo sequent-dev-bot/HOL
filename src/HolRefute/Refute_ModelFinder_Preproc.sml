@@ -77,7 +77,7 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
     else
       candidate
 
-  fun close_form term =
+  fun close_form_with quantify term =
     let
       (* Isabelle's close_form closes schematic Vars, never user Frees.
          HOL4 gives each generated schematic family a reserved free name. *)
@@ -87,8 +87,7 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
           if closable variable then add_aconv variable result else result)
           seen (Term.free_vars_lr candidate)
       fun close_new old current body =
-        boolSyntax.list_mk_forall
-          (List.drop (current, length old), body)
+        quantify (List.drop (current, length old), body)
       fun recurse seen candidate =
         if boolSyntax.is_imp_only candidate then
           let
@@ -105,6 +104,33 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
     in
       recurse [] term
     end
+
+  fun close_form term = close_form_with boolSyntax.list_mk_forall term
+
+  (* The quantifier [close_form] puts on a
+     schematic variable of function type is over the box type of the
+     variable, and the body reads the variable through the coercion from the
+     box to the function type, as it reads a binder of the goal. *)
+  fun close_form_boxed context =
+    let
+      fun quantify (variables, body) =
+        List.foldr (fn (variable, body) =>
+          let val ty = Term.type_of variable
+          in
+            if MFH.is_fun_type ty then
+              let
+                val box_ty = MFH.box_type context MFH.InFunLHS ty
+                val (name, _) = Term.dest_var variable
+                val variable' = Term.variant (Term.free_vars body)
+                  (Term.mk_var (name, box_ty))
+                val replacement = MFH.coerce_term context ty box_ty variable'
+              in
+                boolSyntax.mk_forall (variable',
+                  substitute variable replacement body)
+              end
+            else boolSyntax.mk_forall (variable, body)
+          end) body variables
+    in close_form_with quantify end
 
   fun generated_or_constant_name term =
     case Lib.total Term.dest_thy_const term of
@@ -2199,6 +2225,57 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
       recurse term []
     end
 
+  (* A constructor or built-in constant applied to
+     fewer arguments than it takes, one of the missing arguments having a
+     function type, is eta-expanded before boxing, so that its binders are
+     boxed like any binder of the goal.  The encoder would otherwise expand
+     it itself, over the unboxed types of the signature.  One result per
+     distinct subterm. *)
+  fun eta_expand_partial context original =
+    let
+      val memo = ref (Redblackmap.mkDict Term.compare)
+      fun arity head =
+        if MFH.is_constr head then
+          SOME (length (MFH.constructor_arg_types head))
+        else if Term.is_const head then MFH.arity_of_built_in_const head
+        else NONE
+      fun domains 0 _ = []
+        | domains count ty =
+            let val (domain, range) = Type.dom_rng ty
+            in domain :: domains (count - 1) range end
+      fun walk candidate =
+        if Term.is_comb candidate orelse Term.is_abs candidate then
+          (case Redblackmap.peek (!memo, candidate) of
+               SOME result => result
+             | NONE =>
+                 let val result = step candidate
+                 in memo := Redblackmap.insert (!memo, candidate, result);
+                    result
+                 end)
+        else step candidate
+      and step candidate =
+        if Term.is_abs candidate then
+          let val (variable, body) = Term.dest_abs candidate
+          in Term.mk_abs (variable, walk body) end
+        else
+          let
+            val (head, arguments) = HolKernel.strip_comb candidate
+            val head' = if Term.is_abs head then walk head else head
+            val rebuilt = Term.list_mk_comb (head', map walk arguments)
+            val supplied = length arguments
+          in
+            case arity head of
+                SOME total =>
+                  if total > supplied andalso
+                     List.exists MFH.is_fun_type
+                       (List.drop (domains total (Term.type_of head),
+                                   supplied))
+                  then MFH.eta_expand rebuilt (total - supplied)
+                  else rebuilt
+              | NONE => rebuilt
+          end
+    in walk original end
+
   fun polarity_index Util.Pos = 0
     | polarity_index Util.Neg = 1
     | polarity_index Util.Neut = 2
@@ -2310,6 +2387,34 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
             (callable, MFH.coerce_term context domain_ty old_argument_ty
               argument')
         end
+      (* A built-in keeps its signature, with each
+         type variable instantiated by a type that has a function type in it
+         taken as the box type a bound variable of that type has: [TC] over
+         sets is [TC] over the boxes of sets.  An operand of function type
+         stays an unboxed value, as the encoder reads it, and no coercion
+         between the signature and a boxed operand makes a binder over an
+         unboxed function type. *)
+      and built_in_signature candidate ty =
+        case Lib.total Term.dest_thy_const candidate of
+            NONE => ty
+          | SOME {Thy, Name, ...} =>
+              let
+                fun has_function candidate_ty =
+                  MFH.is_fun_type candidate_ty orelse
+                  (not (Type.is_vartype candidate_ty) andalso
+                   List.exists has_function
+                     (#Args (Type.dest_thy_type candidate_ty)))
+                val generic = Term.type_of
+                  (Term.prim_mk_const {Thy = Thy, Name = Name})
+                val boxed = map (fn {redex, residue} =>
+                  {redex = redex,
+                   residue =
+                     if has_function residue then
+                       MFH.box_type context MFH.InFunLHS residue
+                     else residue})
+                  (Type.match_type generic ty)
+              in Type.type_subst boxed generic end
+              handle HOL_ERR _ => ty
       and constant candidate =
         let
           val ty = Term.type_of candidate
@@ -2329,7 +2434,8 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
               in
                 Type.-->(Type.-->(boxed_result, Type.bool), boxed_result)
               end
-            else if MFH.is_built_in_const candidate then ty
+            else if MFH.is_built_in_const candidate then
+              built_in_signature candidate ty
             else if MFH.is_nonfree_constr candidate then
               MFH.box_type context MFH.InConstr ty
             else if (case Lib.total Term.dest_var candidate of
@@ -2464,7 +2570,7 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
       |> simplify_constrs_and_sels context
       |> distribute_quantifiers
       |> push_quantifiers_inward
-      |> close_form
+      |> close_form_boxed context
     end
 
   (* [deviation from upstream] A test sees each preprocessed problem: it is
@@ -2569,6 +2675,7 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
         in
           if box then
             binarized
+            |> eta_expand_partial context
             |> uncurry_term uncurry_table
             |> box_fun_and_pair_in_term context definitional
           else binarized
@@ -2588,6 +2695,11 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
       val definitions' = map_counted "boxing the definitions" (fn term =>
         do_tail context true destroy_constrs (do_middle true term))
         definitions
+      (* the box invariant is checked on the result *)
+      val _ = pass "checking the box invariant"
+      (* nothing is boxed when the configuration turns boxing off *)
+      val _ = if box then MFH.check_boxed_binders
+                (nondefinitions' @ definitions' @ need_ts) else ()
     in
       (nondefinitions', definitions', need_ts, got_all_mono_user_axioms,
        no_poly_user_axioms, binarize)
