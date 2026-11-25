@@ -3143,17 +3143,18 @@ in
         [NativeSML, Compute]
     end)
 
-  (* [F /\ x = F] on native code as on compute, whichever side is stuck *)
+  (* [F /\ x = F], [T \/ x = T] and [x ==> T = T] on native code as on
+     compute, whichever side is stuck *)
   val _ = test "a connective decided by its other side isn't stuck"
     (fn () =>
-      let val goal = ``rf_stub_pick s /\ b``
-      in
-        List.all (fn substrate =>
-            case refute (on substrate) goal of
-              Counterexample (c :: _) => certifies goal c
-            | _ => false)
-          [NativeSML, Compute]
-      end)
+      List.all (fn goal =>
+          List.all (fn substrate =>
+              case refute (on substrate) goal of
+                Counterexample (c :: _) => certifies goal c
+              | _ => false)
+            [NativeSML, Compute])
+        [``rf_stub_pick s /\ b``, ``(rf_stub_pick s \/ b) ==> c``,
+         ``(rf_stub_pick s ==> b) ==> c``])
 
   (* Narrowing has no substrate to hand over to: [b = T] is stuck. *)
   val _ = test "narrowing names the constant its samples were stuck on"

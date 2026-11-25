@@ -1525,22 +1525,24 @@ structure Refute_QC :> Refute_QC = struct
     select_registered config skip report (Plans plans) (fn substrate =>
       preflight_substrate substrate config strategy plans evals)
 
-  (* Under [Auto], when a substrate follows [name] in the chain, the
-     substrates a run of [name] hands its problem past: [name] and those
-     before it. *)
+  (* Under [Auto], when [name] is NativeSML, whose stubs hand over, and a
+     substrate follows it in the chain, the substrates a run of [name]
+     hands its problem past: [name] and those before it. *)
   fun hand_over_skip (config : Refute_Core.config) name =
     case #substrate (#qc config) of
         Refute_Core.Auto =>
-          let
-            fun upto [] _ = NONE
-              | upto (substrate :: rest) seen =
-                  if #name substrate <> name then
-                    upto rest (#name substrate :: seen)
-                  else if null rest then NONE
-                  else SOME (rev (name :: seen))
-          in
-            upto (get_substrates ()) []
-          end
+          if SOME name <> substrate_name Refute_Core.NativeSML then NONE
+          else
+            let
+              fun upto [] _ = NONE
+                | upto (substrate :: rest) seen =
+                    if #name substrate <> name then
+                      upto rest (#name substrate :: seen)
+                    else if null rest then NONE
+                    else SOME (rev (name :: seen))
+            in
+              upto (get_substrates ()) []
+            end
       | _ => NONE
 
   (* Admission checks only plan eligibility.
@@ -1653,6 +1655,21 @@ structure Refute_QC :> Refute_QC = struct
           SelectionFailed reasons => Refute_Core.Unknown reasons
         | Selected (substrate, compiled) =>
             let
+              (* Potential candidates found while the run may still hand
+                 over are reported only once it ends any other way, the
+                 deadline included. *)
+              val held_reports = ref []
+              fun report_potential potential =
+                if Refute_Eval.hands_over () then
+                  held_reports := potential :: !held_reports
+                else
+                  Refute_Core.report_outcome config
+                    (Refute_Core.Counterexample [potential])
+              fun report_held () =
+                List.app (fn potential =>
+                    Refute_Core.report_outcome config
+                      (Refute_Core.Counterexample [potential]))
+                  (List.rev (!held_reports))
               fun selected_body () =
                 let
                   val qc = #qc config
@@ -1674,15 +1691,6 @@ structure Refute_QC :> Refute_QC = struct
                   else true))
               val counterexamples = ref []
               val replay_potential = ref NONE
-              (* Potential candidates found while the run may still hand
-                 over are reported only once it ends without doing so. *)
-              val held_reports = ref []
-              fun report_potential potential =
-                if Refute_Eval.hands_over () then
-                  held_reports := potential :: !held_reports
-                else
-                  Refute_Core.report_outcome config
-                    (Refute_Core.Counterexample [potential])
               val discarded = ref 0
               val gave_up = ref []
               val frontier = ref (NONE : (int * int) option)
@@ -1862,10 +1870,6 @@ structure Refute_QC :> Refute_QC = struct
                  these, one per backend. *)
               val counter_reason = #reason counters ()
             in
-              List.app (fn potential =>
-                  Refute_Core.report_outcome config
-                    (Refute_Core.Counterexample [potential]))
-                (List.rev (!held_reports));
               finish_outcome (strategy_name strategy) (!counterexamples)
                 (!replay_potential) counter_reason (fn () =>
                   if !complete then Refute_Core.NoCounterexample
@@ -1895,7 +1899,7 @@ structure Refute_QC :> Refute_QC = struct
                         (Refute_Core.withdraw_published ();
                          Refute_Core.set_backend_diagnostics (fn () => [])
                            (report (handover_reason name)))) ()
-                  | _ => ()
+                  | _ => report_held ()
               val close_result = bounded_close (#close compiled)
               fun handed_over name passed =
                 (Refute_Core.Private.say 2
