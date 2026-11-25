@@ -5849,10 +5849,21 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
   val coerce_counts = new_sharing_counts ()
   val eta_counts = new_sharing_counts ()
 
+  (* The box invariant: after preprocessing no
+     bound variable has a function type that is not boxed.  The pass over
+     the preprocessed terms counts the binders it looks at ([checked], each
+     distinct abstraction of a term once) and those that break the rule
+     ([unboxed]); with [strict_binder_check] set, as the selftests do, a
+     violation raises. *)
+  val binder_checked = ref 0
+  val binder_unboxed = ref 0
+  val strict_binder_check = ref false
+
   fun reset_sharing_counts () =
-    List.app (fn ({lookups, entered} : sharing_counts) =>
-                (lookups := 0; entered := 0))
-      [box_counts, coerce_counts, eta_counts]
+    (List.app (fn ({lookups, entered} : sharing_counts) =>
+                 (lookups := 0; entered := 0))
+       [box_counts, coerce_counts, eta_counts];
+     binder_checked := 0; binder_unboxed := 0)
 
   fun sharing_summary () =
     let
@@ -5861,11 +5872,57 @@ structure Refute_ModelFinder_HOL :> Refute_ModelFinder_HOL = struct
         Int.toString (!entered) ^ " distinct subterms"
     in
       "boxing pass: " ^ show "boxing" box_counts ^ "; " ^
-      show "coercions" coerce_counts ^ "; " ^ show "eta_contract" eta_counts
+      show "coercions" coerce_counts ^ "; " ^ show "eta_contract" eta_counts ^
+      "; binder check: " ^ Int.toString (!binder_checked) ^
+      " binders checked, " ^ Int.toString (!binder_unboxed) ^ " unboxed"
     end
 
   fun tally ({lookups, ...} : sharing_counts) = lookups := !lookups + 1
   fun enter ({entered, ...} : sharing_counts) = entered := !entered + 1
+
+  (* The binders of [term] that break the box
+     invariant, one per distinct abstraction; every binder looked at is
+     counted in [binder_checked]. *)
+  fun unboxed_binders term =
+    let
+      val seen = ref (Redblackset.empty Term.compare)
+      val found = ref []
+      fun walk candidate =
+        if Term.is_comb candidate orelse Term.is_abs candidate then
+          if Redblackset.member (!seen, candidate) then ()
+          else
+            (seen := Redblackset.add (!seen, candidate);
+             if Term.is_abs candidate then
+               let val (variable, body) = Term.dest_abs candidate
+               in
+                 binder_checked := !binder_checked + 1;
+                 if is_fun_type (Term.type_of variable) then
+                   found := variable :: !found
+                 else ();
+                 walk body
+               end
+             else
+               let val (function, argument) = Term.dest_comb candidate
+               in walk function; walk argument end)
+        else ()
+    in
+      walk term; rev (!found)
+    end
+
+  fun check_boxed_binders terms =
+    let
+      val unboxed = List.concat (map unboxed_binders terms)
+    in
+      binder_unboxed := !binder_unboxed + length unboxed;
+      if !strict_binder_check andalso not (null unboxed) then
+        raise err "check_boxed_binders"
+          ("bound variable of unboxed function type after preprocessing: " ^
+           String.concatWith ", " (map (fn variable =>
+             #1 (Term.dest_var variable) ^ " : " ^
+             Parse.type_to_string (Term.type_of variable))
+             (List.take (unboxed, Int.min (3, length unboxed)))))
+      else ()
+    end
 
   type coerce_key = term * hol_type * hol_type
   fun compare_coerce_key ((t1, a1, b1) : coerce_key, (t2, a2, b2)) =
