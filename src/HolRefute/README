@@ -126,6 +126,15 @@ these connectives doesn't leave a sample stuck that Compute decides
 unreduced, and is stuck on them); narrowing keeps left-to-right
 connectives.
 
+`OWHILE` runs by `OWHILE_THM` (its definition reads `?` and `LEAST`,
+which nothing evaluates): the executability gate and Compute read it in
+place of the definition (`Refute_Core.executable_equations`), Compute
+adding it to its own copy of the compset only, and NativeSML has a
+primitive.  A loop that hasn't ended after Compute's evaluation-step
+budget, or as many native iterations, leaves its sample stuck;
+certification and display evaluation stop unfolding it after as many and
+leave it unreduced.
+
 Smart generators (default on) serve exhaustive testing only; random
 testing keeps generate-and-guard plans.  They mode-compile `Hol_reln`
 premises and Horn-shaped Boolean function equations into CPS enumerators

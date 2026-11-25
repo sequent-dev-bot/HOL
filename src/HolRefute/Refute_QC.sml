@@ -1899,7 +1899,9 @@ structure Refute_QC :> Refute_QC = struct
                         (Refute_Core.withdraw_published ();
                          Refute_Core.set_backend_diagnostics (fn () => [])
                            (report (handover_reason name)))) ()
-                  | _ => report_held ()
+                  | _ =>
+                      Thread_Attributes.uninterruptible
+                        (fn _ => fn () => report_held ()) ()
               val close_result = bounded_close (#close compiled)
               fun handed_over name passed =
                 (Refute_Core.Private.say 2

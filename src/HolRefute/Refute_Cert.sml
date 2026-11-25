@@ -66,13 +66,24 @@ structure Refute_Cert :> Refute_Cert = struct
   local
     type defined =
       {base : computeLib.compset,
+       start : computeLib.compset,
        known : Refute_Core.constant_key Redblackset.set,
        defined : Refute_Core.constant_key list,
        compset : computeLib.compset}
     val cache = Synchronized.var "Refute_Cert.defined" (NONE : defined option)
+    (* [base] with [Refute_Core.executable_equation_theorems], which every
+       copy starts from *)
     fun fresh base =
-      {base = base, known = Refute_Core.executable_keys base, defined = [],
-       compset = base}
+      let
+        val start =
+          case Refute_Core.executable_equation_theorems () of
+            [] => base
+          | theorems => computeLib.add_thms theorems (computeLib.copy base)
+      in
+        {base = base, start = start,
+         known = Refute_Core.executable_keys start, defined = [],
+         compset = start}
+      end
     (* As [Defn] does for the compset: evaluation meets numerals, never
        [SUC n], so an equation with [SUC] in a pattern is restated over
        numerals. *)
@@ -100,18 +111,52 @@ structure Refute_Cert :> Refute_Cert = struct
         val keys = map Refute_Core.constant_key defined
         val compset =
           if keys = #defined cached then #compset cached
-          else if null definitions then base
+          else if null definitions then #start cached
           else computeLib.add_thms (map numeral_patterns definitions)
-                 (computeLib.copy base)
+                 (computeLib.copy (#start cached))
       in
         Synchronized.change cache (fn _ =>
-          SOME {base = base, known = #known cached, defined = keys,
-                compset = compset});
+          SOME {base = base, start = #start cached, known = #known cached,
+                defined = keys, compset = compset});
         compset
       end
   end
 
-  fun eval tm = computeLib.CBV_CONV (default_compset tm) tm
+  (* [eval]'s compset unfolds [OWHILE] by [OWHILE_THM]
+     ([Refute_Core.executable_equations]), so a loop that doesn't end
+     would rewrite forever, in certification and display evaluation too.
+     Each [eval] call unfolds [OWHILE] at most [owhile_unfoldings] times,
+     as many iterations as native code runs; past that the stopper refuses
+     the rewrite and the [OWHILE] term stays unreduced.  Installed when
+     this structure loads; any other thread's evaluation goes to the
+     stopper found there. *)
+  val owhile_unfoldings = 1000000
+
+  local
+    val unfoldings_left : int ref Thread_Data.var = Thread_Data.var ()
+    val previous = !computeLib.stoppers
+    fun previous_stop head =
+      case previous of SOME f => f head | NONE => false
+    fun is_owhile head =
+      Term.is_const head andalso
+      (case Term.dest_thy_const head of
+           {Name = "OWHILE", Thy = "While", ...} => true
+         | _ => false)
+    fun stop head =
+      case Thread_Data.get unfoldings_left of
+          SOME left =>
+            if is_owhile head then
+              if !left <= 0 then true
+              else (left := !left - 1; previous_stop head)
+            else previous_stop head
+        | NONE => previous_stop head
+    val _ = computeLib.stoppers := SOME stop
+  in
+    fun bounded_owhile f x =
+      Thread_Data.setmp unfoldings_left (SOME (ref owhile_unfoldings)) f x
+  end
+
+  fun eval tm = bounded_owhile (computeLib.CBV_CONV (default_compset tm)) tm
 
   (* [has_bounded_quantifier] is a syntactic over-approximation of what
      [bounded_rewrites] can rewrite; when the two disagree, [REWRITE_CONV]

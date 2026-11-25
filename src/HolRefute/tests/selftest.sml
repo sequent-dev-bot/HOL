@@ -3031,10 +3031,10 @@ val _ = test "trace 2 reports selection and the race" (fn () =>
      String.isSubstring "Refute backend started (weight 50): kodkod" race)
   end)
 
-(* A constant native code has no equations for ([@] under [OWHILE]'s
-   definition, [CHOICE]) doesn't decline the problem: native code stubs
-   it, a sample reaching the stub is stuck as on compute, the search is
-   incomplete, and its reasons name the constant. *)
+(* A constant native code has no equations for ([CHOICE], [@]) doesn't
+   decline the problem: native code stubs it, a sample reaching the stub
+   is stuck as on compute, the search is incomplete, and its reasons name
+   the constant. *)
 local
   val _ = TotalDefn.Define
     `rf_stub_wrap (G : 'a -> bool) f s = OWHILE G f s`
@@ -3108,17 +3108,16 @@ in
         case refute (on Compute) goal of
           Unknown reasons =>
             refute (on NativeSML) goal
-              == Unknown (reasons @ [stuck_on "min$@"]) andalso
+              == Unknown (reasons @ [stuck_on "pred_set$CHOICE"]) andalso
             same_split goal
         | _ => false)
-      [``rf_stub_wrap (G : 'a -> bool) f s = SOME t ==> G t``,
-       ``rf_stub_wrap2 b (G : 'a -> bool) f s = SOME t ==> ~G t``])
+      [``b ==> rf_stub_pick s``])
 
   (* Stuck in the conclusion, so conclusions evaluated counts exactly the
-     decided samples: [b = T] decides, [b = F] reaches [OWHILE]. *)
+     decided samples: [b = T] decides, [b = F] reaches [CHOICE]. *)
   val _ = test "decided and stuck conclusions split as on compute" (fn () =>
     let
-      val goal = ``rf_stub_wrap2 b (G : 'a -> bool) f s = NONE``
+      val goal = ``b \/ rf_stub_pick s``
       val numbers =
         List.mapPartial Int.fromString o
         String.tokens (not o Char.isDigit)
@@ -3167,6 +3166,52 @@ in
         unknown_with "native code has no equations for pred_set$CHOICE"
           outcome
       end)
+end
+
+(* [OWHILE] runs by [OWHILE_THM] on both substrates, written in the goal
+   or behind a definition, without a global compset rule, and a loop that
+   doesn't end leaves its sample stuck within the substrate's bound. *)
+local
+  fun on substrate =
+    exhaustive |> upd_substrate substrate |> upd_timeout 60.0
+  fun refuted_on_both goal =
+    List.all (fn substrate =>
+        case refute (on substrate) goal of
+          Counterexample (c :: _) => certifies goal c
+        | _ => false)
+      [NativeSML, Compute]
+in
+  val _ = test "a loop runs by its unfolding" (fn () =>
+    refuted_on_both ``OWHILE (\n:num. n < 3) SUC 0 = SOME x ==> x = 2`` andalso
+    not (List.exists (fn ((name, _), transforms) =>
+                        name = "OWHILE" andalso not (null transforms))
+           (computeLib.listItems (computeLib.the_compset ()))))
+
+  val _ = test "a loop behind a definition is refuted" (fn () =>
+    refuted_on_both ``rf_stub_wrap (G : bool -> bool) f s = SOME t ==> G t``)
+
+  (* [b = T] is stuck on both substrates.  Native code also decides it by
+     its strict [/\] beside the stuck loop; certification and the display
+     term then evaluate the same loop. *)
+  val _ = test "a loop that doesn't end leaves its sample stuck" (fn () =>
+    List.all (fn substrate =>
+        case refute (on substrate)
+               ``OWHILE (\n:num. b) SUC 0 = NONE ==> F`` of
+          Unknown reasons =>
+            List.exists (String.isSubstring "search space not exhausted")
+              reasons andalso
+            not (List.exists (String.isSubstring "timed out") reasons)
+        | _ => false)
+      [NativeSML, Compute] andalso
+    let
+      val goal = ``OWHILE (\n:num. b) SUC 0 <> NONE /\ ~b``
+      val config = on NativeSML |> upd_evals [``OWHILE (\n:num. b) SUC 0``]
+    in
+      case refute config goal of
+        Counterexample (c :: _) =>
+          certifies goal c andalso length (#evals c) = 1
+      | _ => false
+    end)
 end
 
 (* ------------------------------------------------------------------- *)

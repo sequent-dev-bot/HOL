@@ -1529,7 +1529,7 @@ structure Refute_Core :> Refute_Core = struct
      constant to [DefnBase] or the compset.  A recursive definition with
      no termination proof has only its [WFREC] primitive there, which
      nothing evaluates, so none. *)
-  fun theory_entries constant =
+  fun stored_theory_entries constant =
     let
       val {Name, Thy, ...} = Term.dest_thy_const constant
       val entries =
@@ -1559,6 +1559,31 @@ structure Refute_Core :> Refute_Core = struct
     in
       List.mapPartial usable entries
     end
+
+  (* Executable equations read in place of a constant's theory
+     definition, which nothing evaluates: [OWHILE_def] reads [?] and
+     [LEAST].  Only Refute's own evaluation reads them; added to the
+     global compset, [OWHILE_THM] would make [EVAL] loop on a symbolic or
+     non-ending loop. *)
+  val executable_equations =
+    [({Name = "OWHILE", Thy = "While"}, "OWHILE_THM")]
+
+  fun theory_entries constant =
+    let
+      val {Name, Thy, ...} = Term.dest_thy_const constant
+      val key = {Name = Name, Thy = Thy}
+    in
+      case Lib.assoc1 key executable_equations of
+        SOME (_, name) => [[(key, DB.fetch Thy name)]]
+      | NONE => stored_theory_entries constant
+    end
+
+  (* The executable equations of the theories loaded; evaluation adds them
+     to its own compset ([Refute_Cert.default_compset]), so a constant
+     reached through a compset rule (a [Define]d wrapper) evaluates too. *)
+  fun executable_equation_theorems () =
+    List.mapPartial (fn ({Thy, ...}, name) => Lib.total (DB.fetch Thy) name)
+      executable_equations
 
   fun theory_definitions constant =
     let val {Name, Thy, ...} = Term.dest_thy_const constant

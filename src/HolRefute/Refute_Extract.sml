@@ -956,6 +956,13 @@ structure Refute_Extract :> Refute_Extract = struct
       declarations (List.map one types @ helpers)
     end
 
+  (* A native [OWHILE] stops after as many iterations as Compute takes
+     evaluation steps ([Refute_EvalCompute.evaluation_steps]) and the
+     sample is stuck:
+     whether a loop ends is undecidable, and without a bound a sample
+     whose loop doesn't end would hold the search until its deadline. *)
+  val owhile_iterations = "1000000"
+
   val prelude =
     "fun refute_num_sub a b = if a < b then 0 else a - b\n" ^
     "fun refute_nonzero who b =\n" ^
@@ -1020,6 +1027,12 @@ structure Refute_Extract :> Refute_Extract = struct
     "  | refute_foldl f z (x :: xs) = refute_foldl f (f z x) xs\n" ^
     "fun refute_funpow f n x =\n" ^
     "  if n <= 0 then x else refute_funpow f (n - 1) (f x)\n" ^
+    "fun refute_owhile g f x =\n" ^
+    "  let fun loop k x =\n" ^
+    "        if k >= " ^ owhile_iterations ^ " then\n" ^
+    "          raise Refute_EvalSML.Stuck \"OWHILE\"\n" ^
+    "        else if g x then loop (k + 1) (f x) else SOME x\n" ^
+    "  in loop 0 x end\n" ^
     "fun refute_count_list n =\n" ^
     "  List.tabulate (IntInf.toInt n, IntInf.fromInt)\n" ^
     "  handle Overflow => raise Refute_EvalSML.Stuck \"COUNT_LIST\"\n" ^
@@ -2066,6 +2079,7 @@ structure Refute_Extract :> Refute_Extract = struct
       | ("arithmetic", "DIV2") => SOME (with1 (fn a =>
           "IntInf.div (" ^ a ^ ", 2)"))
       | ("arithmetic", "FUNPOW") => SOME (call "refute_funpow" 3 arguments)
+      | ("While", "OWHILE") => SOME (call "refute_owhile" 3 arguments)
       | ("rich_list", "COUNT_LIST") =>
           SOME (call "refute_count_list" 1 arguments)
       | ("integer", "int_neg") => SOME (with1 (fn a =>
@@ -2455,6 +2469,22 @@ structure Refute_Extract :> Refute_Extract = struct
               defer ("refute_funpow " ^
                 parens ("fn refute_x => " ^ apply f "refute_x") ^ " " ^
                 parens (force n) ^ " " ^ parens x)))
+        | ("While", "OWHILE") =>
+            let
+              val ty = #2 (boolSyntax.strip_fun (Term.type_of head))
+              val some_name =
+                generated_constructor context ty ("option", "SOME")
+            in
+              SOME (with3 (fn (g, f, x) =>
+                defer ("let fun refute_owhile refute_k refute_x = " ^
+                  "if refute_k >= " ^ owhile_iterations ^ " then " ^
+                  "raise Refute_EvalSML.Stuck \"OWHILE\" else if " ^
+                  force (apply g "refute_x") ^
+                  " then refute_owhile (refute_k + 1) " ^
+                  parens (apply f "refute_x") ^ " else " ^
+                  delay (some_name ^ " refute_x") ^
+                  " in refute_owhile 0 " ^ parens x ^ " end")))
+            end
         | ("rich_list", "COUNT_LIST") =>
             let
               val ty = #2 (boolSyntax.strip_fun (Term.type_of head))
