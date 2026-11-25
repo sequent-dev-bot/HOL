@@ -2576,7 +2576,13 @@ val _ = test "finite sets are generated and refuted" (fn () =>
      ``fset_ABS (l : string) = fEMPTY``,
      ``fCARD (fINSERT (1 : num) s) = fCARD s + 1``,
      ``(b = FsSome s) ==> fIN (1 : num) s``,
-     ``fIN 1 r.fs_tags ==> r.fs_count = fCARD r.fs_tags``])
+     ``fIN 1 r.fs_tags ==> r.fs_count = fCARD r.fs_tags``,
+     (* fIMAGE, fUNION and fBIGUNION compare no elements of what they
+        read, so a set of functions is no reason to refuse them *)
+     ``fIN (x : num) (fIMAGE (\f. f 0)
+         (fBIGUNION (fINSERT (fUNION (fINSERT SUC fEMPTY)
+                                     (fINSERT (\n. n) fEMPTY)) fEMPTY))) ==>
+       x = 1``])
 
 val _ = test "the compset decides finite-set operations on chains" (fn () =>
   List.all fset_evaluates

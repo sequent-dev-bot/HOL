@@ -561,11 +561,11 @@ structure Refute_Gen :> Refute_Gen = struct
 
       fun datatype_spec info =
         let
-          (* A TypeBase entry need not describe a datatype: [:'a fset]'s
-             entry, for one, lists no constructors, so there is nothing
-             to build values from.  (The finite-map entry is the same
-             way, but [non_function_spec] below routes it to a
-             registered family before this is ever reached.)  Refuse in
+          (* A TypeBase entry need not describe a datatype: it may list
+             no constructors, so there is nothing to build values from.
+             (The finite-map and finite-set entries are that way, but
+             [non_function_spec] below routes them to their registered
+             families before this is ever reached.)  Refuse in
              the same words as the other missing-generator cases rather
              than returning an empty enumeration, which would make the
              type look uninhabited and the search look exhausted. *)

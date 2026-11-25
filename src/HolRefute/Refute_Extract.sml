@@ -497,6 +497,22 @@ structure Refute_Extract :> Refute_Extract = struct
   fun fset_elements context ty set =
     parens (fset_helper context ty "elements" ^ " " ^ parens set)
 
+  (* An fINSERT chain's elements, duplicates kept and with no element
+     equality: for an operation that only rebuilds a chain from them,
+     which is a set's value as well. *)
+  fun fset_chain context ty set =
+    let
+      val force = #force (context_operations context)
+      val empty = generated_constructor context ty ("finite_set", "fEMPTY")
+      val insert = generated_constructor context ty ("finite_set", "fINSERT")
+    in
+      "(let fun refute_walk refute_set = (case " ^ force "refute_set" ^
+      " of " ^ empty ^ " => [] | " ^ insert ^
+      " (refute_element, refute_rest) => " ^
+      "refute_element :: refute_walk refute_rest) in refute_walk " ^
+      parens set ^ " end)"
+    end
+
   fun fset_helper_declarations context ty =
     let
       val force = #force (context_operations context)
@@ -1817,6 +1833,7 @@ structure Refute_Extract :> Refute_Extract = struct
                " (refute_element, refute_rest)") ^
         ") " ^ parens set ^ " " ^ parens elements
       fun elements ty set = fset_elements context ty set
+      fun chain ty set = fset_chain context ty set
     in
       case kname head of
           ("finite_set", "fEMPTY") =>
@@ -1833,7 +1850,7 @@ structure Refute_Extract :> Refute_Extract = struct
             let val ty = set_type 0
             in
               SOME (with2 (fn (left, right) =>
-                defer (onto ty (elements ty left) right)))
+                defer (onto ty (chain ty left) right)))
             end
         | ("finite_set", "fDELETE") =>
             let
@@ -1854,7 +1871,7 @@ structure Refute_Extract :> Refute_Extract = struct
                 defer (onto result_type
                   ("List.map (fn refute_element => " ^
                    apply function "refute_element" ^ ") " ^
-                   elements ty set)
+                   chain ty set)
                   (empty result_type))))
             end
         | ("finite_set", "fBIGUNION") =>
@@ -1862,10 +1879,10 @@ structure Refute_Extract :> Refute_Extract = struct
             in
               SOME (with1 (fn sets =>
                 defer ("List.foldr (fn (refute_set, refute_union) => " ^
-                  onto result_type (elements result_type "refute_set")
+                  onto result_type (chain result_type "refute_set")
                     "refute_union" ^
                   ") " ^ parens (empty result_type) ^ " " ^
-                  elements ty sets)))
+                  chain ty sets)))
             end
         | ("finite_set", "fset_ABS") =>
             let
