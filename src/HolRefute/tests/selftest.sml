@@ -1666,6 +1666,40 @@ val _ = test "a constructor equation beside a binder equation is unwound"
       List.all unwound goals
     end)
 
+(* A constructor argument that is a nested pattern, a binder-free term or
+   a repeated binder gets a case variable of its own and a test in the
+   branch, so the quantifier unwinds one constructor at a time; before,
+   only bare binders matched, the quantifier stayed, and exhaustive and
+   random search refused the goal as not executable. *)
+local
+  val nested_goals =
+    [``!x : num. ?y. (if x = 0 then INR T else INL (x, [] : num list)) =
+                     INL (y, [])``,
+     ``!x : num. ~!y. (if x = 0 then INR T else INL (x, [] : num list)) <>
+                      INL (y, [])``,
+     ``!x : num. !y. (if x = 0 then INR T else INL (x, [] : num list)) =
+                     INL (y, []) ==> y = 1``,
+     ``!x : num. ?a. (if x = 0 then NONE else SOME (x, x)) = SOME (a, 3)``,
+     ``!x : num. ?a. (if x = 0 then NONE else SOME (x, x + 1)) =
+                     SOME (a, a)``,
+     ``!x : num. ?a b rest. (if x = 0 then [] else [(x, x)]) =
+                            (a, b) :: rest``]
+  fun cfg backend = qc |> upd_timeout 60.0 |> upd_sequential true
+    |> upd_seed (SOME 42) |> only [backend]
+in
+  val _ = test "a nested constructor pattern unwinds and is refuted"
+    (fn () =>
+      List.all (fn tm =>
+        genuine_certified (refute (cfg Exhaustive) tm) andalso
+        genuine_certified (refute (cfg Random) tm)) nested_goals)
+
+  val _ = test "a nested constructor pattern that holds is not refuted"
+    (fn () =>
+      not_refuted (refute (cfg Exhaustive)
+        ``!x : num. ?y. (if x = 0 then INL (1, [])
+                         else INL (x, [] : num list)) = INL (y, [])``))
+end
+
 (* ------------------------------------------------------------------- *)
 (* Random backend                                                      *)
 (* ------------------------------------------------------------------- *)

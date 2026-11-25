@@ -972,27 +972,66 @@ structure Refute_Core :> Refute_Core = struct
      split on [e]. *)
   local
     fun is_binder binders tm = List.exists (Term.aconv tm) binders
-    fun constructor_match binders (e, pattern) =
+    fun mentions binders tm = List.exists (fn b => Term.free_in b tm) binders
+    (* [C a1 .. an], [C] a TypeBase constructor applied fully, at a
+       datatype that is neither a type variable nor a function. *)
+    fun constructor_application pattern =
       let
         val (constructor, arguments) = boolSyntax.strip_comb pattern
       in
         if Term.is_const constructor andalso not (null arguments) andalso
            not (Type.is_vartype (Term.type_of pattern)) andalso
            not (Lib.can Type.dom_rng (Term.type_of pattern)) andalso
-           Refute_TypeBase.is_constructor constructor andalso
-           List.all (is_binder binders) arguments andalso
-           length (Refute_Util.distinct_terms arguments) =
-             length arguments andalso
-           not (List.exists (fn b => Term.free_in b e) binders)
-        then SOME (e, constructor, arguments)
+           Refute_TypeBase.is_constructor constructor
+        then SOME (constructor, arguments)
         else NONE
       end
-    fun constructor_equation binders conj =
+    (* A binder, a term that mentions no binder, or a constructor
+       applied to such patterns. *)
+    fun is_pattern binders tm =
+      is_binder binders tm orelse not (mentions binders tm) orelse
+      (case constructor_application tm of
+           SOME (_, arguments) => List.all (is_pattern binders) arguments
+         | NONE => false)
+    (* [e = C p1 .. pn] matches with case variables [vs] and tests: a
+       binder's first occurrence among the [pi] is its own case variable;
+       any other [pi] (a nested pattern, a binder-free term, a repeated
+       binder) gets a fresh case variable [v] and the test [v = pi].  An
+       outer pair with such an argument is left to [pair_split_equation]. *)
+    fun constructor_match avoid binders (e, pattern) =
+      case constructor_application pattern of
+          NONE => NONE
+        | SOME (constructor, arguments) =>
+            if mentions binders e orelse not (mentions binders pattern) orelse
+               not (List.all (is_pattern binders) arguments)
+            then NONE
+            else
+              let
+                val avoid = ref (avoid @ binders)
+                fun variable (argument, (vs, tests)) =
+                  if is_binder binders argument andalso
+                     not (is_binder vs argument)
+                  then (vs @ [argument], tests)
+                  else
+                    let
+                      val v = Term.variant (!avoid)
+                                (Term.mk_var ("v", Term.type_of argument))
+                    in
+                      avoid := v :: !avoid;
+                      (vs @ [v], tests @ [boolSyntax.mk_eq (v, argument)])
+                    end
+                val (vs, tests) = List.foldl variable ([], []) arguments
+              in
+                if not (null tests) andalso pairSyntax.is_pair pattern
+                then NONE
+                else SOME (e, constructor, vs, tests)
+              end
+    fun constructor_equation avoid binders conj =
       case Lib.total boolSyntax.dest_eq conj of
           NONE => NONE
         | SOME (left, right) =>
-            (case constructor_match binders (left, right) of
-                 NONE => constructor_match binders (right, left)
+            (case constructor_match avoid binders (left, right) of
+                 NONE => constructor_match avoid binders (right, left)
                | found => found)
     fun pair_split_equation binders conj =
       case Lib.total boolSyntax.dest_eq conj of
@@ -1131,16 +1170,19 @@ structure Refute_Core :> Refute_Core = struct
             end
         end
     (* [tm = target], where [tm] quantifies [binders] over a matrix
-       holding [equation], [e = C xs], [branch] is the matrix without it
-       and [make branch] is [target].  Proving [tm = target] by cases
+       holding [equation], [e = C ps], [branch] is the matrix without it
+       and [make tested] is [target].  Proving [tm = target] by cases
        itself could unwind an argument of [C] by another equation of the
        matrix ([n = f y] beside [e = C n]) on the left side only, and
        leave the sides different.  So the split is proved with the branch
        a variable [P], where [equation] is the only equation to unwind
        by, and [P] is then instantiated to the branch; [tm] is the
-       instance's left side up to rearranging its matrix ([rearrange]). *)
-    fun prove_case existential binders equation rest branch make e tm
-                   target =
+       instance's left side up to rearranging its matrix ([rearrange]).
+       With [tests] (a nested pattern's), the split's branch is [tests]
+       connected to [P], under the binders [inner] the tests mention,
+       and is rearranged to [tested] once [P] is instantiated. *)
+    fun prove_case existential binders equation rest branch tests inner
+                   tested make e tm target =
       let
         val (connect, quantify, strip) =
           if existential then
@@ -1153,9 +1195,13 @@ structure Refute_Core :> Refute_Core = struct
           (Term.mk_var ("P", boolSyntax.list_mk_fun
                                (map Term.type_of binders, Type.bool)))
         val applied = Term.list_mk_comb (P, binders)
+        fun connect_tests body =
+          if null tests then body
+          else connect (boolSyntax.list_mk_conj tests, body)
         val schema =
           prove_by_cases e (boolSyntax.mk_eq
-            (quantify (binders, connect (equation, applied)), make applied))
+            (quantify (binders, connect (equation, applied)),
+             make (connect_tests applied)))
         val instance =
           Thm.INST [{redex = P, residue = Term.list_mk_abs (binders, branch)}]
             schema
@@ -1164,12 +1210,35 @@ structure Refute_Core :> Refute_Core = struct
         val normalise = Conv.QCONV (Conv.REDEPTH_CONV Thm.BETA_CONV)
         val middle = connect (equation, branch)
         val expected =
-          boolSyntax.mk_eq (quantify (binders, middle), target)
+          boolSyntax.mk_eq (quantify (binders, middle),
+                            make (connect_tests branch))
         val instance =
           Thm.EQ_MP
             (Thm.TRANS (normalise (Thm.concl instance))
                (Thm.SYM (normalise expected)))
             instance
+        val instance =
+          if null tests then instance
+          else
+            let
+              fun quantify_inner t =
+                if null inner then t else quantify (inner, t)
+              val quantify_eq =
+                if existential then Drule.EXISTS_EQ else Drule.FORALL_EQ
+              val bridge =
+                List.foldr (fn (v, th) => quantify_eq v th)
+                  (Thm.SYM (rearrange existential tested
+                              (boolSyntax.list_mk_conj tests) rest
+                              (connect_tests branch)))
+                  inner
+              val from = quantify_inner (connect_tests branch)
+              fun replace t =
+                if Term.aconv t from then Thm.TRANS (Thm.ALPHA t from) bridge
+                else Conv.NO_CONV t
+            in
+              Conv.CONV_RULE (Conv.RAND_CONV (Conv.ONCE_DEPTH_CONV replace))
+                instance
+            end
         val body = #2 (strip tm)
         val rearranged =
           List.foldr (fn (v, th) =>
@@ -1227,39 +1296,63 @@ structure Refute_Core :> Refute_Core = struct
       case shape tm of
           NONE => raise Conv.UNCHANGED
         | SOME (binders, conjuncts, assemble, default, requantify) =>
-            (case Lib.get_first (fn (index, conj) =>
-                     Option.map (fn found => (index, found))
-                       (constructor_equation binders conj))
-                   (Lib.enumerate 0 conjuncts) of
-                 SOME (index, (e, constructor, arguments)) =>
+            let
+              val avoid = Term.free_vars tm
+              val found =
+                List.mapPartial (fn (index, conj) =>
+                    Option.map (fn found => (index, found))
+                      (constructor_equation avoid binders conj))
+                  (Lib.enumerate 0 conjuncts)
+              (* a flat match first: it unwinds without tests.  A nested
+                 match is taken only when its pattern mentions every
+                 binder: one it leaves fixes nothing, and would stay
+                 quantified around the case. *)
+              val (flat, nested) =
+                List.partition (fn (_, (_, _, _, tests)) => null tests) found
+              fun covers (_, (_, _, variables, tests)) =
+                List.all (fn b => is_binder variables b orelse
+                                  List.exists (Term.free_in b) tests)
+                  binders
+            in
+              case flat @ List.filter covers nested of
+                 (index, (e, constructor, variables, tests)) :: _ =>
                    let
                      val (equation, rest) = split_at index conjuncts
                      val others =
-                       List.filter (not o is_binder arguments) binders
+                       List.filter (not o is_binder variables) binders
                      val _ = if List.exists (fixes others) rest
                              then raise Conv.UNCHANGED else ()
-                     fun make branch =
+                     (* a binder a test mentions is quantified next to it,
+                        in the branch, where the test unwinds it *)
+                     val (inner, outer) =
+                       List.partition
+                         (fn b => List.exists (Term.free_in b) tests) others
+                     fun make body =
                        let
                          val target =
-                           case_term e (constructor, arguments) branch
+                           case_term e (constructor, variables)
+                             (if null inner then body
+                              else requantify (inner, body))
                              default
                        in
                          (* outside the case, so the prefix stays prenex *)
-                         if null others then target
-                         else requantify (others, target)
+                         if null outer then target
+                         else requantify (outer, target)
                        end
                      val branch = assemble rest
+                     val tested = assemble (tests @ rest)
                    in
                      prove_case (boolSyntax.is_exists tm) binders equation
-                       rest branch make e tm (make branch)
+                       rest branch tests inner tested make e tm (make tested)
                    end
-               | NONE =>
+               | [] =>
                    if List.exists (pair_split_equation binders) conjuncts
                    then
                      matrix_conv tm
                        (first_conj_conv (pair_split_equation binders)
                           pair_split_conv) tm
-                   else raise Conv.UNCHANGED)
+                   else raise Conv.UNCHANGED
+            end
   end
 
   local
