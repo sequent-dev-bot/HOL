@@ -39,9 +39,6 @@ Traverse.sml:  High-level specification of traversal strategy.
                  there is one, loop.  Otherwise, try a decision
                  procedures.  If any succeeds, loop.
 
-TraverseCore.sml:
-               The configured traversal engine used by TraverseExt.
-
 TraverseExt.sml:
                Traversal for the extension engine: its reducer type,
                solvers and subgoalers, root and child-first traversal.

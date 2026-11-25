@@ -5,7 +5,7 @@ signature TraverseExt =
 sig
   include Abbrev
 
-  type context = TraverseCore.context
+  type context = Traverse.context
   (* A reducer's apply function also receives the side-condition depth
      limit (NONE when none is set; see Cond_rewr.stack_limit) and the order
      used for permutative rewrites.  In reducer_context_data, an unset
@@ -42,9 +42,9 @@ sig
   val addctxt : thm list -> reducer -> reducer
 
   (* Side-condition solvers; see simpExtLib.add_unsafe_solver *)
-  type simp_prover_ctxt = TraverseCore.simp_prover_ctxt
-  type ssolver = TraverseCore.ssolver
-  type subgoaler = TraverseCore.subgoaler
+  type simp_prover_ctxt = Traverse.simp_prover_ctxt
+  type ssolver = Traverse.ssolver
+  type subgoaler = Traverse.subgoaler
   type traverse_data =
     {rewriters : reducer list, limit : int option, dprocs : reducer list,
      travrules : Travrules.travrules, relation : term}
@@ -70,8 +70,8 @@ sig
      keep_abstraction holds of the application.  Exceptions raised by the
      policy (or by an observer) propagate, rather than counting as the
      failure of a conversion. *)
-  type child_first_policy = TraverseCore.child_first_policy
-  datatype traversal_policy = datatype TraverseCore.traversal_policy
+  type child_first_policy = Traverse.child_first_policy
+  datatype traversal_policy = datatype Traverse.traversal_policy
   (* A policy calling the function, and keeping no abstraction *)
   val charge_only : (unit -> unit) -> child_first_policy
   val keep_abstraction : child_first_policy -> term -> bool

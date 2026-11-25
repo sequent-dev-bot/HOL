@@ -1,9 +1,9 @@
-(* TraverseCore's engine over the extended reducer type. *)
+(* Traverse's engine over the extended reducer type. *)
 structure TraverseExt :> TraverseExt =
 struct
 open HolKernel Drule Conv Abbrev;
 
-  type context = TraverseCore.context
+  type context = Traverse.context
   type reducer_config_data =
     {name : string option, initial : context,
      addcontext : context * thm list -> context,
@@ -62,9 +62,9 @@ open HolKernel Drule Conv Abbrev;
       CONFIG_REDUCER {name=name,initial=addcontext (initial,ths),
                       addcontext=addcontext,apply=apply}
 
-type simp_prover_ctxt = TraverseCore.simp_prover_ctxt
-type ssolver = TraverseCore.ssolver
-type subgoaler = TraverseCore.subgoaler
+type simp_prover_ctxt = Traverse.simp_prover_ctxt
+type ssolver = Traverse.ssolver
+type subgoaler = Traverse.subgoaler
 
 type traverse_data = {limit : int option,
                       rewriters: reducer list,
@@ -82,15 +82,15 @@ type xtraverse_data = traverse_data * traverse_config
 val default_config : traverse_config =
   {subgoaler=NONE, solvers=[], cond_depth=NONE, term_ord=NONE};
 
-type child_first_policy = TraverseCore.child_first_policy
-datatype traversal_policy = datatype TraverseCore.traversal_policy
+type child_first_policy = Traverse.child_first_policy
+datatype traversal_policy = datatype Traverse.traversal_policy
 
 fun charge_only charge = {charge=charge, keep_abstraction=fn _ => false}
 
 fun keep_abstraction (policy : child_first_policy) tm =
   #keep_abstraction policy tm
 
-val eta_argument = TraverseCore.eta_argument
+val eta_argument = Traverse.eta_argument
 
 fun NORMALIZE_ARGUMENTS (policy : child_first_policy) child tm =
   let
@@ -133,44 +133,41 @@ fun NORMALIZE_ARGUMENTS (policy : child_first_policy) child tm =
   end
 
 (* ---------------------------------------------------------------------
- * The extended reducers as TraverseCore sees them
+ * The extended reducers as Traverse sees them
  * ---------------------------------------------------------------------*)
-
-fun reducer_initial (LIFTED r) = #initial (Traverse.dest_reducer r)
-  | reducer_initial (CONTEXT_REDUCER {initial,...}) = initial
-  | reducer_initial (CONFIG_REDUCER {initial,...}) = initial
-
-fun reducer_addcontext (LIFTED r) =
-      #addcontext (Traverse.dest_reducer r)
-  | reducer_addcontext (CONTEXT_REDUCER {addcontext,...}) = addcontext
-  | reducer_addcontext (CONFIG_REDUCER {addcontext,...}) = addcontext
 
 (* Lifted ordinary callbacks receive exactly their original record.
    CONFIG_REDUCER transports NONE unchanged: native candidates read the
    live default themselves.  Older CONTEXT_REDUCER clients need an int. *)
-fun core_traversal
+fun ordinary_reducer _ _ (LIFTED r) = r
+  | ordinary_reducer cond_depth term_ord
+      (CONTEXT_REDUCER {name,initial,addcontext,apply}) =
+      Traverse.REDUCER
+        {name=name, initial=initial, addcontext=addcontext,
+         apply=fn {solver,conv,context,stack,relation} =>
+           apply {solver=solver, conv=conv, context=context, stack=stack,
+                  cond_depth=(case cond_depth of
+                                  NONE => !Cond_rewr.stack_limit
+                                | SOME n => n),
+                  term_ord=term_ord, relation=relation}}
+  | ordinary_reducer cond_depth term_ord
+      (CONFIG_REDUCER {name,initial,addcontext,apply}) =
+      Traverse.REDUCER
+        {name=name, initial=initial, addcontext=addcontext,
+         apply=fn {solver,conv,context,stack,relation} =>
+           apply {solver=solver, conv=conv, context=context, stack=stack,
+                  cond_depth=cond_depth, term_ord=term_ord,
+                  relation=relation}}
+
+fun ordinary_data
       ({limit,rewriters,dprocs,travrules,relation} : traverse_data,
-       {subgoaler,solvers,cond_depth,term_ord} : traverse_config) =
+       {cond_depth,term_ord,...} : traverse_config) : Traverse.traverse_data =
   let
     val term_ord = Option.getOpt (term_ord, Cond_rewr.ac_term_ord)
-    fun apply (LIFTED r) args = #apply (Traverse.dest_reducer r) args
-      | apply (CONTEXT_REDUCER {apply,...})
-              {solver,conv,context,stack,relation} =
-          apply {solver=solver, conv=conv, context=context, stack=stack,
-                 cond_depth=(case cond_depth of
-                                 NONE => !Cond_rewr.stack_limit
-                               | SOME n => n),
-                 term_ord=term_ord, relation=relation}
-      | apply (CONFIG_REDUCER {apply,...})
-              {solver,conv,context,stack,relation} =
-          apply {solver=solver, conv=conv, context=context, stack=stack,
-                 cond_depth=cond_depth, term_ord=term_ord,
-                 relation=relation}
+    val convert = map (ordinary_reducer cond_depth term_ord)
   in
-    {rewriters=rewriters, dprocs=dprocs, limit=limit, travrules=travrules,
-     relation=relation, initial=reducer_initial,
-     addcontext=reducer_addcontext, apply=apply, subgoaler=subgoaler,
-     solvers=solvers}
+    {rewriters=convert rewriters, dprocs=convert dprocs, limit=limit,
+     travrules=travrules, relation=relation}
   end
 
 (* ---------------------------------------------------------------------
@@ -180,11 +177,12 @@ fun core_traversal
 (* The explicit extended entry points refresh supplied reducer contexts
    for every application.  Legacy TRAVERSE retains its construction-time
    context, including mutable rewrite controls and user callback results. *)
-fun GEN_TRAVERSE_WITH_CONTEXT check_abort observer policy root_only xdata =
-  TraverseCore.TRAVERSE_WITH_CONTEXT
-    {check_abort=check_abort, observer=observer, policy=policy,
-     root_only=root_only}
-    (core_traversal xdata)
+fun GEN_TRAVERSE_WITH_CONTEXT check_abort observer policy root_only
+      (xdata as (_, {subgoaler,solvers,...} : traverse_config)) =
+  Traverse.TRAVERSE_WITH_CONTEXT
+    {policy=policy, subgoaler=subgoaler, solvers=solvers,
+     root_only=root_only, check_abort=check_abort, observer=observer}
+    (ordinary_data xdata)
 
 fun GEN_TRAVERSE policy root_only xdata thms =
   GEN_TRAVERSE_WITH_CONTEXT NONE NONE policy root_only xdata
@@ -204,6 +202,6 @@ val ROOT_REWRITE_WITH_CONTEXT =
 
 (* Unlike the explicit extended entries, default TRAVERSE collects once
    before returning a reusable conversion and constructs factories eagerly. *)
-fun TRAVERSE data = TraverseCore.TRAVERSE (core_traversal (data,default_config))
+fun TRAVERSE data = Traverse.TRAVERSE (ordinary_data (data,default_config))
 
 end

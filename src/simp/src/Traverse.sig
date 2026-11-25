@@ -131,4 +131,65 @@ sig
 
    val TRAVERSE : traverse_data -> thm list -> conv
 
+ (* ----------------------------------------------------------------------
+     Configured traversals
+
+     TRAVERSE_WITH_CONTEXT config data {reducer_context, solver_context}
+     traverses as TRAVERSE does with the default_config, except that
+
+     - policy ChildFirst {charge, keep_abstraction} simplifies the
+       subterms of a term before the reducers see the term itself.  The
+       charge is called before each step, and may raise an exception to
+       stop the traversal.  Before descending into an application, an
+       abstraction argument that is not a binder's (!, ?, @) is
+       eta-contracted, unless keep_abstraction holds of the application.
+
+     - a side condition of a reducer or congruence rule is simplified by
+       the subgoaler (given the condition, the side-condition stack, the
+       context theorems and the traversal itself as recurse), or by the
+       traversal if there is none; unless that gives T, the solvers are
+       tried in turn on the result.  Without a subgoaler or solvers, a
+       side condition is proved as TRAVERSE proves it.
+
+     - root_only applies the reducers at the root of the term only;
+       side conditions are still simplified by the full traversal.
+
+     - check_abort is called before each step and solver call, and the
+       observer on every term offered to the reducers and the solver.
+       An exception raised by them, or by the policy, propagates out of
+       the traversal unchanged, even where a conversion combinator would
+       have read it as a failure.
+
+     The reducer_context theorems are added to the reducers' contexts
+     and given to the subgoaler and solvers; the solver_context theorems
+     are given only to the subgoaler and solvers.  Both are collected at
+     each application.
+
+     eta_argument policy contracts the leftmost abstraction argument
+     that the ChildFirst policy would contract, failing if there is none.
+    ---------------------------------------------------------------------- *)
+
+   type simp_prover_ctxt =
+        {stack : term list, context_thms : thm list, recurse : term -> thm}
+   type ssolver = {name : string, solve : simp_prover_ctxt -> term -> thm}
+   type subgoaler = simp_prover_ctxt -> term -> thm
+
+   type child_first_policy =
+        {charge : unit -> unit, keep_abstraction : term -> bool}
+   datatype traversal_policy =
+            ParentFirst
+          | ChildFirst of child_first_policy
+
+   type traverse_config =
+        {policy : traversal_policy, subgoaler : subgoaler option,
+         solvers : ssolver list, root_only : bool,
+         check_abort : (unit -> unit) option,
+         observer : (term -> unit) option}
+   val default_config : traverse_config
+
+   val TRAVERSE_WITH_CONTEXT :
+       traverse_config -> traverse_data ->
+       {reducer_context : thm list, solver_context : thm list} -> conv
+   val eta_argument : child_first_policy -> conv
+
 end (* sig *)
