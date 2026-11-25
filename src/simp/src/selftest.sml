@@ -683,4 +683,83 @@ in
     “^f (^g ^x)”
 end
 
+(* Solvers, loopers, splits and side-condition settings *)
+val _ = let
+  val p = mk_var("p", bool) and q = mk_var("q", bool)
+  fun goals_to_string (gs, _) =
+      String.concatWith "; " (map (term_to_string o snd) gs)
+  fun leaves msg tac g want =
+      (tprint msg;
+       require_msg
+         (check_result
+            (fn (gs, _) => ListPair.allEq (fn ((_, c), w) => c ~~ w)
+                                          (gs, want)))
+         goals_to_string (runtac (VALID tac)) g)
+  fun gives msg conv t want =
+      (tprint msg;
+       require_msg (check_result (fn th => rhs (concl th) ~~ want))
+                   thm_to_string (QCONV conv) t)
+  val taut_ss =
+      add_safe_solver (mk_tactic_solver ("taut", tautLib.TAUT_TAC)) bool_ss
+  val contrapos = “(p ==> q) ==> ~q ==> ~p”
+  val cond_rule = ASSUME “!x:'a. P x ==> (f x = (a:'a))”
+  val bool_split = splitLib.type_split_of bool
+  val cond_goal = “P (if b then x else (y:'a)) : bool”
+  val split_goal = “(b ==> P (x:'a)) /\ (~b ==> P y)”
+  val threaded = prove(
+    “(!x:'a. P x = Q x) ==> (!x:'a. Q x ==> (f x = g x)) ==>
+     (!x:'a. (Q x /\ g x) = h x) ==>
+     ((?x:'a. P x /\ f x) = (?x:'a. h x))”,
+    DISCH_TAC THEN DISCH_TAC THEN
+    DISCH_THEN (fn rebuilt => REWRITE_TAC [GSYM rebuilt]) THEN
+    AP_TERM_TAC THEN ABS_TAC THEN ASM_REWRITE_TAC [] THEN
+    ASM_CASES_TAC “Q (x:'a) : bool” THEN RES_TAC THEN ASM_REWRITE_TAC [])
+  val imp_premises : xsimptac_config =
+      {base = {strip = true, elimvars = false, droptrues = true,
+               oldestfirst = true},
+       concl_in_fixpoint = true, imp_rebuild = false, imp_premises = true}
+  val (once_ss, once_ths) =
+      prepare_rewrite_arguments pureSimps.pure_ss
+                                [Once AND_CLAUSES]
+  val bundled_ss =
+      install_rewrite_bundle (prepare_rewrite_bundle once_ss once_ths) []
+                             once_ss
+  val TTp = “T /\ T /\ p”
+in
+  leaves "Looper splits the simplified goal"
+         (SIMP_TAC (add_looper ("conj", K CONJ_TAC) bool_ss) [])
+         ([], mk_conj(p, q)) [p, q];
+  tprint "Safe solvers are used only in safe mode";
+  require_msg (check_result (equal (0, 1)))
+    (fn (m, n) => Int.toString m ^ " and " ^ Int.toString n ^ " goals")
+    (fn g => (length (fst (runtac (GEN_SIMP_TAC {safe = true} taut_ss []) g)),
+              length (fst (runtac (GEN_SIMP_TAC {safe = false} taut_ss [])
+                                  g))))
+    ([], contrapos);
+  gives "Side-condition depth 0 leaves conditional rewrites unused"
+        (SIMP_CONV (set_cond_depth 0 bool_ss)
+                   [cond_rule, ASSUME “(P:'a -> bool) b”])
+        “(f:'a -> 'a) b” “(f:'a -> 'a) b”;
+  gives "Term order decides permutative rewrites"
+        (SIMP_CONV (set_term_ord (fn (s, t) => Term.compare (t, s)) bool_ss)
+                   [CONJ_COMM])
+        (mk_conj(p, q)) (mk_conj(q, p));
+  leaves "Split splits a conditional" (SIMP_TAC bool_ss [Split bool_split])
+         ([], cond_goal) [split_goal];
+  leaves "ExclX excludes a split rule"
+         (SIMP_TAC (add_split bool_split bool_ss)
+                   [ExclX ("split:" ^ splitLib.split_thm_name bool_split)])
+         ([], cond_goal) [cond_goal];
+  gives "Threaded congruence rule"
+        (SIMP_CONV (bool_ss ++ threaded_cong_ss [threaded])
+                   [ASSUME “!y:'a. bnd y ==> (bdy y <=> bdy' y)”])
+        “?x:'a. bnd x /\ bdy x” “?x:'a. bnd x /\ bdy' x”;
+  leaves "imp_premises moves premises to the assumptions"
+         (GEN_GLOBAL_SIMP_TAC {safe = false} imp_premises bool_ss [])
+         ([], “(x = (a:'a)) ==> (y = x) ==> P y”) [“(P:'a -> bool) a”];
+  gives "A rewrite bundle's bound is shared across calls"
+        (SIMP_CONV bundled_ss [] THENC SIMP_CONV bundled_ss []) TTp
+        “T /\ p”
+end
+
 val _ = exit_count0 failcount
