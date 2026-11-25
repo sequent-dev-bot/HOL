@@ -1,0 +1,11 @@
+HOLHEAP = $(HOLDIR)/bin/hol.state0
+INCLUDES = .. $(HOLDIR)/src/simp/src
+
+all: $(DEFAULT_TARGETS)
+.PHONY: all
+
+linarithRoundTripChildTheory.uo: linarithRoundTripBaseTheory.uo
+linarithDiamondAddTheory.uo: linarithDiamondRootTheory.uo
+linarithDiamondRemoveTheory.uo: linarithDiamondRootTheory.uo
+linarithDiamondChildTheory.uo: linarithDiamondAddTheory.uo \
+                               linarithDiamondRemoveTheory.uo

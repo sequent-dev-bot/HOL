@@ -1,0 +1,50 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `add_safe_simp_wrapper`
+
+``` hol4
+clasimpLib.add_safe_simp_wrapper :
+  simpExtLib.simpset -> thm list ->
+  clasetLib.claset -> clasetLib.claset
+```
+
+------------------------------------------------------------------------
+
+Adds safe assumption-aware full simplification as a safe wrapper.
+
+`add_safe_simp_wrapper ss controls cs` returns `cs` with a wrapper named
+`"safe_asm_full_simp_tac"`. The wrapper first runs the wrapped safe
+classical step. Only when that step has no result does it offer a changed
+safe-simplification transition using `ss` and `controls`. The input is an
+extension simpset, not an ordinary `srw_ss ()`. Controls include literal
+`markerLib.Excl` and `Cong`, and extension `simpExtLib.SF`, `Split` and
+explicit `ExclX`.
+
+Safe mode selects the safe final-solver list for the residual goal. It
+does not change rewriting: conditional-rewrite side conditions still use
+the unsafe solver list, and loopers still run.
+
+The operation does not change `cs`, `ss`, or the global claset. Adding a
+wrapper with the same name replaces the existing wrapper in the returned
+claset.
+
+### Failure
+
+Construction does not fail. The wrapper has no result when neither the
+wrapped step nor safe simplification changes the goal.
+
+### Example
+
+``` hol4
+val safe_cs =
+  clasimpLib.add_safe_simp_wrapper
+    (clasimpLib.clasimp_ss ())
+    [markerLib.Excl "myTheory.expensive_rule"]
+    (clasetLib.the_claset ());
+```
+
+### See also
+
+[`clasimpLib.add_simp_wrapper`](#clasimpLib.add_simp_wrapper),
+[`clasimpLib.CLARSIMP_TAC`](#clasimpLib.CLARSIMP_TAC),
+[`classicalLib.CS_SAFE_TAC`](#classicalLib.CS_SAFE_TAC),
+[`clasetLib`](#clasetLib)

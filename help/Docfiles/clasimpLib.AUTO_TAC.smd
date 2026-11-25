@@ -1,0 +1,66 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `AUTO_TAC`
+
+``` hol4
+clasimpLib.AUTO_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Combines simplification, safe classical reasoning, and bounded search.
+
+`AUTO_TAC thms` uses the current claset and the clasimpset. The clasimpset
+is derived from `srw_ss ()`, lifted into the extension engine, with the
+splitter, conditional-rewrite side-condition depth 40, and safe solvers
+for assumptions, reflexivity, truth, and contradiction. It follows
+updates to `srw_ss ()`.
+
+Importantly, the splitter means that `AUTO_TAC` can split conditional and
+case expressions while simplifying. Plain `SIMP_TAC (srw_ss())` does not
+install that splitter and therefore does not have this behaviour.
+
+The tactic first performs assumption-aware full simplification, then safe
+reasoning. On each remaining goal it tries tableau search at resource bound
+4, then non-duplicating classical depth search at bound 2 with
+simplification available as an unsafe search wrapper. A final safe pass can
+use simplification as a safe wrapper. These defaults are equivalent to
+
+``` hol4
+clasimpLib.AUTO_DEPTH_TAC {blast = 4, depth = 2} thms
+```
+
+Unmarked theorems in `thms` are inserted as assumptions before the tactic
+runs. Use `SIntro`, `Intro`, `SElim`, `Elim`, `SDest`, `Dest`, or `Del` for
+temporary claset changes, `Simp th` for a temporary rewrite, and `Iff th`
+for a temporary iff declaration. Generic simplifier markers and extension
+`simpExtLib.Split`/`ExclX` controls are passed to the simplifier.
+
+The tactic has change-or-fail residue semantics: it can succeed with
+residual goals, but only when the goal state changes, up to alpha
+conversion.
+
+### Failure
+
+Fails if its complete simplification-and-search pass leaves the goal
+unchanged. It can also fail while malformed marked rules are processed.
+
+### Example
+
+``` hol4
+Theorem auto_tac_example:
+  (p ==> q) ==> p ==> q
+Proof
+  clasimpLib.AUTO_TAC []
+QED
+```
+
+### See also
+
+[`clasimpLib.AUTO_DEPTH_TAC`](#clasimpLib.AUTO_DEPTH_TAC),
+[`clasimpLib.CS_AUTO_TAC`](#clasimpLib.CS_AUTO_TAC),
+[`clasimpLib.FORCE_TAC`](#clasimpLib.FORCE_TAC),
+[`clasimpLib.CLARSIMP_TAC`](#clasimpLib.CLARSIMP_TAC),
+[`clasetLib.Simp`](#clasetLib.Simp),
+[`clasetLib.Iff`](#clasetLib.Iff),
+[`bossLib.SIMP_TAC`](#bossLib.SIMP_TAC),
+[`simpExtLib.split_ss`](#simpExtLib.split_ss)

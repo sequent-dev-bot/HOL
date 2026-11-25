@@ -1,0 +1,52 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `SLOW_BEST_TAC`
+
+``` hol4
+classicalLib.SLOW_BEST_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Solves a goal by less committing best-first classical search.
+
+`SLOW_BEST_TAC thms` safely saturates the whole state, then expands the
+first goal. Its frontier uses the total normalized size of all open goals.
+The tactic uses the slow cascade:
+unsafe-rule alternatives remain available after instantiating alternatives
+have been found. Children are enumerated eagerly, and no dynamic per-goal
+pruning is performed. `clasetSearch.node_limit` defaults to 100000
+expanded states; setting it to a non-positive value disables the limit.
+
+The theorem list locally accepts `SIntro`, `Intro`, `SElim`, `Elim`,
+`SDest`, `Dest` and `Del` markers. Every unmarked theorem is inserted as an
+assumption before search starts. Content-bearing generic simplifier
+wrappers are unwrapped and inserted; inert generic controls are ignored.
+
+The tactic succeeds only with a replayed proof that closes every goal.
+
+### Failure
+
+Fails if the frontier is exhausted or the node limit is reached before a
+complete proof is found. Marker processing can also reject malformed extra
+rules.
+
+### Example
+
+``` hol4
+Theorem slow_best_tac_example:
+  (p \/ q) ==> (p ==> r) ==> (q ==> r) ==> r
+Proof
+  classicalLib.SLOW_BEST_TAC []
+QED
+```
+
+### See also
+
+[`classicalLib.BEST_TAC`](#classicalLib.BEST_TAC),
+[`classicalLib.FIRST_BEST_TAC`](#classicalLib.FIRST_BEST_TAC),
+[`classicalLib.SLOW_TAC`](#classicalLib.SLOW_TAC),
+[`classicalLib.SLOW_ASTAR_TAC`](#classicalLib.SLOW_ASTAR_TAC),
+[`classicalLib.DEEPEN_TAC`](#classicalLib.DEEPEN_TAC),
+[`classicalLib.SLOW_STEP_TAC`](#classicalLib.SLOW_STEP_TAC),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC)

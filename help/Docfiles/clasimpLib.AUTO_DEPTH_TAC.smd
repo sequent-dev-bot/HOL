@@ -1,0 +1,48 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `AUTO_DEPTH_TAC`
+
+``` hol4
+clasimpLib.AUTO_DEPTH_TAC :
+  {blast : int, depth : int} -> thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Runs `AUTO_TAC` with explicit tableau and classical-search bounds.
+
+`AUTO_DEPTH_TAC {blast = m, depth = n} thms` has the same simplification,
+safe-reasoning, and residue semantics as `AUTO_TAC thms`. On every goal
+remaining after the first safe pass, it first tries tableau search at
+resource bound `m`, over the same claset `BLAST_DEPTH_TAC` uses. If that
+fails, it tries non-duplicating classical depth search at bound `n`, with
+simplification installed as an unsafe wrapper.
+
+The bounds measure their respective engines' search resources; neither is
+a literal formula depth. A negative blast bound disables tableau search. A
+negative classical depth prevents resource-consuming steps, although free
+steps can still solve a goal. `AUTO_TAC` supplies
+`{blast = 4, depth = 2}`.
+
+Unmarked theorems are inserted as assumptions. Explicit classical markers
+modify the temporary claset, `Simp` and `Iff` modify the temporary
+clasimpset treatment, and generic simplifier markers are passed through.
+The tactic succeeds only if the goal state changes and may leave residual
+goals.
+
+### Failure
+
+Fails if the complete pass leaves the goal unchanged, or if a malformed
+marked rule cannot be processed.
+
+### Example
+
+``` hol4
+clasimpLib.AUTO_DEPTH_TAC {blast = 6, depth = 4} []
+```
+
+### See also
+
+[`clasimpLib.AUTO_TAC`](#clasimpLib.AUTO_TAC),
+[`clasimpLib.CS_AUTO_TAC`](#clasimpLib.CS_AUTO_TAC),
+[`classicalLib.CS_DEPTH_SOLVE_TAC`](#classicalLib.CS_DEPTH_SOLVE_TAC),
+[`tableauLib.CS_BLAST_DEPTH_TAC`](#tableauLib.CS_BLAST_DEPTH_TAC)

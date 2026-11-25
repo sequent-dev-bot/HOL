@@ -1,0 +1,53 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CFG_LINARITH_TAC`
+
+``` hol4
+type linarith_config = {
+  neq_limit : int,
+  split_limit : int
+}
+
+linarithLib.default_config : linarithLib.linarith_config
+
+linarithLib.CFG_LINARITH_TAC :
+  linarithLib.linarith_config -> thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Proves a goal using explicitly configured linear arithmetic.
+
+The tactic has the same preprocessing, search, and theorem-argument
+semantics as `LINARITH_TAC`. `neq_limit` is the maximum number of
+disequalities for which arithmetic search explores every strict-order
+case. If there are more, the disequalities are omitted from that search.
+`split_limit` bounds both operator-splitting rounds and atom-fact
+augmentation rounds, counted along one branch of the search. It does not
+bound disjunction elimination, which needs no bound: each step of it
+consumes a disjunctive assumption, and only an operator split introduces
+one. The default value is `{neq_limit = 9, split_limit = 9}`.
+
+### Failure
+
+Fails under the conditions described for `LINARITH_TAC`, including when
+operator splitting or fact augmentation exceeds `split_limit`.
+
+### Example
+
+``` hol4
+val cfg : linarithLib.linarith_config =
+  {neq_limit = 1, split_limit = 9};
+
+Theorem cfg_linarith_tac_example:
+  !x : num. x <> 1 /\ x <= 1 ==> x < 1
+Proof
+  rpt strip_tac >>
+  linarithLib.CFG_LINARITH_TAC cfg []
+QED
+```
+
+### See also
+
+[`linarithLib`](#linarithLib),
+[`linarithLib.LINARITH_TAC`](#linarithLib.LINARITH_TAC),
+[`linarithLib.SIMPLE_LINARITH_TAC`](#linarithLib.SIMPLE_LINARITH_TAC)

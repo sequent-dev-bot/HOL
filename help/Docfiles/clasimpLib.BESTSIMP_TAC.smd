@@ -1,0 +1,40 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `BESTSIMP_TAC`
+
+``` hol4
+clasimpLib.BESTSIMP_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Solves a goal by best-first classical search with simplification.
+
+`BESTSIMP_TAC thms` runs the classical best-first driver with
+assumption-aware full simplification from the current clasimpset installed
+as an unsafe wrapper on the current claset. Frontier priority is normalized
+goal size, and `clasetSearch.node_limit` bounds expanded states.
+
+Unmarked theorems are inserted as assumptions. Explicit classical markers,
+`Simp`, `Iff`, and generic simplifier controls configure only this call.
+
+### Failure
+
+Fails unless search closes the goal before frontier exhaustion or the node
+limit.
+
+### Example
+
+``` hol4
+Theorem bestsimp_tac_example:
+  (p /\ q) ==> q /\ p
+Proof
+  clasimpLib.BESTSIMP_TAC []
+QED
+```
+
+### See also
+
+[`clasimpLib.CS_BESTSIMP_TAC`](#clasimpLib.CS_BESTSIMP_TAC),
+[`clasimpLib.FASTFORCE_TAC`](#clasimpLib.FASTFORCE_TAC),
+[`clasimpLib.SLOWSIMP_TAC`](#clasimpLib.SLOWSIMP_TAC),
+[`classicalLib.BEST_TAC`](#classicalLib.BEST_TAC)

@@ -1,0 +1,35 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CS_BESTSIMP_TAC`
+
+``` hol4
+clasimpLib.CS_BESTSIMP_TAC :
+  clasetLib.claset -> simpExtLib.simpset -> tactic
+```
+
+------------------------------------------------------------------------
+
+Constructs the context-explicit form of `BESTSIMP_TAC`.
+
+`CS_BESTSIMP_TAC cs ss` runs best-first classical search with
+assumption-aware full simplification from `ss` installed as an unsafe
+wrapper on `cs`. It reads no global clasimp state and processes no theorem
+list.
+
+### Failure
+
+Fails unless search closes the goal before frontier exhaustion or
+`clasetSearch.node_limit`.
+
+### Example
+
+``` hol4
+val bestsimp =
+  clasimpLib.CS_BESTSIMP_TAC
+    (clasetLib.the_claset ()) (clasimpLib.clasimp_ss ());
+```
+
+### See also
+
+[`clasimpLib.BESTSIMP_TAC`](#clasimpLib.BESTSIMP_TAC),
+[`clasimpLib.add_simp_wrapper`](#clasimpLib.add_simp_wrapper),
+[`classicalLib.CS_BEST_TAC`](#classicalLib.CS_BEST_TAC)

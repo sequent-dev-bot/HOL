@@ -1,0 +1,37 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CS_ASTAR_TAC`
+
+``` hol4
+classicalLib.CS_ASTAR_TAC : clasetLib.claset -> NTactical.ntactic
+```
+
+------------------------------------------------------------------------
+
+Constructs the claset-explicit form of `ASTAR_TAC`.
+
+`CS_ASTAR_TAC cs` safely saturates the whole state, then expands the first
+goal with the fast instantiating or unsafe cascade in A-star
+solve-completely search. Each state has cost
+`goal size + 5 * search level`. The weight 5 is fixed.
+`clasetSearch.node_limit`, initially 100000, limits expanded states.
+
+This interface takes `cs` directly, exposes its result sequence, and does
+not process theorem-list markers.
+
+### Failure
+
+Produces no result on frontier exhaustion or when the expansion limit is
+reached without a complete proof. Replay failure is an error.
+
+### Example
+
+``` hol4
+val astar = classicalLib.CS_ASTAR_TAC (clasetLib.the_claset ());
+```
+
+### See also
+
+[`classicalLib.ASTAR_TAC`](#classicalLib.ASTAR_TAC),
+[`classicalLib.CS_SLOW_ASTAR_TAC`](#classicalLib.CS_SLOW_ASTAR_TAC),
+[`classicalLib.CS_BEST_TAC`](#classicalLib.CS_BEST_TAC),
+[`clasetLib`](#clasetLib)

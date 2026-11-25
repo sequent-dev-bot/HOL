@@ -1,0 +1,65 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `[arith_split]`
+
+``` hol4
+Theorem theorem_name[arith_split]:
+  split_rule
+```
+
+------------------------------------------------------------------------
+
+Registers a persistent operator-splitting rule for full linarith tactics.
+
+The argument-free `[arith_split]` theorem attribute accepts a split in
+P-form, usually
+`!P ... . P (operator arguments) <=> branch_formula`. Both conclusion and
+assumption forms are accepted. Declarations are shape-validated, inherited
+through theory ancestry, and used by
+`LINARITH_TAC` and `CFG_LINARITH_TAC`. They are not used by
+`SIMPLE_LINARITH_TAC`, the forward prover, reducer, or simplifier solver.
+
+This set is distinct from the simplifier's `[split]` attribute. The
+per-invocation counterpart is `simpExtLib.Split th`, owned by the
+simplifier extension vocabulary, not `markerLib`. Arithmetic argument
+classification needs no extension simpset. The attribute is `[arith_split]`,
+not `[linarith_split]`. Use `linarithData.remove_arith_split` for
+persistent removal.
+
+### Failure
+
+The attribute takes no arguments and rejects theorems that do not have the
+required P-form. A full tactic call can also fail if repeated splitting
+exceeds its configured limit.
+
+### Example
+
+``` hol4
+Definition choose_num_def:
+  choose_num b (x : num) y = if b then x else y
+End
+
+Theorem choose_num_split[arith_split]:
+  !P b x y.
+    P (choose_num b x y) <=>
+    (b ==> P x) /\ (~b ==> P y)
+Proof
+  rw [choose_num_def]
+QED
+
+Theorem arith_split_attribute_example:
+  !b x y z.
+    x <= z /\ y <= z ==> choose_num b x y <= z
+Proof
+  rpt strip_tac >>
+  linarithLib.LINARITH_TAC []
+QED
+```
+
+### See also
+
+[`linarithLib`](#linarithLib),
+[`linarithLib.LINARITH_TAC`](#linarithLib.LINARITH_TAC),
+[`linarithLib.CFG_LINARITH_TAC`](#linarithLib.CFG_LINARITH_TAC),
+[`linarithData.arith`](#linarithData.arith),
+[`linarithData.remove_arith`](#linarithData.remove_arith),
+[`splitLib.SPLIT_TAC`](#splitLib.SPLIT_TAC)

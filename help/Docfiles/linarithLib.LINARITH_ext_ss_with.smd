@@ -1,0 +1,25 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `LINARITH_ext_ss_with`
+
+``` hol4
+linarithLib.LINARITH_ext_ss_with : thm list -> simpExtLib.ssfrag
+```
+
+------------------------------------------------------------------------
+
+Provides `LINARITH_ext_ss` with an explicit list of `[arith]` facts.
+
+`LINARITH_ext_ss_with facts` is the fragment of
+[`LINARITH_ext_ss`](#linarithLib.LINARITH_ext_ss) whose facts are exactly
+`facts`: the global `[arith]` set is not read, whatever
+it holds.
+
+### Failure
+
+As for [`LINARITH_ext_ss`](#linarithLib.LINARITH_ext_ss).
+
+### See also
+
+[`linarithLib.LINARITH_ext_ss`](#linarithLib.LINARITH_ext_ss),
+[`linarithLib.linarith_solver_with_facts`](#linarithLib.linarith_solver_with_facts),
+[`linarithData.arith`](#linarithData.arith)

@@ -1,0 +1,46 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CS_DEPTH_SOLVE_TAC`
+
+``` hol4
+classicalLib.CS_DEPTH_SOLVE_TAC :
+  {dup : bool} -> int -> clasetLib.claset -> NTactical.ntactic
+```
+
+------------------------------------------------------------------------
+
+Constructs fixed-bound depth-first, solve-completely classical search.
+
+`CS_DEPTH_SOLVE_TAC {dup} n cs` safely saturates a state, then searches the
+first open goal using `cs`. Matching safe steps and unifying assumption,
+contradiction, and zero-premise safe steps do not consume the bound.
+Positive-premise instantiating and unsafe steps consume one unit on each
+branch.
+
+When `dup` is `false`, a unifying elimination or destruction rule is not
+allowed to duplicate its major premise. When `dup` is `true`, duplicating
+alternatives are available. A negative bound has no positive-resource
+steps, although free steps can still solve a goal.
+
+This raw interface takes a prepared claset, returns an `ntactic`, performs
+no theorem-list processing, and does not make the result deterministic.
+
+### Failure
+
+Produces no result if no complete proof is found within the bound. If
+kernel replay of an engine solution fails, search backtracks to another
+solution; the tactic has no result if none can be replayed.
+
+### Example
+
+``` hol4
+val depth_search =
+  classicalLib.CS_DEPTH_SOLVE_TAC {dup = false} 4
+    (clasetLib.the_claset ());
+```
+
+### See also
+
+[`classicalLib.CS_DEEPEN_TAC`](#classicalLib.CS_DEEPEN_TAC),
+[`classicalLib.DEEPEN_TAC`](#classicalLib.DEEPEN_TAC),
+[`clasimpLib.AUTO_DEPTH_TAC`](#clasimpLib.AUTO_DEPTH_TAC),
+[`tableauLib.CS_BLAST_DEPTH_TAC`](#tableauLib.CS_BLAST_DEPTH_TAC)

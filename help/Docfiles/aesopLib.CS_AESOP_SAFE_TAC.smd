@@ -1,0 +1,47 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CS_AESOP_SAFE_TAC`
+
+``` hol4
+aesopLib.CS_AESOP_SAFE_TAC :
+  aesopLib.aesop_config ->
+  clasetLib.claset -> simpExtLib.simpset -> tactic
+```
+
+------------------------------------------------------------------------
+
+Constructs the context-explicit, configurable form of `AESOP_SAFE_TAC`.
+
+`CS_AESOP_SAFE_TAC config cs ss` normalises and safely saturates with the
+supplied claset and extension simpset. Use a tracked construction such as
+`aesopData.aesop_ss ()`, not an ordinary `srw_ss ()`. It leaves the safe
+frontier and tries no
+unsafe rules. `config.max_depth` bounds branch depth and normalisation.
+Both configuration fields must be non-negative; `max_rapps` is relevant
+only to the unsafe search performed by `CS_AESOP_TAC`.
+
+The tactic processes no theorem list. The caller is responsible for
+inserting facts and adding temporary rules or rewrites to `cs` and `ss`.
+Persistent split rules and session tactic rules registered by
+`augment_aesop` remain part of the Aesop rule sources.
+
+The tactic succeeds only when the goal state changes.
+
+### Failure
+
+Fails if safe saturation leaves the goal unchanged, if a depth or
+normalisation limit is reached, or if either configuration field is
+negative.
+
+### Example
+
+``` hol4
+val safe_aesop =
+  aesopLib.CS_AESOP_SAFE_TAC aesopLib.default_config
+    (clasetLib.the_claset ()) (aesopData.aesop_ss ());
+```
+
+### See also
+
+[`aesopLib.AESOP_SAFE_TAC`](#aesopLib.AESOP_SAFE_TAC),
+[`aesopLib.CS_AESOP_TAC`](#aesopLib.CS_AESOP_TAC),
+[`aesopLib.augment_aesop`](#aesopLib.augment_aesop)

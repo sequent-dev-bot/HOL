@@ -1,0 +1,7 @@
+HOLHEAP = $(HOLDIR)/bin/hol.state0
+INCLUDES = ..
+
+all: $(DEFAULT_TARGETS)
+.PHONY: all
+
+aesopSimpRoundTripChildTheory.uo: aesopSimpRoundTripBaseTheory.uo

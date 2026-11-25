@@ -1,0 +1,41 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `augment_aesop_rule`
+
+``` hol4
+aesopLib.augment_aesop_rule : aesopLib.rule -> unit
+```
+
+------------------------------------------------------------------------
+
+Registers a session-local Aesop rule that a rule builder returned.
+
+`augment_aesop_rule rule` installs an already built rule, keeping its name,
+its phase, and the retrieval index it carries. It is the form to use for
+the output of a builder such as `aesopLib.cases_rule_for`, which
+`augment_aesop` cannot take because that entry point builds its rule from a
+tactic itself.
+
+The registration affects subsequent Aesop calls in the current session. It
+is not stored in a theory and is not exported.
+
+### Failure
+
+Fails if the rule's action is not a tactic: rules derived from a theorem
+act on the search engine's own goal representation, which the tactic
+registry does not hold. Errors or unsuitable results from the rule's tactic
+are encountered when Aesop tries the rule.
+
+### Example
+
+``` hol4
+val _ =
+  aesopLib.augment_aesop_rule
+    (aesopLib.cases_rule_for ``:'a option``);
+```
+
+### See also
+
+[`aesopLib.augment_aesop`](#aesopLib.augment_aesop),
+[`aesopLib.AESOP_TAC`](#aesopLib.AESOP_TAC),
+[`aesopLib.AESOP_SAFE_TAC`](#aesopLib.AESOP_SAFE_TAC),
+[`clasetLib`](#clasetLib)

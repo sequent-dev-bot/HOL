@@ -1,0 +1,24 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `aesop_ss_of`
+
+``` hol4
+aesopData.aesop_ss_of : Context.t -> simpExtLib.simpset
+```
+
+------------------------------------------------------------------------
+
+Returns Aesop's simplifier default for a given context.
+
+`aesop_ss_of ctxt` is [`aesop_ss`](#aesopData.aesop_ss) for the context
+`ctxt` instead of the ambient one: the simpset follows the `srw_ss`, the
+`[aesop_simp]` rewrites and the [`[arith]`](#linarithData.arith) set of
+`ctxt`.
+
+### Failure
+
+As for [`aesop_ss`](#aesopData.aesop_ss).
+
+### See also
+
+[`aesopData.aesop_ss`](#aesopData.aesop_ss),
+[`linarithData.arith`](#linarithData.arith)

@@ -1,0 +1,41 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `Simp`
+
+``` hol4
+clasetLib.Simp : thm -> thm
+```
+
+------------------------------------------------------------------------
+
+Marks a theorem as a temporary simplification rule for a clasimp tactic.
+
+`Simp th` is logically equivalent to `th`, but carries a marker recognized
+in the theorem-list argument of `AUTO_TAC`, `FORCE_TAC`, `FASTFORCE_TAC`,
+`SLOWSIMP_TAC`, `BESTSIMP_TAC`, and `CLARSIMP_TAC`. The enclosed theorem is
+added to the invocation simpset and is not inserted as an assumption or
+added to the temporary claset.
+
+The marker is temporary. Use the standard `[simp]` declaration mechanism
+for a persistent rewrite.
+
+Classical-only and tableau tactics have no simpset and reject `Simp`
+instead of silently changing its meaning.
+
+### Failure
+
+Constructing `Simp th` does not validate the rewrite. A consuming clasimp
+tactic can fail if the theorem cannot be made into a simplification rule.
+Classical-only and tableau tactics reject the marker.
+
+### Example
+
+``` hol4
+clasimpLib.AUTO_TAC [clasetLib.Simp my_rewrite]
+```
+
+### See also
+
+[`clasetLib.Iff`](#clasetLib.Iff),
+[`clasimpLib.AUTO_TAC`](#clasimpLib.AUTO_TAC),
+[`clasimpLib.iff`](#clasimpLib.iff),
+[`simpLib.SIMP_TAC`](#simpLib.SIMP_TAC)

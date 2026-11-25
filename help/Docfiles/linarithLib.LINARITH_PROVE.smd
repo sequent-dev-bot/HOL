@@ -1,0 +1,44 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `LINARITH_PROVE`
+
+``` hol4
+linarithLib.LINARITH_PROVE : term -> thm
+```
+
+------------------------------------------------------------------------
+
+Proves a linear-arithmetic proposition by forward certificate replay.
+
+`LINARITH_PROVE tm` returns a theorem with conclusion exactly `tm`. It
+strips leading universal quantifiers and implication premises, atomises
+conjunctive premises, proves the resulting arithmetic consequence, and
+reconstructs the original proposition.
+
+Only premises in `tm` are used: ambient assumptions and persistent
+`[arith]` facts are not consulted. This forward interface handles the
+engine's default disequality splitting but does not run the full tactic's
+operator splitting, negation-normal-form preprocessing, relevance
+filtering, or atom-fact augmentation.
+
+### Failure
+
+Fails if `tm` is not a supported linear-arithmetic consequence, a carrier
+has no registered instance, or required goal-level preprocessing is
+absent. A failure of the replay machinery itself — a registered instance
+whose rules cannot be applied, say — is reported as it stands rather than
+as a failure to find a proof.
+
+### Example
+
+``` hol4
+val transitivity =
+  linarithLib.LINARITH_PROVE
+    ``!x y z : num. x <= y /\ y <= z ==> x <= z``;
+```
+
+### See also
+
+[`linarithLib`](#linarithLib),
+[`linarithLib.LINARITH_TAC`](#linarithLib.LINARITH_TAC),
+[`linarithLib.LINARITH_CONV`](#linarithLib.LINARITH_CONV),
+[`linarithLib.SIMPLE_LINARITH_TAC`](#linarithLib.SIMPLE_LINARITH_TAC)

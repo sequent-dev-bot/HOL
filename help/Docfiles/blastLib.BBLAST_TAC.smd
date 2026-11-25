@@ -1,0 +1,48 @@
+>>__ load "blastLib";
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="words"};
+## `BBLAST_TAC`
+
+``` hol4
+blastLib.BBLAST_TAC : tactic
+```
+
+------------------------------------------------------------------------
+
+Attempts finite-word goals by Boolean bit-blasting.
+
+`BBLAST_TAC` is `Tactic.CONV_TAC blastLib.BBLAST_CONV`. It applies the
+conversion to the goal conclusion, expanding supported word operations
+into Boolean formulas. It can close a converted proposition or leave a
+residual Boolean goal. If the conversion reports no change, the tactic
+succeeds without changing the goal. This brute-force approach is most
+useful for small concrete word sizes. Its supported operations and
+limitations are those of `BBLAST_CONV`.
+
+Despite the similar name, this tactic is unrelated to
+`tableauLib.BLAST_TAC`. `BBLAST_TAC` specializes in finite-word
+bit-blasting, whereas `tableauLib.BLAST_TAC` performs general classical
+tableau search using a classical rule set.
+
+### Failure
+
+Fails if `BBLAST_CONV` raises an exception. Unsupported operations may
+instead remain in an unchanged or residual goal, so success does not by
+itself mean that the goal was solved.
+
+### Example
+
+``` hol4
+Theorem bblast_tac_example:
+  !a : word8. a && 0w = 0w
+Proof
+  blastLib.BBLAST_TAC
+QED
+```
+
+### See also
+
+[`blastLib.BBLAST_CONV`](#blastLib.BBLAST_CONV),
+[`tableauLib.BLAST_TAC`](#tableauLib.BLAST_TAC),
+[`tableauLib.BLAST_DEPTH_TAC`](#tableauLib.BLAST_DEPTH_TAC),
+[`wordsLib.WORD_BIT_EQ_CONV`](#wordsLib.WORD_BIT_EQ_CONV),
+[`wordsLib.WORD_DECIDE`](#wordsLib.WORD_DECIDE)

@@ -1,0 +1,35 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `aesop_ss`
+
+``` hol4
+aesopData.aesop_ss : unit -> simpExtLib.simpset
+```
+
+------------------------------------------------------------------------
+
+Returns Aesop's simplifier default for the ambient context.
+
+The simpset is `srw_ss ()`, lifted into the extension engine by
+`simpExtLib.lift_simpset`, with weakened conditional congruence,
+eta-reduction (`boolSimps.ETA_ss`), conditional depth 40, the safe solver
+`clasimpLib.safe_solver`, and the unsafe solver
+`linarith_solver_with_facts` over the context's
+[`[arith]`](#linarithData.arith) facts. The context's `[aesop_simp]`
+rewrites are added. It has no case splitter
+([`simpExtLib.split_ss`](#simpExtLib.split_ss)); splitting is left to the
+search. Changes to `srw_ss ()` carry over; scope a temporary one with
+`BasicProvers.with_simpset_updates`.
+
+### Failure
+
+Fails if the context's `srw_ss` has no `"CONG"` fragment, e.g. after
+[`BasicProvers.diminish_srw_ss ["CONG"]`](#BasicProvers.diminish_srw_ss).
+
+### See also
+
+[`aesopData.aesop_ss_of`](#aesopData.aesop_ss_of),
+[`linarithLib.linarith_solver_with_facts`](#linarithLib.linarith_solver_with_facts),
+[`aesopLib.AESOP_TAC`](#aesopLib.AESOP_TAC),
+[`aesopLib.CS_AESOP_TAC`](#aesopLib.CS_AESOP_TAC),
+[`simpExtLib.split_ss`](#simpExtLib.split_ss),
+[`BasicProvers.diminish_srw_ss`](#BasicProvers.diminish_srw_ss)

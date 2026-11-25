@@ -1,0 +1,54 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `FAST_TAC`
+
+``` hol4
+classicalLib.FAST_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Solves a goal by depth-first classical search.
+
+`FAST_TAC thms` repeatedly saturates the state with safe reasoning, then
+searches the first open goal. It tries instantiating rules before unsafe
+rules and commits to the instantiating family whenever that family has a
+candidate. Search uses dynamic pruning when choices made while solving one
+goal cannot affect the remaining goals. It has no numeric depth or node
+bound and can therefore diverge.
+
+The theorem list modifies the current classical rule set for this call.
+The markers `SIntro`, `Intro`, `SElim`, `Elim`, `SDest`, `Dest` and `Del`
+add or remove rules. Every unmarked theorem is inserted as an assumption
+before search starts. Content-bearing generic simplifier wrappers such as
+`Once th` are unwrapped and inserted; inert controls such as `Cong`, `Excl`
+and `SF` are ignored. No change survives the call.
+
+Unlike `SAFE_TAC`, this is a solve-completely tactic: a successful result
+has no residual goals.
+
+### Failure
+
+Fails if depth-first search does not find and replay a complete proof.
+Search may diverge instead of failing. Malformed extra rules can also fail
+while the theorem list is processed.
+
+### Example
+
+``` hol4
+Theorem fast_tac_example:
+  (?x. x = a) /\ (p \/ ~p)
+Proof
+  classicalLib.FAST_TAC []
+QED
+```
+
+### See also
+
+[`classicalLib.SLOW_TAC`](#classicalLib.SLOW_TAC),
+[`classicalLib.BEST_TAC`](#classicalLib.BEST_TAC),
+[`classicalLib.FIRST_BEST_TAC`](#classicalLib.FIRST_BEST_TAC),
+[`classicalLib.ASTAR_TAC`](#classicalLib.ASTAR_TAC),
+[`classicalLib.DEEPEN_TAC`](#classicalLib.DEEPEN_TAC),
+[`classicalLib.STEP_TAC`](#classicalLib.STEP_TAC),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC)

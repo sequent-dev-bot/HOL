@@ -1,0 +1,45 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `SIMPLE_LINARITH_TAC`
+
+``` hol4
+linarithLib.SIMPLE_LINARITH_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Proves a directly presented system of linear constraints.
+
+The tactic inserts persistent `[arith]` facts and the unmarked theorems in
+its argument, then runs arithmetic search and kernel replay with the
+default disequality configuration. It uses carrier discreteness where
+applicable, but does not perform relevance filtering, Boolean
+preprocessing, operator splitting, or atom-fact augmentation.
+A `Split` argument and all foreign theorem markers are therefore rejected.
+The tactic has close-or-fail semantics.
+
+Use `LINARITH_TAC` instead when a goal contains `MIN`, `MAX`, natural
+subtraction, absolute value, division, modulus, or Boolean structure which
+must be preprocessed.
+
+### Failure
+
+Fails if the supplied constraints do not directly yield a proof, a needed
+carrier has no registered instance, or an argument is marked.
+
+### Example
+
+``` hol4
+Theorem simple_linarith_tac_example:
+  !x y z : num. x <= y /\ y < z ==> x < z
+Proof
+  rpt strip_tac >>
+  linarithLib.SIMPLE_LINARITH_TAC []
+QED
+```
+
+### See also
+
+[`linarithLib`](#linarithLib),
+[`linarithLib.LINARITH_TAC`](#linarithLib.LINARITH_TAC),
+[`linarithLib.CFG_LINARITH_TAC`](#linarithLib.CFG_LINARITH_TAC),
+[`linarithLib.LINARITH_PROVE`](#linarithLib.LINARITH_PROVE)

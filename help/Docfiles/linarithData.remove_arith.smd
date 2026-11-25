@@ -1,0 +1,70 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `remove_arith`, `remove_arith_split`
+
+``` hol4
+linarithData.remove_arith : string -> unit
+linarithData.remove_arith_split : string -> unit
+```
+
+------------------------------------------------------------------------
+
+Remove persistent linarith facts or operator-splitting rules.
+
+Each function records and immediately applies a persistent `REMOVE` delta
+for its corresponding theorem set. The removal is inherited by child
+theories and remains effective when declarations are reloaded. Names may
+use database form `Theory.name`; kernel form `Theory$name` is also
+recognised, and an unqualified `name` is resolved against the theory the
+call is made in. That resolution happens where the call is written, so
+the recorded delta designates the same declaration in every descendant
+theory that replays it. Removing an absent, valid name is harmless. The
+`[arith]` and `[arith_split]` sets are independent.
+
+Both sets hold user declarations only. The operator-splitting rules a
+linarith instance supplies through its `pre_split` field are built in,
+do not belong to the `[arith_split]` set, and cannot be removed.
+
+### Failure
+
+Fails if a supplied `Theory.name` database name cannot be parsed, in
+particular if it carries more than one dot. A string in `Theory$name`
+kernel form is used directly as a table key. Removing an absent name does
+not fail.
+
+### Example
+
+The following declarations are removed from their separate sets in the
+current theory.
+
+``` hol4
+Theorem temporary_arith_fact[arith]:
+  (0 : num) <= 1
+Proof
+  simp []
+QED
+
+Theorem temporary_arith_split[arith_split]:
+  !P b x y.
+    P (if b then (x : num) else y) <=>
+    (b ==> P x) /\ (~b ==> P y)
+Proof
+  rw []
+QED
+
+val linarith_doc_theory = Theory.current_theory ();
+
+val _ =
+  linarithData.remove_arith
+    (linarith_doc_theory ^ ".temporary_arith_fact");
+
+val _ =
+  linarithData.remove_arith_split
+    (linarith_doc_theory ^ ".temporary_arith_split");
+```
+
+### See also
+
+[`linarithData.arith`](#linarithData.arith),
+[`linarithData.arith_split`](#linarithData.arith_split),
+[`linarithData.register_instance`](#linarithData.register_instance),
+[`linarithLib`](#linarithLib)

@@ -1,0 +1,56 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `register_instance`
+
+``` hol4
+linarithData.register_instance :
+  linarithData.linarith_instance -> unit
+```
+
+------------------------------------------------------------------------
+
+Installs a carrier implementation in the session-local linarith registry.
+
+A linarith instance is one carrier type's implementation of everything
+the generic engine needs: the type itself, whether its order is discrete,
+term destructors and a literal constructor, the theorems replayed for
+addition, scaling, negated order, disequality and non-negativity, a
+normalising conversion, and the carrier rewrites, operator-splitting
+rules and per-atom facts it contributes to preprocessing. Registration
+makes these available to decomposition, preprocessing and certificate
+replay for the whole session, so that no part of the engine tests for a
+particular carrier. Injections between carriers are installed separately
+with `register_injection`.
+
+The contract of each field — including which of them may decline an
+individual term and which merely record that the carrier has no such
+operator — is documented on the `linarith_instance` type in
+`src/auto/linarith/linarithData.sig`, which is the authority on it.
+
+The registry is keyed by `#ty`. Registering another instance for the same
+type atomically replaces the old entry and issues a warning. Registration
+does not eagerly validate the theorem kit; malformed components fail when
+an arithmetic operation consumes them. Instance modules normally register
+their records as a module-loading side effect.
+
+### Failure
+
+Registration itself performs no theorem-kit validation. Invalid callbacks
+or replay theorems generally fail only when the instance is used.
+
+### Example
+
+The natural-number instance can be reinstalled explicitly. Calling the
+resulting function after `linarithLib` has loaded intentionally warns that
+it replaces the existing entry.
+
+``` hol4
+fun reinstall_num_instance () =
+  linarithData.register_instance linarithNum.instance;
+```
+
+### See also
+
+[`linarithLib`](#linarithLib),
+[`linarithData.arith`](#linarithData.arith),
+[`linarithData.arith_split`](#linarithData.arith_split),
+[`linarithLib.LINARITH_TAC`](#linarithLib.LINARITH_TAC)

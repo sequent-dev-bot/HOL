@@ -1,0 +1,66 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CLARIFY_TAC`
+
+``` hol4
+classicalLib.CLARIFY_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Repeatedly applies non-branching safe classical-reasoning steps.
+
+`CLARIFY_TAC thms` uses the current theory's classical rule set. Its base
+cascade performs built-in safe steps, safe rules with at most one premise,
+and two-premise safe rules when one branch closes immediately by assumption
+or contradiction. Rules with three or more premises and genuinely branching
+two-premise rules are not clarification steps. Unlike the full safe cascade,
+it does not perform assumption modus ponens. Registered safe wrappers also
+participate. In particular, clarification can simplify an implication while
+leaving an unforced conjunction conclusion intact.
+
+The theorem-list vocabulary is the same as for `SAFE_TAC`: `SIntro`,
+`Intro`, `SElim`, `Elim`, `SDest`, `Dest` and `Del` modify a temporary rule
+set. Every unmarked theorem is inserted into the goal as an assumption
+before clarification starts. Content-bearing generic simplifier wrappers
+are unwrapped and inserted; inert generic controls are ignored. The tactic
+uses matching and does not instantiate goal variables.
+
+The tactic need not solve the goal; it can succeed with residual goals.
+
+### Failure
+
+After its temporary rule set has been constructed, fails exactly when
+repeated clarification leaves the goal unchanged, up to alpha conversion.
+Use `TRY (CLARIFY_TAC thms)` to obtain no-op success.
+Malformed extra rules can also cause failure while the theorem list is
+processed.
+
+### Example
+
+Here clarification introduces the antecedent and then closes by assumption:
+
+``` hol4
+Theorem clarify_tac_example:
+  p ==> p
+Proof
+  classicalLib.CLARIFY_TAC []
+QED
+```
+
+By contrast, on the goal `p /\ q` with neither conjunct available,
+`CLARIFY_TAC []` fails rather than creating two subgoals; `SAFE_TAC []`
+performs that split.
+
+### See also
+
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.SAFE_STEP_TAC`](#classicalLib.SAFE_STEP_TAC),
+[`classicalLib.CLARIFY_STEP_TAC`](#classicalLib.CLARIFY_STEP_TAC),
+[`clasetLib`](#clasetLib),
+[`clasetLib.SIntro`](#clasetLib.SIntro),
+[`clasetLib.Intro`](#clasetLib.Intro),
+[`clasetLib.SElim`](#clasetLib.SElim),
+[`clasetLib.Elim`](#clasetLib.Elim),
+[`clasetLib.SDest`](#clasetLib.SDest),
+[`clasetLib.Dest`](#clasetLib.Dest),
+[`clasetLib.Del`](#clasetLib.Del)

@@ -1,0 +1,55 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `LINARITH_ss`
+
+``` hol4
+linarithLib.LINARITH_ss : simpLib.ssfrag
+```
+
+------------------------------------------------------------------------
+
+Provides a context-sensitive linear-arithmetic simplifier fragment.
+
+The fragment is named `"LINARITH"` and contains the reducer
+`"LINARITH_DP"`. It proves or disproves applicable atomic arithmetic
+relations using admissible simplifier context theorems and the
+[global `[arith]` facts](#linarithData.arith). Results are held in a
+context-sensitive cache, which can be reset with
+`linarithLib.clear_linarith_caches ()`.
+
+`LINARITH_ss` is an `ssfrag`, not a complete `simpset`, and is not
+installed in `srw_ss()`. It uses direct forward arithmetic rather than the
+full tactic's operator-splitting and Boolean preprocessing.
+
+For an extension simpset use
+[`LINARITH_ext_ss`](#linarithLib.LINARITH_ext_ss).
+
+### Failure
+
+The fragment construction itself does not fail. Its reducer declines terms
+which are not applicable or which cannot be proved or disproved from the
+available arithmetic context.
+
+### Example
+
+``` hol4
+Theorem linarith_ss_example:
+  !x y z : num.
+    x <= y /\ y <= z ==>
+    (if x <= z then 10 else 20) = 10
+Proof
+  rpt strip_tac >>
+  simpLib.FULL_SIMP_TAC
+    (simpLib.++
+      (bossLib.srw_ss (), linarithLib.LINARITH_ss)) []
+QED
+```
+
+### See also
+
+[`linarithLib`](#linarithLib),
+[`linarithLib.linarith_solver`](#linarithLib.linarith_solver),
+[`linarithLib.LINARITH_ext_ss`](#linarithLib.LINARITH_ext_ss),
+[`linarithLib.LINARITH_ext_ss_with`](#linarithLib.LINARITH_ext_ss_with),
+[`linarithLib.LINARITH_TAC`](#linarithLib.LINARITH_TAC),
+[`simpLib.++`](#simpLib..KAL),
+[`simpLib.SSFRAG`](#simpLib.SSFRAG)

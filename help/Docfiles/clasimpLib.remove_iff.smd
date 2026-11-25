@@ -1,0 +1,44 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `remove_iff`
+
+``` hol4
+clasimpLib.remove_iff : string -> unit
+```
+
+------------------------------------------------------------------------
+
+Removes a persistent `[iff]` declaration by theorem name.
+
+`remove_iff name` records a removal in the current theory and retracts both
+the derived classical rules and the `srw_ss()` rewrite. The name is resolved
+against the `[iff]` declarations currently installed, whichever theory made
+them, so an unqualified name reaches an ancestor's declaration; the
+qualified forms `"myTheory.my_iff"` and `"myTheory$my_iff"` name one
+declaration outright.
+
+Removal is part of the theory's persistent iff declaration stream and is
+therefore replayed and inherited through theory ancestry. It does not
+delete the theorem from the theorem database.
+
+Use `BasicProvers.delsimps ["Thy.name.__clasimp_iff"]` instead when only the
+simpset view should be removed and the derived classical rules should remain
+available.
+
+### Failure
+
+Fails if the name matches no installed `[iff]` declaration, or matches more
+than one; nothing is recorded in either case, since the recorded name is
+what every descendant theory replays.
+
+### Example
+
+``` hol4
+clasimpLib.remove_iff "my_iff";
+```
+
+### See also
+
+[`clasimpLib.iff`](#clasimpLib.iff),
+[`clasetLib.Iff`](#clasetLib.Iff),
+[`clasetLib.Del`](#clasetLib.Del),
+[`BasicProvers.delsimps`](#BasicProvers.delsimps)

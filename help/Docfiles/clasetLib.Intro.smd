@@ -1,0 +1,55 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `Intro`
+
+``` hol4
+clasetLib.Intro : thm -> thm
+```
+
+------------------------------------------------------------------------
+
+Marks a theorem as an unsafe introduction rule for one tactic invocation.
+
+`Intro th` is logically equivalent to `th`, but carries a marker recognized
+in a classical tactic's theorem list. The theorem is added to that call's
+temporary rule set as an unsafe introduction rule. Introduction rules match
+their conclusion against a goal and turn their premises into subgoals.
+
+An unmarked theorem has different semantics: it is inserted into the goal
+as an assumption. Use `Intro th` only to request unsafe-introduction rule
+classification explicitly. The safe classical tactics accept the marker
+but do not apply unsafe rules. Use `SIntro th` when `SAFE_TAC`,
+`CLARIFY_TAC`, or a safe step tactic should use the rule.
+
+The corresponding persistent attribute is `[intro]`, optionally with an
+Aesop success percentage such as `[intro=75]`. Despite its plain spelling
+it is unsafe; `[sintro]` denotes the safe classification.
+
+### Failure
+
+Constructing `Intro th` does not validate the rule. A tactic that consumes
+the marker may fail if `th` cannot be converted to introduction-rule form.
+
+### Example
+
+The marker is required when `my_rule` should be an unsafe introduction
+rule:
+
+``` hol4
+classicalLib.SAFE_TAC [clasetLib.Intro my_rule]
+```
+
+This call does not apply `my_rule`, because `SAFE_TAC` uses only safe
+rules. By contrast, `SAFE_TAC [my_rule]` inserts `my_rule` as an
+assumption.
+
+### See also
+
+[`clasetLib`](#clasetLib),
+[`clasetLib.SIntro`](#clasetLib.SIntro),
+[`clasetLib.Elim`](#clasetLib.Elim),
+[`clasetLib.Dest`](#clasetLib.Dest),
+[`clasetLib.Del`](#clasetLib.Del),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC),
+[`classicalLib.SAFE_STEP_TAC`](#classicalLib.SAFE_STEP_TAC),
+[`classicalLib.CLARIFY_STEP_TAC`](#classicalLib.CLARIFY_STEP_TAC)

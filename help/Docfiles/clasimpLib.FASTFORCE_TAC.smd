@@ -1,0 +1,41 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `FASTFORCE_TAC`
+
+``` hol4
+clasimpLib.FASTFORCE_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Solves a goal by depth-first classical search with simplification.
+
+`FASTFORCE_TAC thms` runs the classical fast search driver after installing
+assumption-aware full simplification as an unsafe wrapper. It uses the
+current claset and clasimpset and has no numeric search bound, so it can
+diverge.
+
+Unmarked theorems are inserted as assumptions. Use explicit classical
+markers for temporary claset rules, `Simp` for a temporary rewrite, and
+`Iff` for a temporary iff declaration. Generic simplifier markers are
+passed to the wrapper.
+
+### Failure
+
+Fails unless depth-first search closes the goal. Search can diverge.
+
+### Example
+
+``` hol4
+Theorem fastforce_tac_example:
+  (p \/ q) ==> (p ==> r) ==> (q ==> r) ==> r
+Proof
+  clasimpLib.FASTFORCE_TAC []
+QED
+```
+
+### See also
+
+[`clasimpLib.CS_FASTFORCE_TAC`](#clasimpLib.CS_FASTFORCE_TAC),
+[`clasimpLib.FORCE_TAC`](#clasimpLib.FORCE_TAC),
+[`clasimpLib.SLOWSIMP_TAC`](#clasimpLib.SLOWSIMP_TAC),
+[`classicalLib.FAST_TAC`](#classicalLib.FAST_TAC)

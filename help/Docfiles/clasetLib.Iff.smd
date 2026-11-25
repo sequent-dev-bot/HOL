@@ -1,0 +1,42 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `Iff`
+
+``` hol4
+clasetLib.Iff : thm -> thm
+```
+
+------------------------------------------------------------------------
+
+Marks a theorem as a temporary iff declaration for a clasimp tactic.
+
+`Iff th` is logically equivalent to `th`, but carries a marker recognized
+by the theorem-list clasimp tactics. For that invocation, the theorem is
+added as a rewrite and also contributes classical rules using the same
+decision tree as `[iff]`: equivalences produce an intro/dest pair,
+negations produce an elimination rule, and other propositions produce an
+introduction rule. Derived rules are safe exactly when the source has no
+implication antecedents.
+
+The theorem is not inserted as an assumption, and neither derived view
+survives the tactic call. Use `[iff]` for a persistent declaration.
+
+Classical-only and tableau tactics have no simpset and reject `Iff`.
+
+### Failure
+
+Constructing `Iff th` does not validate the declaration. A consuming
+clasimp tactic can fail during rule or rewrite conversion. Classical-only
+and tableau tactics reject the marker.
+
+### Example
+
+``` hol4
+clasimpLib.AUTO_TAC [clasetLib.Iff my_equivalence]
+```
+
+### See also
+
+[`clasetLib.Simp`](#clasetLib.Simp),
+[`clasimpLib.iff`](#clasimpLib.iff),
+[`clasimpLib.AUTO_TAC`](#clasimpLib.AUTO_TAC),
+[`clasetLib.Intro`](#clasetLib.Intro)

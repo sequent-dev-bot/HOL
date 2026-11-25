@@ -1,0 +1,45 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CS_AESOP_TAC`
+
+``` hol4
+aesopLib.CS_AESOP_TAC :
+  aesopLib.aesop_config ->
+  clasetLib.claset -> simpExtLib.simpset -> tactic
+```
+
+------------------------------------------------------------------------
+
+Constructs the context-explicit, configurable form of `AESOP_TAC`.
+
+`CS_AESOP_TAC config cs ss` performs full Aesop search with the supplied
+claset and extension simpset. Construct `ss` through the tracked API,
+for example `aesopData.aesop_ss ()`; an ordinary `srw_ss ()` is not an
+extension simpset and cannot be promoted. `config.max_rapps` bounds
+applications, and `config.max_depth` bounds branch depth and
+normalisation. Both bounds must be non-negative.
+
+The tactic processes no theorem list. The caller is responsible for
+inserting facts and adding any temporary claset rules or rewrites to `cs`
+and `ss`. Persistent split rules and session tactic rules registered by
+`augment_aesop` remain part of the Aesop rule sources.
+
+Like `AESOP_TAC`, this tactic succeeds only by closing the goal.
+
+### Failure
+
+Fails if search cannot close the goal, if a limit is reached, or if either
+configuration bound is negative.
+
+### Example
+
+``` hol4
+val aesop =
+  aesopLib.CS_AESOP_TAC aesopLib.default_config
+    (clasetLib.the_claset ()) (aesopData.aesop_ss ());
+```
+
+### See also
+
+[`aesopLib.AESOP_TAC`](#aesopLib.AESOP_TAC),
+[`aesopLib.CS_AESOP_SAFE_TAC`](#aesopLib.CS_AESOP_SAFE_TAC),
+[`aesopLib.augment_aesop`](#aesopLib.augment_aesop)

@@ -1,0 +1,46 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CLARSIMP_TAC`
+
+``` hol4
+clasimpLib.CLARSIMP_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Combines safe simplification with non-branching classical reasoning.
+
+`CLARSIMP_TAC thms` first performs safe, assumption-aware full
+simplification with the current clasimpset. It then repeatedly clarifies
+each residual goal, with safe simplification available as a safe wrapper.
+The tactic can succeed with residual goals, but only when the goal state
+changes.
+
+Clarification normally avoids branching. Nevertheless, a premise splitter
+in the simpset can split a subgoal during simplification. The standard
+clasimpset contains `simpExtLib.split_ss`, so `CLARSIMP_TAC` does not promise
+to preserve a single subgoal.
+
+Unmarked theorems are inserted as assumptions. Explicit classical markers,
+`Simp`, `Iff`, and generic simplifier controls configure only this call.
+
+### Failure
+
+Fails if simplification and clarification together leave the goal
+unchanged. Malformed marked rules can also fail during argument processing.
+
+### Example
+
+``` hol4
+Theorem clarsimp_tac_example:
+  p /\ q ==> p
+Proof
+  clasimpLib.CLARSIMP_TAC []
+QED
+```
+
+### See also
+
+[`clasimpLib.CS_CLARSIMP_TAC`](#clasimpLib.CS_CLARSIMP_TAC),
+[`clasimpLib.AUTO_TAC`](#clasimpLib.AUTO_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC),
+[`simpExtLib.split_ss`](#simpExtLib.split_ss)

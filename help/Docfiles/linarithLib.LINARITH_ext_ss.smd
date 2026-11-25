@@ -1,0 +1,34 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `LINARITH_ext_ss`
+
+``` hol4
+linarithLib.LINARITH_ext_ss : simpExtLib.ssfrag
+```
+
+------------------------------------------------------------------------
+
+Provides the extension-engine version of `LINARITH_ss`.
+
+The fragment behaves as [`LINARITH_ss`](#linarithLib.LINARITH_ss), including
+reading the global `[arith]` facts, but is for adding to a `simpExtLib`
+simpset.
+
+### Failure
+
+As for [`LINARITH_ss`](#linarithLib.LINARITH_ss).
+
+### Example
+
+``` hol4
+val arithmetic_ss = simpExtLib.++
+  (simpExtLib.lift_simpset (BasicProvers.srw_ss ()),
+   linarithLib.LINARITH_ext_ss);
+```
+
+### See also
+
+[`linarithLib.LINARITH_ss`](#linarithLib.LINARITH_ss),
+[`linarithLib.LINARITH_ext_ss_with`](#linarithLib.LINARITH_ext_ss_with),
+[`linarithLib.linarith_solver`](#linarithLib.linarith_solver),
+[`linarithData.arith`](#linarithData.arith),
+[`orderLib.ORDER_ext_ss`](#orderLib.ORDER_ext_ss)

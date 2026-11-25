@@ -1,0 +1,137 @@
+INCLUDES = ../rules ../classical ../blast ../linarith ../clasimp ../aesop \
+           ../linarith/instances ../seeds ../../integer ../../real \
+           ../../rational ../../num/reduce/src ../../simp/src
+
+all: $(DEFAULT_TARGETS) selftest.exe focus.exe genparity.exe guards.exe
+.PHONY: all
+
+selftest.uo: benchLib.uo benchGuards.uo benchRecipe.uo benchNames.uo \
+             benchTactics.uo benchIsabelleAmbient.uo \
+             benchAmbient.uo benchDerive.uo \
+             benchClassical.uo benchSetCorpus.uo \
+             benchSetShortfalls.uo benchSets.uo \
+             benchListCorpus.uo benchListSorted.uo benchListNumeric.uo \
+             benchListAdjacent.uo \
+             benchListRemoval.uo \
+             benchListIndexed.uo \
+             benchListRotate.uo \
+             benchListNths.uo \
+             benchListOrder.uo \
+             benchRecovered.uo \
+             benchListIntervals.uo \
+             benchListCode.uo \
+             benchListRel1.uo \
+             benchMeasures.uo \
+             benchListLex.uo \
+             benchListRelations.uo \
+             benchMapCorpus.uo benchOptionCorpus.uo \
+             benchProductCorpus.uo benchStringCorpus.uo \
+             benchLibraryShortfalls.uo benchListMap.uo \
+             benchLinarith.uo parityLib.uo
+
+benchProductCorpus.uo: parityTranslationTheory.uo
+benchMapCorpus.uo: parityTranslationTheory.uo
+benchStringCorpus.uo: parityTranslationTheory.uo
+benchExplicit.uo: benchLib.uo parityTranslationTheory.uo
+benchGuards.uo: benchLib.uo benchExplicit.uo
+benchRecipe.uo: benchLib.uo
+benchNames.uo: benchLib.uo
+benchTactics.uo: benchLib.uo
+benchAmbient.uo: benchLib.uo benchIsabelleAmbient.uo \
+                 parityTranslationTheory.uo
+benchDerive.uo: benchLib.uo benchRecipe.uo benchNames.uo benchTactics.uo \
+                benchAmbient.uo
+benchListSorted.uo: parityTranslationTheory.uo
+benchListNumeric.uo: parityTranslationTheory.uo
+benchListAdjacent.uo: parityTranslationTheory.uo
+benchListRemoval.uo: parityTranslationTheory.uo
+benchListIndexed.uo: parityTranslationTheory.uo
+benchListRotate.uo: parityTranslationTheory.uo
+benchListNths.uo: parityTranslationTheory.uo
+benchListOrder.uo: parityTranslationTheory.uo
+benchRecovered.uo: parityTranslationTheory.uo
+benchListIntervals.uo: parityTranslationTheory.uo
+benchListCode.uo: parityTranslationTheory.uo
+benchListRel1.uo: parityTranslationTheory.uo
+benchMeasures.uo: parityTranslationTheory.uo
+benchListLex.uo: parityTranslationTheory.uo
+benchListRelations.uo: parityTranslationTheory.uo
+
+parityLib.uo: benchLib.uo benchClassical.uo benchSetCorpus.uo \
+              benchSetShortfalls.uo benchSets.uo \
+              benchListCorpus.uo benchListSorted.uo benchListNumeric.uo \
+              benchListAdjacent.uo \
+              benchListRemoval.uo \
+              benchListIndexed.uo \
+              benchListRotate.uo \
+              benchListNths.uo \
+              benchListOrder.uo \
+              benchRecovered.uo \
+              benchListIntervals.uo \
+              benchListCode.uo \
+              benchListRel1.uo \
+              benchMeasures.uo \
+              benchListLex.uo \
+              benchListRelations.uo \
+              benchMapCorpus.uo benchOptionCorpus.uo \
+              benchProductCorpus.uo benchStringCorpus.uo \
+              benchLibraryShortfalls.uo benchListMap.uo \
+              benchLinarith.uo
+
+genparity.uo: parityLib.uo
+
+genparity.exe: genparity.uo parityLib.uo
+	$(HOLMOSMLC) -o $@ $<
+
+guards.uo: parityLib.uo benchGuards.uo
+
+guards.exe: guards.uo parityLib.uo benchGuards.uo
+	$(HOLMOSMLC) -o $@ $<
+
+benchLib.uo: ../../simp/src/simpLib.uo \
+             ../linarith/instances/intLinarith.uo \
+             ../linarith/instances/realLinarith.uo \
+             ../linarith/instances/ratLinarith.uo
+
+benchSets.uo: benchSetCorpus.uo benchSetShortfalls.uo
+benchSets.uo: parityTranslationTheory.uo
+
+benchListMap.uo: benchListCorpus.uo benchMapCorpus.uo \
+                 benchOptionCorpus.uo benchLibraryShortfalls.uo \
+                 benchProductCorpus.uo benchListSorted.uo \
+                 benchListNumeric.uo benchListAdjacent.uo \
+                 benchListRemoval.uo \
+                 benchListIndexed.uo \
+                 benchListRotate.uo \
+                 benchListNths.uo \
+                 benchListOrder.uo \
+                 benchRecovered.uo \
+                 benchListIntervals.uo \
+                 benchListCode.uo \
+                 benchListRel1.uo \
+                 benchMeasures.uo \
+                 benchListLex.uo \
+                 benchListRelations.uo \
+                 benchStringCorpus.uo
+
+selftest.exe: selftest.uo benchLib.uo
+	$(HOLMOSMLC) -o $@ $<
+
+focus.uo: parityLib.uo
+
+focus.exe: focus.uo parityLib.uo
+	$(HOLMOSMLC) -o $@ $<
+
+ifdef HOLSELFTESTLEVEL
+all: benchmarks-selftest.log
+
+benchmarks-selftest.log: selftest.exe
+	$(tee ./selftest.exe 2>&1,$@)
+endif
+
+EXTRA_CLEANS = selftest.exe focus.exe genparity.exe guards.exe \
+               benchmarks-selftest.log guards-findings.md
+
+# The family drivers reach the harness only through benchDerive.
+benchSets.uo benchClassical.uo benchListMap.uo benchLinarith.uo: \
+benchDerive.uo

@@ -1,0 +1,28 @@
+HOLHEAP = $(HOLDIR)/bin/hol.state0
+INCLUDES = $(HOLDIR)/src/auto/rules $(HOLDIR)/src/simp/src \
+           $(HOLDIR)/src/metis
+
+all: $(DEFAULT_TARGETS) selftest.exe
+.PHONY: all
+
+orderData.uo: orderRulesTheory.uo
+orderSolve.uo: orderData.uo
+orderLib.uo: orderSolve.uo
+selftest.uo: orderLib.uo
+
+selftest.exe: selftest.uo
+	$(HOLMOSMLC) -o $@ $<
+
+ifdef HOLSELFTESTLEVEL
+all: order-selftest.log
+
+order-selftest.log: selftest.exe
+	$(tee ./selftest.exe 2>&1,$@)
+endif
+
+EXTRA_CLEANS = selftest.exe order-selftest.log
+
+ifeq ($(KERNELID),otknl)
+all: $(patsubst %Script.sml,%.ot.art,$(wildcard *Script.sml))
+
+endif

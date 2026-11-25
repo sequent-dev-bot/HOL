@@ -1,0 +1,51 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `SLOW_STEP_TAC`
+
+``` hol4
+classicalLib.SLOW_STEP_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Performs one less committing classical-reasoning round.
+
+`SLOW_STEP_TAC thms` first saturates all open goals with safe steps. If no
+safe step applies, it acts on the first goal and retains unsafe-rule
+alternatives after the instantiating alternatives, instead of suppressing
+them as `STEP_TAC` does. The public tactic returns the first resulting
+transition; the retained alternatives are principally useful through the
+slow search drivers. Safe and unsafe wrappers participate. A call can
+solve the goal or leave residual goals, and has no numeric search bound.
+
+The theorem list locally accepts `SIntro`, `Intro`, `SElim`, `Elim`,
+`SDest`, `Dest` and `Del` markers. Every unmarked theorem is inserted as an
+assumption before reasoning starts. Content-bearing generic simplifier
+wrappers are unwrapped and inserted; inert generic controls are ignored.
+
+### Failure
+
+Fails if safe saturation and both instantiating and unsafe cascades have no
+result. Success does not imply that the goal is solved. Malformed extra
+rules can also cause failure.
+
+### Example
+
+``` hol4
+classicalLib.SLOW_STEP_TAC []
+```
+
+This applies one reasoning round to the first applicable part of the
+current goal state.
+
+### See also
+
+[`classicalLib.STEP_TAC`](#classicalLib.STEP_TAC),
+[`classicalLib.INST_STEP_TAC`](#classicalLib.INST_STEP_TAC),
+[`classicalLib.SAFE_STEP_TAC`](#classicalLib.SAFE_STEP_TAC),
+[`classicalLib.CLARIFY_STEP_TAC`](#classicalLib.CLARIFY_STEP_TAC),
+[`classicalLib.SLOW_TAC`](#classicalLib.SLOW_TAC),
+[`classicalLib.SLOW_BEST_TAC`](#classicalLib.SLOW_BEST_TAC),
+[`classicalLib.SLOW_ASTAR_TAC`](#classicalLib.SLOW_ASTAR_TAC),
+[`classicalLib.DEEPEN_TAC`](#classicalLib.DEEPEN_TAC),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC)

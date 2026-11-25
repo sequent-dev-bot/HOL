@@ -1,0 +1,56 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `SLOW_ASTAR_TAC`
+
+``` hol4
+classicalLib.SLOW_ASTAR_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Solves a goal by less committing A-star classical search.
+
+`SLOW_ASTAR_TAC thms` uses the cost
+
+``` text
+normalized goal size + 5 * search level
+```
+
+and therefore has the same fixed level weight, 5, as `ASTAR_TAC`. It
+safely saturates the whole state, then expands the first goal with the slow
+cascade, retaining unsafe-rule alternatives after instantiating
+alternatives are found. Children are eager and there is no dynamic
+per-goal pruning. `clasetSearch.node_limit` defaults to 100000 expanded
+states; a non-positive value disables the limit.
+
+The theorem list locally processes `SIntro`, `Intro`, `SElim`, `Elim`,
+`SDest`, `Dest` and `Del`. Every unmarked theorem is inserted as an
+assumption before search starts. Content-bearing generic simplifier
+wrappers are unwrapped and inserted; inert generic controls are ignored.
+
+The tactic succeeds only after all goals are closed and the proof replays.
+
+### Failure
+
+Fails if frontier exhaustion or the node limit is reached without a
+complete proof. Malformed extra rules can also fail during processing.
+
+### Example
+
+``` hol4
+Theorem slow_astar_tac_example:
+  (p \/ q) ==> (p ==> r) ==> (q ==> r) ==> r
+Proof
+  classicalLib.SLOW_ASTAR_TAC []
+QED
+```
+
+### See also
+
+[`classicalLib.ASTAR_TAC`](#classicalLib.ASTAR_TAC),
+[`classicalLib.SLOW_BEST_TAC`](#classicalLib.SLOW_BEST_TAC),
+[`classicalLib.SLOW_TAC`](#classicalLib.SLOW_TAC),
+[`classicalLib.FIRST_BEST_TAC`](#classicalLib.FIRST_BEST_TAC),
+[`classicalLib.DEEPEN_TAC`](#classicalLib.DEEPEN_TAC),
+[`classicalLib.SLOW_STEP_TAC`](#classicalLib.SLOW_STEP_TAC),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC)

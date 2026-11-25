@@ -1,0 +1,49 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CS_BLAST_DEPTH_TAC`
+
+``` hol4
+tableauLib.CS_BLAST_DEPTH_TAC :
+  clasetLib.claset -> int -> tactic
+```
+
+------------------------------------------------------------------------
+
+Runs raw classical tableau search at one fixed resource bound.
+
+`CS_BLAST_DEPTH_TAC cs n` translates the goal directly into tableau
+formulas, searches with the rule nets of `cs` at bound `n`, and replays a
+found tableau through HOL's inference kernel. Unlike `BLAST_DEPTH_TAC`, it
+does no built-in preprocessing, no theorem-list processing, and no
+iterative deepening.
+
+The claset is extended for the search with the safe elimination rules the
+engine needs to decompose a negated implication or a negated universal, so
+a caller supplies only its own rules.
+
+The limit is not a literal formula depth. Safe non-instantiating inferences
+are free; unsafe and instantiating inferences consume the resource
+according to the tableau's branching penalty. A negative limit disables
+search.
+
+The raw engine has the same limitations as the packaged prover: wrappers
+are ignored, weak elimination rules cannot be represented, search
+unification is first-order, and equality reasoning is incomplete.
+
+### Failure
+
+Fails unless a reconstructible tableau proof closes the goal at the
+specified bound.
+
+### Example
+
+``` hol4
+val blast =
+  tableauLib.CS_BLAST_DEPTH_TAC (clasetLib.the_claset ()) 4;
+```
+
+### See also
+
+[`tableauLib.BLAST_TAC`](#tableauLib.BLAST_TAC),
+[`tableauLib.BLAST_DEPTH_TAC`](#tableauLib.BLAST_DEPTH_TAC),
+[`classicalLib.CS_DEPTH_SOLVE_TAC`](#classicalLib.CS_DEPTH_SOLVE_TAC),
+[`clasimpLib.AUTO_DEPTH_TAC`](#clasimpLib.AUTO_DEPTH_TAC)

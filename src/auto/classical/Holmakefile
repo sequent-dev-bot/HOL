@@ -1,0 +1,34 @@
+HOLHEAP = $(HOLDIR)/bin/hol.state0
+INCLUDES = $(HOLDIR)/src/auto/rules $(HOLDIR)/src/metis \
+           $(HOLDIR)/src/simp/src
+
+all: $(DEFAULT_TARGETS) selftest.exe
+.PHONY: all
+
+clasetNorm.uo: clasetMeta.uo
+clasetUnify.uo: clasetNorm.uo clasetMeta.uo
+clasetReplay.uo: clasetNorm.uo clasetMeta.uo
+clasetGoal.uo: clasetNorm.uo clasetMeta.uo clasetReplay.uo
+clasetStep.uo: clasetNorm.uo clasetMeta.uo clasetUnify.uo \
+               clasetReplay.uo clasetGoal.uo
+clasetSearch.uo: clasetNorm.uo clasetMeta.uo clasetGoal.uo searchHeap.uo
+classicalLib.uo: clasetGoal.uo clasetStep.uo clasetSearch.uo
+
+selftest.uo: clasetNorm.uo clasetMeta.uo clasetUnify.uo clasetReplay.uo \
+              clasetGoal.uo clasetStep.uo clasetSearch.uo classicalLib.uo \
+              searchHeap.uo
+
+selftest.exe: selftest.uo clasetNorm.uo clasetMeta.uo clasetUnify.uo \
+              clasetReplay.uo \
+              clasetGoal.uo clasetStep.uo clasetSearch.uo classicalLib.uo \
+              searchHeap.uo
+	$(HOLMOSMLC) -o $@ $<
+
+ifdef HOLSELFTESTLEVEL
+all: classical-selftest.log
+
+classical-selftest.log: selftest.exe
+	$(tee ./selftest.exe 2>&1,$@)
+endif
+
+EXTRA_CLEANS = selftest.exe classical-selftest.log

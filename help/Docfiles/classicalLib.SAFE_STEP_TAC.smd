@@ -1,0 +1,53 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `SAFE_STEP_TAC`
+
+``` hol4
+classicalLib.SAFE_STEP_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Performs one safe classical-reasoning step.
+
+`SAFE_STEP_TAC thms` tries the safe-step cascade once on the supplied goal.
+The cascade includes assumption and contradiction closure, assumption modus
+ponens, safe rule application, hypothesis substitution, implication and
+universal introduction, and safe wrappers. A step may solve the goal or
+replace it by one or more residual goals. Rule-premise order is preserved.
+
+The theorem list accepts `SIntro`, `Intro`, `SElim`, `Elim`, `SDest`, `Dest`
+and `Del` markers. Its changes are local to this invocation. Every unmarked
+theorem is inserted as an assumption before the step is attempted.
+Content-bearing generic simplifier wrappers are unwrapped and inserted;
+inert generic controls are ignored.
+
+Unlike `SAFE_TAC`, this tactic does not repeat the cascade.
+
+### Failure
+
+Fails if no safe step applies. Malformed extra rules can also cause failure
+while the theorem list is processed.
+
+### Example
+
+On the goal `p ==> p`, one invocation performs implication introduction and
+leaves the goal `{p} ?- p`; a second safe step closes it. `SAFE_TAC []`
+performs both steps in one invocation.
+
+``` hol4
+classicalLib.SAFE_STEP_TAC []
+```
+
+### See also
+
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC),
+[`classicalLib.CLARIFY_STEP_TAC`](#classicalLib.CLARIFY_STEP_TAC),
+[`clasetLib`](#clasetLib),
+[`clasetLib.SIntro`](#clasetLib.SIntro),
+[`clasetLib.Intro`](#clasetLib.Intro),
+[`clasetLib.SElim`](#clasetLib.SElim),
+[`clasetLib.Elim`](#clasetLib.Elim),
+[`clasetLib.SDest`](#clasetLib.SDest),
+[`clasetLib.Dest`](#clasetLib.Dest),
+[`clasetLib.Del`](#clasetLib.Del)

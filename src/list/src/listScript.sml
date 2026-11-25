@@ -5359,6 +5359,81 @@ Proof
   \\ simp[]
 QED
 
+(* ----------------------------------------------------------------------
+    takeWhile: the prefix that dropWhile discards.
+
+    Deliberately untagged: dropWhile_def carries [simp], but a new
+    constant's equations are added here without any attribute so that
+    no pre-existing simpset, claset or TypeBase behaviour changes.
+   ---------------------------------------------------------------------- *)
+
+Definition takeWhile_def:
+   (takeWhile P [] = []) /\
+   (takeWhile P (h::t) = if P h then h::takeWhile P t else [])
+End
+
+Theorem takeWhile_APPEND_dropWhile:
+   !P ls. takeWhile P ls ++ dropWhile P ls = ls
+Proof
+   GEN_TAC >> Induct >> simp [takeWhile_def] >> rw []
+QED
+
+Theorem EVERY_takeWhile:
+   !P ls. EVERY P (takeWhile P ls)
+Proof
+   GEN_TAC >> Induct >> simp [takeWhile_def] >> rw []
+QED
+
+Theorem MEM_takeWhile_IMP:
+   !P ls x. MEM x (takeWhile P ls) ==> MEM x ls
+Proof
+   GEN_TAC >> Induct >> simp [takeWhile_def] >> rw [] >> metis_tac []
+QED
+
+Theorem LENGTH_takeWhile_LESS_EQ:
+   !P ls. LENGTH (takeWhile P ls) <= LENGTH ls
+Proof
+   GEN_TAC >> Induct >> simp [takeWhile_def] >> rw [] >> simp []
+QED
+
+Theorem takeWhile_eq_nil:
+   !P ls. (takeWhile P ls = []) <=> NULL ls \/ ~P (HD ls)
+Proof
+   GEN_TAC >> Cases >> rw [takeWhile_def, NULL]
+QED
+
+Theorem takeWhile_id:
+   !P ls. (takeWhile P ls = ls) <=> EVERY P ls
+Proof
+   GEN_TAC >> Induct >> simp [takeWhile_def] >> rw []
+QED
+
+Theorem EL_takeWhile:
+   !P ls n. n < LENGTH (takeWhile P ls) ==> (EL n (takeWhile P ls) = EL n ls)
+Proof
+   GEN_TAC >> Induct >> simp [takeWhile_def] >> rw [] >>
+   Cases_on `n` >> fs []
+QED
+
+Theorem TAKE_LENGTH_takeWhile:
+   !P ls. TAKE (LENGTH (takeWhile P ls)) ls = takeWhile P ls
+Proof
+   GEN_TAC >> Induct >> simp [takeWhile_def] >> rw []
+QED
+
+Theorem dropWhile_eq_DROP:
+   !P ls. dropWhile P ls = DROP (LENGTH (takeWhile P ls)) ls
+Proof
+   GEN_TAC >> Induct >> simp [takeWhile_def] >> rw []
+QED
+
+Theorem dropWhile_APPEND_NOT:
+   !P y xs ys.
+      ~P y ==> (dropWhile P (xs ++ y::ys) = dropWhile P xs ++ y::ys)
+Proof
+   NTAC 2 GEN_TAC >> Induct >> rw [dropWhile_def] >> fs []
+QED
+
 Theorem IMP_EVERY_LUPDATE:
    !xs h i. P h /\ EVERY P xs ==> EVERY P (LUPDATE h i xs)
 Proof

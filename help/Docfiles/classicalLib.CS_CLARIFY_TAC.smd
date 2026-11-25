@@ -1,0 +1,24 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CS_CLARIFY_TAC`
+
+``` hol4
+classicalLib.CS_CLARIFY_TAC : clasetLib.claset -> NTactical.ntactic
+```
+
+------------------------------------------------------------------------
+
+Constructs the claset-explicit form of `CLARIFY_TAC`.
+
+`CS_CLARIFY_TAC cs` repeatedly applies non-branching safe or clarifying
+steps. It takes `cs` directly, exposes the result sequence, and does not
+process theorem-list markers.
+
+### Failure
+
+Produces no result when no clarifying step changes the state.
+
+### See also
+
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC),
+[`classicalLib.CS_SAFE_TAC`](#classicalLib.CS_SAFE_TAC),
+[`classicalLib.CS_CLARIFY_STEP_TAC`](#classicalLib.CS_CLARIFY_STEP_TAC)

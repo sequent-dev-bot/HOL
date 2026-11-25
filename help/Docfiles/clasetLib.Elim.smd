@@ -1,0 +1,48 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `Elim`
+
+``` hol4
+clasetLib.Elim : thm -> thm
+```
+
+------------------------------------------------------------------------
+
+Marks a theorem as an unsafe elimination rule for one tactic invocation.
+
+`Elim th` is logically equivalent to `th`, but a classical tactic recognizes
+its marker and adds `th` to the call's temporary rule set. An elimination
+rule matches its major premise against an assumption and its conclusion
+against the goal. It is classified as unsafe for proof search.
+
+The safe classical tactics do not apply unsafe rules. Use `SElim th` to make a
+rule available to `SAFE_TAC`, `CLARIFY_TAC`, and their safe step variants.
+The `[elim]` theorem attribute persistently registers an unsafe elimination
+rule and optionally accepts an Aesop success percentage, as in
+`[elim=75]`; `[selim]` registers a safe one.
+
+### Failure
+
+Constructing `Elim th` does not validate the rule. A tactic that consumes
+the marker may fail if `th` has no suitable major premise or cannot be
+converted to elimination-rule form.
+
+### Example
+
+This accepts `my_elim` into the temporary rule set but does not make it a
+safe rule:
+
+``` hol4
+classicalLib.SAFE_TAC [clasetLib.Elim my_elim]
+```
+
+### See also
+
+[`clasetLib`](#clasetLib),
+[`clasetLib.SElim`](#clasetLib.SElim),
+[`clasetLib.Intro`](#clasetLib.Intro),
+[`clasetLib.Dest`](#clasetLib.Dest),
+[`clasetLib.Del`](#clasetLib.Del),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC),
+[`classicalLib.SAFE_STEP_TAC`](#classicalLib.SAFE_STEP_TAC),
+[`classicalLib.CLARIFY_STEP_TAC`](#classicalLib.CLARIFY_STEP_TAC)

@@ -1,0 +1,65 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `AESOP_TAC`
+
+``` hol4
+aesopLib.AESOP_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Solves a goal by normalisation, safe reasoning, and best-first search.
+
+`AESOP_TAC thms` uses the claset and Aesop simpset current where the
+tactic is applied, so a tactic value bound before a declaration still sees
+that declaration. The Aesop simpset is derived from `srw_ss ()`, lifted
+into the extension engine, independently of clasimp's split-enabled
+simpset; it follows updates to `srw_ss ()` and context restoration.
+It repeatedly normalises each goal, commits
+deterministic safe rules, and explores unsafe rules in probability order.
+The search keeps metavariable-dependent goals together, copies affected
+sibling goals when a metavariable is assigned, and replays a successful
+proof through kernel-checked tactics.
+
+The search design is based on Jannis Limperg and Asta Halkjær From,
+*Aesop: White-Box Best-First Proof Search for Lean*, CPP 2023. The HOL4
+implementation deliberately differs in four ways:
+
+- tactic rules cannot bind search metavariables;
+- the tactic performs no induction;
+- there are no named rule sets; Aesop uses the shared claset; and
+- dropped metavariables are grounded deterministically to `ARB`.
+
+The default configuration allows 200 rule applications and depth 30.
+Unlike residue-leaving automatic tactics, `AESOP_TAC` has close-or-fail
+semantics: success always closes the supplied goal.
+
+Unmarked theorems in `thms` are inserted as assumptions. Classical rule
+markers modify the invocation claset. `Norm`, `Forward`, and `SForward`
+add temporary Aesop rules; `Simp` adds a temporary rewrite; and `Iff` adds
+temporary rewrite and classical views. Generic simplifier controls and
+extension `simpExtLib.Split`/`ExclX` controls are forwarded to normalisation.
+
+### Failure
+
+Fails unless search closes the goal. It also fails if a search limit is
+reached or a malformed marked rule is processed. With the `aesop` trace
+enabled at level 1, failure reports the safely saturated residual goals.
+
+### Example
+
+``` hol4
+Theorem aesop_tac_example:
+  (p ==> q) ==> p ==> q
+Proof
+  aesopLib.AESOP_TAC []
+QED
+```
+
+### See also
+
+[`aesopLib.AESOP_SAFE_TAC`](#aesopLib.AESOP_SAFE_TAC),
+[`aesopLib.CS_AESOP_TAC`](#aesopLib.CS_AESOP_TAC),
+[`aesopLib.augment_aesop`](#aesopLib.augment_aesop),
+[`aesopLib.augment_aesop_rule`](#aesopLib.augment_aesop_rule),
+[`clasetLib`](#clasetLib),
+[`clasimpLib.FORCE_TAC`](#clasimpLib.FORCE_TAC)

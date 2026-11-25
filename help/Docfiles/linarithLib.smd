@@ -1,0 +1,86 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `linarithLib`
+
+``` hol4
+structure linarithLib
+```
+
+------------------------------------------------------------------------
+
+Provides registry-driven, kernel-checked linear arithmetic automation.
+
+The search engine treats equalities, disequalities, strict inequalities,
+and non-strict inequalities as linear constraints. Its untrusted
+Fourier--Motzkin search produces certificates which are replayed by HOL's
+kernel. Literal coefficients are supported; a non-linear subterm is
+otherwise treated as an atomic expression rather than normalised as a
+non-linear polynomial.
+
+Loading `linarithLib` installs the natural-number instance. The optional
+structures `intLinarith`, `realLinarith`, and `ratLinarith` install the
+integer, real, and rational instances respectively when loaded. They are
+built in `src/auto/linarith/instances`; add that directory to the HOL load
+path before loading them. Mixed-carrier problems also require the
+instances at both ends of the relevant registered injection.
+
+The public surface consists of the full and simple tactics, a
+configuration-explicit tactic, a forward prover, a conversion,
+`CACHED_LINARITH` — the same forward decision taken against a supplied
+context and answered from a result cache — a simpset fragment, and an
+unsafe extension simplifier solver. Ordinary `LINARITH_ss` is not part
+of `srw_ss()`. The distinct `LINARITH_ext_ss` and budgeted counterpart
+construct extension fragments from the same reducer closure. The solver,
+whose name is `"lin_arith"`, uses `TraverseExt.ssolver` and is installed
+in the tracked clasimp and Aesop simpsets.
+
+Persistent `[arith]` declarations supply extra facts. Persistent
+`[arith_split]` declarations supply P-form operator-splitting rules to the
+full tactics. A `simpExtLib.Split th` argument supplies a rule for one
+full-tactic invocation. Instance `pre_split` rules handle operators such
+as `MIN`, `MAX`, natural subtraction, and absolute value. The `[arith]`
+and `[arith_split]` sets both initially have no members.
+
+Instances also supply facts about individual atoms — division, modulus,
+and `Num` facts for the shipped ones. The full tactics add them for the
+atoms occurring in the goal, repeating until no new fact appears. They do
+so only where the arithmetic has failed and no case split remains: the
+full tactics split on demand, refuting what they have before expanding
+any disjunction or operator.
+
+The trace named `"linarith.trace"` reports preprocessing, search, and replay
+detail at levels 1 through 3.
+
+### Failure
+
+Individual operations fail when no registered instance covers a relation,
+when preprocessing or certificate search finds no proof, or when a
+supplied marker or split theorem is malformed. Each reports its failure
+under its own name. A failure of the replay machinery itself — a
+registered instance whose rules cannot be applied, say — is reported as
+it stands rather than as a failure to find a proof, so that a malformed
+instance is not mistaken for an unprovable goal.
+
+### Example
+
+``` hol4
+Theorem linarith_overview_example:
+  !x y z : num. x <= y /\ y < z ==> x < z
+Proof
+  rpt strip_tac >>
+  linarithLib.LINARITH_TAC []
+QED
+```
+
+### See also
+
+[`linarithLib.LINARITH_TAC`](#linarithLib.LINARITH_TAC),
+[`linarithLib.SIMPLE_LINARITH_TAC`](#linarithLib.SIMPLE_LINARITH_TAC),
+[`linarithLib.CFG_LINARITH_TAC`](#linarithLib.CFG_LINARITH_TAC),
+[`linarithLib.LINARITH_PROVE`](#linarithLib.LINARITH_PROVE),
+[`linarithLib.LINARITH_CONV`](#linarithLib.LINARITH_CONV),
+[`linarithLib.LINARITH_ss`](#linarithLib.LINARITH_ss),
+[`linarithLib.linarith_solver`](#linarithLib.linarith_solver),
+[`linarithData.register_instance`](#linarithData.register_instance),
+[`linarithData.arith`](#linarithData.arith),
+[`linarithData.arith_split`](#linarithData.arith_split),
+[`HOLFlags.set_trace`](#HOLFlags.set_trace)

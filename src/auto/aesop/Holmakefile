@@ -1,0 +1,33 @@
+HOLHEAP = $(HOLDIR)/bin/hol.state0
+INCLUDES = $(HOLDIR)/src/auto/rules \
+           $(HOLDIR)/src/auto/classical \
+           $(HOLDIR)/src/auto/blast \
+           $(HOLDIR)/src/auto/clasimp \
+           $(HOLDIR)/src/auto/linarith \
+           $(HOLDIR)/src/simp/src
+
+all: $(DEFAULT_TARGETS) selftest.exe
+.PHONY: all
+
+aesopData.uo: $(HOLDIR)/src/simp/src/simpLib.uo
+aesopRule.uo: aesopData.uo
+aesopTree.uo: aesopRule.uo
+aesopNorm.uo: aesopRule.uo aesopTree.uo
+aesopSearch.uo: aesopNorm.uo aesopRule.uo aesopTree.uo
+aesopLib.uo: aesopData.uo aesopRule.uo aesopSearch.uo aesopTree.uo
+
+selftest.uo: aesopData.uo aesopRule.uo aesopTree.uo aesopNorm.uo \
+             aesopSearch.uo aesopLib.uo
+
+selftest.exe: selftest.uo aesopData.uo aesopRule.uo aesopTree.uo \
+             aesopNorm.uo aesopSearch.uo aesopLib.uo
+	$(HOLMOSMLC) -o $@ $<
+
+ifdef HOLSELFTESTLEVEL
+all: aesop-selftest.log
+
+aesop-selftest.log: selftest.exe
+	$(tee ./selftest.exe 2>&1,$@)
+endif
+
+EXTRA_CLEANS = selftest.exe aesop-selftest.log

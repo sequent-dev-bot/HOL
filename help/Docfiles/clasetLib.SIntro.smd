@@ -1,0 +1,47 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `SIntro`
+
+``` hol4
+clasetLib.SIntro : thm -> thm
+```
+
+------------------------------------------------------------------------
+
+Marks a theorem as a safe introduction rule for one tactic invocation.
+
+`SIntro th` is logically equivalent to `th`, but carries a marker recognized
+in the theorem-list argument of the classical tactics. The tactic adds `th`
+to its temporary classical rule set as a safe introduction rule. Such a
+rule matches its conclusion against the goal and replaces the goal by the
+rule's premises.
+
+The modification lasts only for that tactic call. To register a stored
+safe introduction rule persistently, attach the argument-free `[sintro]`
+attribute to its theorem declaration. The plain `[intro]` attribute and
+`Intro` marker instead classify an introduction rule as unsafe.
+
+### Failure
+
+Constructing `SIntro th` does not validate the rule. A tactic that consumes
+the marker may fail if `th` cannot be converted to introduction-rule form.
+
+### Example
+
+This invocation makes `my_intro_rule` safe without changing the global rule
+set:
+
+``` hol4
+classicalLib.SAFE_TAC [clasetLib.SIntro my_intro_rule]
+```
+
+### See also
+
+[`clasetLib`](#clasetLib),
+[`clasetLib.Intro`](#clasetLib.Intro),
+[`clasetLib.SElim`](#clasetLib.SElim),
+[`clasetLib.SDest`](#clasetLib.SDest),
+[`clasetLib.Del`](#clasetLib.Del),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC),
+[`classicalLib.SAFE_STEP_TAC`](#classicalLib.SAFE_STEP_TAC),
+[`classicalLib.CLARIFY_STEP_TAC`](#classicalLib.CLARIFY_STEP_TAC)

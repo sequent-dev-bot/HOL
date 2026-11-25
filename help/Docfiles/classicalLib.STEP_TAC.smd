@@ -1,0 +1,53 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `STEP_TAC`
+
+``` hol4
+classicalLib.STEP_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Performs one fast classical-reasoning round.
+
+`STEP_TAC thms` first saturates all open goals with deterministic safe
+steps. If no safe step applies anywhere, it acts on the first goal and
+tries the instantiating cascade; it considers unsafe rules only when that
+cascade has no candidate. Safe and unsafe wrappers participate in their
+respective parts. One call may therefore perform several safe inferences,
+solve the goal, or leave residual goals. It does not run a search and has
+no numeric search bound.
+
+The theorem list modifies the current classical rule set for this call.
+The markers `SIntro`, `Intro`, `SElim`, `Elim`, `SDest`, `Dest` and `Del`
+add or remove rules. Every unmarked theorem is inserted as an assumption
+before reasoning starts. Content-bearing generic simplifier wrappers such
+as `Once th` are unwrapped and inserted; inert controls such as `Cong`,
+`Excl` and `SF` are ignored.
+
+### Failure
+
+Fails if neither safe saturation nor the fast instantiating or unsafe
+cascade makes a step. A successful call need not close the goal. Malformed
+extra rules can also fail during marker processing.
+
+### Example
+
+On the goal `p ==> p`, one call introduces `p` and then closes by
+assumption:
+
+``` hol4
+classicalLib.STEP_TAC []
+```
+
+### See also
+
+[`classicalLib.SLOW_STEP_TAC`](#classicalLib.SLOW_STEP_TAC),
+[`classicalLib.INST_STEP_TAC`](#classicalLib.INST_STEP_TAC),
+[`classicalLib.SAFE_STEP_TAC`](#classicalLib.SAFE_STEP_TAC),
+[`classicalLib.CLARIFY_STEP_TAC`](#classicalLib.CLARIFY_STEP_TAC),
+[`classicalLib.FAST_TAC`](#classicalLib.FAST_TAC),
+[`classicalLib.BEST_TAC`](#classicalLib.BEST_TAC),
+[`classicalLib.ASTAR_TAC`](#classicalLib.ASTAR_TAC),
+[`classicalLib.DEEPEN_TAC`](#classicalLib.DEEPEN_TAC),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC)

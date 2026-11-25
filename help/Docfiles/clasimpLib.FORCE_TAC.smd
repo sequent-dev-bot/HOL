@@ -1,0 +1,47 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `FORCE_TAC`
+
+``` hol4
+clasimpLib.FORCE_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Solves a goal by clarification, simplification, and best-first search.
+
+`FORCE_TAC thms` clarifies with the current claset, performs
+assumption-aware full simplification with the clasimpset, and solves every
+residue with first-applicable-goal best-first search. Simplification is also
+installed as an unsafe search wrapper.
+
+The simp wrapper passed to clarification is deliberately inert:
+clarification consults only safe wrappers, whereas `add_simp_wrapper`
+installs an unsafe wrapper. The separate simplification step immediately
+after clarification performs the intended simplification.
+
+Unmarked theorems are inserted as assumptions. Classical markers modify
+the temporary claset, `Simp` and `Iff` modify the temporary clasimp
+context, and generic simplifier markers are passed to simplification.
+
+### Failure
+
+Fails unless the complete pipeline closes the goal. Malformed marked rules
+can also fail during argument processing.
+
+### Example
+
+``` hol4
+Theorem force_tac_example:
+  (p ==> q) ==> p ==> q
+Proof
+  clasimpLib.FORCE_TAC []
+QED
+```
+
+### See also
+
+[`clasimpLib.CS_FORCE_TAC`](#clasimpLib.CS_FORCE_TAC),
+[`clasimpLib.FASTFORCE_TAC`](#clasimpLib.FASTFORCE_TAC),
+[`clasimpLib.AUTO_TAC`](#clasimpLib.AUTO_TAC),
+[`clasimpLib.add_simp_wrapper`](#clasimpLib.add_simp_wrapper),
+[`classicalLib.FIRST_BEST_TAC`](#classicalLib.FIRST_BEST_TAC)

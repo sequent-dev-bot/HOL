@@ -1,0 +1,143 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `clasetLib`
+
+``` hol4
+structure clasetLib
+```
+
+------------------------------------------------------------------------
+
+Maintains the shared rule set used by classical and Aesop proof tactics.
+
+A stored rule is classified by its use and, where applicable, by whether
+applying it is safe for proof search:
+
+| Attribute | Theorem-list marker | Classification |
+|---|---|---|
+| `[sintro]` | `SIntro th` | safe introduction |
+| `[intro]` or `[intro=NN]` | `Intro th` | unsafe introduction |
+| `[selim]` | `SElim th` | safe elimination |
+| `[elim]` or `[elim=NN]` | `Elim th` | unsafe elimination |
+| `[sdest]` | `SDest th` | safe destruction |
+| `[dest]` or `[dest=NN]` | `Dest th` | unsafe destruction |
+| `[sforward]` | `SForward th` | safe forward reasoning |
+| `[forward]` or `[forward=NN]` | `Forward th` | unsafe forward reasoning |
+| `[norm]` or `[norm=k]` | `Norm th` | Aesop normalisation |
+| `[aesop_simp]` | `Simp th` | Aesop simplification |
+| none | `Del "name"` | remove a rule for one invocation |
+
+Introduction rules match their conclusion against a goal and turn their
+premises into subgoals. Elimination rules use a major premise matched
+against an assumption. Destruction rules are converted internally to
+elimination form. Forward rules derive and add a new assumption from an
+existing one.
+
+Normalisation and Aesop simplification rules run in the normalisation phase
+of [`aesopLib.AESOP_TAC`](#aesopLib.AESOP_TAC). Here *safe* describes
+proof-search behaviour, not logical soundness: every rule is a kernel
+theorem.
+
+### Persistent theorem attributes
+
+Plain introduction, elimination, destruction, and forward attributes
+denote unsafe rules. Their optional numeric argument is an estimated
+success percentage from 1 through 100. Aesop uses the percentage to order
+best-first search; omission gives the default 50 percent. Attribute
+arguments use the `attribute=value` syntax shown here:
+
+``` hol4
+Theorem implication_intro[intro=75]:
+  p ==> q ==> p /\ q
+Proof
+  ...
+QED
+```
+
+The safe attributes `[sintro]`, `[selim]`, `[sdest]`, and `[sforward]`
+take no argument. `[norm]` has penalty 0; `[norm=k]` supplies an integer
+penalty. Lower penalties run first, with negative penalties before the
+built-in normalisation rules and positive penalties after them.
+
+The argument-free `[aesop_simp]` attribute adds a theorem to Aesop's
+persistent rewrite set. This set extends `srw_ss()` for Aesop
+normalisation; it does not add the theorem to `srw_ss()` itself.
+
+All these declarations are inherited through theory ancestry. The usual
+`local` theorem modifier makes a declaration local, as in
+`[intro=75,local]`. Rule removal is provided by `delrule` and
+`temp_delrule`, not by a removal attribute. Stored rules are normally
+named by their fully qualified database names, such as
+`bool$AND_INTRO_THM`.
+
+The base claset also derives safe datatype rules from `TypeBase`.
+Constructor distinctness contributes elimination rules in both
+orientations. Constructor injectivity contributes both directions of each
+equivalence: a safe introduction rule for rebuilding constructor equality
+from component equalities and a safe destruction rule for extracting
+component equalities. These derived facts follow datatypes added after
+library load as well as entries found during the initial catch-up.
+
+### Per-invocation markers
+
+The marker constructors modify only the temporary rule set assembled for
+a tactic call. `SIntro`, `Intro`, `SElim`, `Elim`, `SDest`, and `Dest`
+add the enclosed theorem with the corresponding classical classification.
+`Norm`, `Forward`, and `SForward` provide the Aesop-only classifications.
+The marker forms do not carry numeric arguments: `Norm` uses penalty 0 and
+`Forward` uses the default 50 percent. `Del` removes a named rule. The
+original theorem and global rule set are unchanged.
+
+An unmarked theorem supplied to a classical, tableau, or Aesop tactic is
+inserted into the goal as an assumption. Content-bearing generic
+simplifier wrappers such as `Once th` are unwrapped and inserted, while
+inert generic controls such as `Cong`, `Excl` and `SF` are ignored.
+Explicit rule roles therefore require a corresponding rule marker.
+
+Insertion is `ASSUME_TAC`, so a theorem carrying hypotheses contributes them
+to the proved theorem whether or not the search uses it, exactly as
+`ASSUME_TAC` and `MP_TAC` do elsewhere. That is what makes
+`FIRST_ASSUM (fn th => AUTO_TAC [th])` valid, its hypothesis already being
+an assumption of the goal; a theorem whose hypotheses are not assumptions of
+the goal makes the invocation fail under `VALID`. Supply such a theorem
+under a rule marker instead, and its hypotheses reach the result only if the
+rule fires.
+
+Clasimp and Aesop theorem lists additionally recognize `Simp th`, which
+adds only a temporary rewrite, and `Iff th`, which adds temporary rewrite
+and classical views. Classical-only and tableau tactics reject those two
+markers because they have no simpset.
+
+### Failure
+
+Malformed rules may be rejected when an attribute or per-invocation marker
+is processed. Percentages outside 1 through 100, malformed integer
+penalties, and arguments on safe attributes are rejected.
+
+### Example
+
+The seed conjunction rule can be suppressed for one tactic invocation:
+
+``` hol4
+TRY (classicalLib.SAFE_TAC
+       [clasetLib.Del "bool$AND_INTRO_THM"])
+```
+
+The deletion does not affect later tactic calls.
+
+### See also
+
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC),
+[`classicalLib.SAFE_STEP_TAC`](#classicalLib.SAFE_STEP_TAC),
+[`classicalLib.CLARIFY_STEP_TAC`](#classicalLib.CLARIFY_STEP_TAC),
+[`clasetLib.SIntro`](#clasetLib.SIntro),
+[`clasetLib.Intro`](#clasetLib.Intro),
+[`clasetLib.SElim`](#clasetLib.SElim),
+[`clasetLib.Elim`](#clasetLib.Elim),
+[`clasetLib.SDest`](#clasetLib.SDest),
+[`clasetLib.Dest`](#clasetLib.Dest),
+[`clasetLib.Simp`](#clasetLib.Simp),
+[`clasetLib.Iff`](#clasetLib.Iff),
+[`clasetLib.Del`](#clasetLib.Del),
+[`aesopLib.AESOP_TAC`](#aesopLib.AESOP_TAC),
+[`aesopLib.AESOP_SAFE_TAC`](#aesopLib.AESOP_SAFE_TAC)

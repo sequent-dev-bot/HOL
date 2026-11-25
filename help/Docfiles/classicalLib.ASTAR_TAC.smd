@@ -1,0 +1,56 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `ASTAR_TAC`
+
+``` hol4
+classicalLib.ASTAR_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Solves a goal by A-star classical search.
+
+`ASTAR_TAC thms` safely saturates the whole state, then expands the first
+open goal using the fast instantiating or unsafe cascade. A frontier state
+has cost
+
+``` text
+normalized goal size + 5 * search level
+```
+
+so the fixed level weight is 5. Children are enumerated eagerly and the
+search does not perform dynamic per-goal pruning. Expanded states are
+limited by `clasetSearch.node_limit`, which defaults to 100000; a
+non-positive setting disables the limit.
+
+The theorem list locally accepts `SIntro`, `Intro`, `SElim`, `Elim`,
+`SDest`, `Dest` and `Del` markers. Every unmarked theorem is inserted as an
+assumption before search starts. Content-bearing generic simplifier
+wrappers are unwrapped and inserted; inert generic controls are ignored.
+
+The tactic succeeds only with a replayed proof that closes the goal.
+
+### Failure
+
+Fails when the frontier is exhausted or the node limit is reached without
+a complete proof. Malformed marked rules can also cause failure.
+
+### Example
+
+``` hol4
+Theorem astar_tac_example:
+  (p ==> q) /\ (q ==> r) ==> p ==> r
+Proof
+  classicalLib.ASTAR_TAC []
+QED
+```
+
+### See also
+
+[`classicalLib.SLOW_ASTAR_TAC`](#classicalLib.SLOW_ASTAR_TAC),
+[`classicalLib.BEST_TAC`](#classicalLib.BEST_TAC),
+[`classicalLib.FIRST_BEST_TAC`](#classicalLib.FIRST_BEST_TAC),
+[`classicalLib.FAST_TAC`](#classicalLib.FAST_TAC),
+[`classicalLib.DEEPEN_TAC`](#classicalLib.DEEPEN_TAC),
+[`classicalLib.STEP_TAC`](#classicalLib.STEP_TAC),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC)

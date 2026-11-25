@@ -1,0 +1,65 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `LINARITH_TAC`
+
+``` hol4
+linarithLib.LINARITH_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Proves a goal using full linear-arithmetic preprocessing and certificate
+replay.
+
+`LINARITH_TAC thms` is
+`CFG_LINARITH_TAC linarithLib.default_config thms`. It inserts persistent
+`[arith]` facts and each unmarked theorem in `thms`, negates the
+conclusion, filters irrelevant assumptions, and converts what remains to
+negation normal form, decomposing conjunctions and existentials into
+separate assumptions.
+
+It then searches. At each step it tries to refute the constraints in
+hand; only if that fails does it take a single case split and continue on
+both cases. A case split eliminates a disjunctive assumption where there
+is one, and otherwise applies an operator-splitting rule. Where neither
+applies it adds the facts registered instances supply for the atoms it
+finds — division, modulus, and `Num` facts for the shipped instances —
+and tries to refute once more before giving up.
+
+Case splits are therefore taken on demand rather than expanded in
+advance, and a goal costs the cases its arithmetic actually needs rather
+than the size of its disjunctive normal form. The disjunctive assumption
+split is the one with the fewest disjuncts still consistent with the
+literals already assumed, so a disjunction whose other cases are already
+refuted costs one branch rather than two.
+
+The split corpus consists of persistent `[arith_split]` declarations,
+per-instance rules, and arguments marked `simpExtLib.Split th`. Classical,
+simplifier, and Iff markers are rejected. The default `neq_limit` and
+`split_limit` are both 9. The tactic has close-or-fail semantics.
+
+### Failure
+
+Fails if preprocessing or linear arithmetic does not close every goal, if
+a needed carrier has no registered instance, if a limit is exceeded, or
+if an argument has an unsupported marker. A malformed split theorem is
+also rejected.
+
+### Example
+
+``` hol4
+Theorem linarith_tac_example:
+  !m n : num. MIN m n <= m
+Proof
+  rpt strip_tac >>
+  linarithLib.LINARITH_TAC []
+QED
+```
+
+### See also
+
+[`linarithLib`](#linarithLib),
+[`linarithLib.SIMPLE_LINARITH_TAC`](#linarithLib.SIMPLE_LINARITH_TAC),
+[`linarithLib.CFG_LINARITH_TAC`](#linarithLib.CFG_LINARITH_TAC),
+[`linarithData.arith`](#linarithData.arith),
+[`linarithData.arith_split`](#linarithData.arith_split),
+[`splitLib.SPLIT_TAC`](#splitLib.SPLIT_TAC)

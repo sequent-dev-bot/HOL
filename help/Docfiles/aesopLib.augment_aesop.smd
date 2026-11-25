@@ -1,0 +1,56 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `augment_aesop`
+
+``` hol4
+aesopLib.augment_aesop :
+  {name : string, phase : aesopLib.rphase,
+   tactic : NTactical.ntactic} -> unit
+```
+
+------------------------------------------------------------------------
+
+Registers a session-local tactic rule for Aesop.
+
+`augment_aesop {name, phase, tactic}` appends an unindexed rule, so Aesop
+offers it on every goal in its phase. The available phases are:
+
+| Phase | Meaning |
+|---|---|
+| `aesopRule.RNorm k` | normalisation with integer penalty `k` |
+| `aesopRule.RSafe` | deterministic safe reasoning |
+| `aesopRule.RUnsafe n` | unsafe search with success percentage `n` |
+
+An unsafe percentage must be from 1 through 100. Lower normalisation
+penalties run first.
+
+A tactic rule operates on a rendered HOL goal in which engine
+metavariables are rigid. It therefore cannot create or assign engine
+metavariables. A no-op result is rejected. Normalisation rules must close
+the goal or return exactly one subgoal, and safe rules are committed only
+when their application is deterministic.
+
+The registration affects subsequent Aesop calls in the current session.
+It is not stored in a theory and is not exported.
+
+### Failure
+
+Registration itself only records the rule. Errors or unsuitable results
+from `tactic`, and an invalid unsafe percentage, are encountered when
+Aesop tries the rule.
+
+### Example
+
+``` hol4
+val _ =
+  aesopLib.augment_aesop
+    {name = "strip-conjunction",
+     phase = aesopRule.RSafe,
+     tactic = NTactical.LIFT (REPEAT CONJ_TAC)};
+```
+
+### See also
+
+[`aesopLib.augment_aesop_rule`](#aesopLib.augment_aesop_rule),
+[`aesopLib.AESOP_TAC`](#aesopLib.AESOP_TAC),
+[`aesopLib.AESOP_SAFE_TAC`](#aesopLib.AESOP_SAFE_TAC),
+[`clasetLib`](#clasetLib)

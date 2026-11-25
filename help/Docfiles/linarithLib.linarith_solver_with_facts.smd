@@ -1,0 +1,25 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `linarith_solver_with_facts`
+
+``` hol4
+linarithLib.linarith_solver_with_facts : thm list -> TraverseExt.ssolver
+```
+
+------------------------------------------------------------------------
+
+Provides `linarith_solver` with an explicit list of `[arith]` facts.
+
+`linarith_solver_with_facts facts` is the solver
+[`linarith_solver`](#linarithLib.linarith_solver) whose facts are exactly
+`facts`: the global `[arith]` set is not read, whatever
+it holds.
+
+### Failure
+
+As for [`linarith_solver`](#linarithLib.linarith_solver).
+
+### See also
+
+[`linarithLib.linarith_solver`](#linarithLib.linarith_solver),
+[`linarithLib.LINARITH_ext_ss_with`](#linarithLib.LINARITH_ext_ss_with),
+[`linarithData.arith`](#linarithData.arith)

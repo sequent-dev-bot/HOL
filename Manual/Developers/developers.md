@@ -73,6 +73,20 @@ in the `tools/Holmake/poly` directory.
 It *is* necessary to specify the output path (with the `-o` option) to replace the old `Holmake` if one is going to test/use the new tool in the existing `HOL` sources.
 Without doing this, the new implementation will see that it is in a HOL source–tree and then switch to call the `Holmake` in that source-tree’s `bin` directory.
 
+## The Quotation Filter, and Why Changing It Requires Reconfiguration {#quote-filter}
+
+The quotation filter is `HOLSourceParser.parseSML` together with the other `HOLSource*` modules in `tools/parsing`.
+(Configuration still generates `tools/parsing/HolLex.sml` from the `mllex` specification `tools/parsing/HolLex`, and several build scripts `use` it, but nothing refers to its structure.)
+
+Configuration compiles these sources into `bin/Holmake`, `bin/unquote`, `bin/build`, and — *via* `tools-poly/poly/poly-init2.ML` — into the Poly/ML REPL and the heaps; no `Holmakefile` rule rebuilds any of them.
+Consequently:
+
+> **If you change `tools/parsing` (or pull a branch that changes it), you must re-run configuration — `poly < tools/smart-configure.sml` — before building.
+> Running `bin/build` or `Holmake` alone is not enough.**
+
+A stale filter reports newly introduced syntax as a parse error at the use site.
+For example, a filter predating numeric theorem-attribute values rejects `Theorem foo[elim=75]:` or `[norm=~3]` with “expected close delimiter”.
+
 
 # Build
 
@@ -178,6 +192,10 @@ It is often possible to repeat `build` to get the system to rebuild itself in th
 If source files have moved directories, or disappeared entirely, `build` (more accurately `Holmake` when `build` calls it) may get confused by stale dependency information.
 In this situation, cleaning everything first with `build cleanall` may be necessary.
 
+Repeating `build` is *not* enough when the change was to something that configuration, rather than the build, is responsible for producing.
+The most easily overlooked case is the quotation filter in `tools/parsing`; see [The Quotation Filter](#quote-filter) above.
+If a pull brought in a change to `tools/parsing`, re-run `poly < tools/smart-configure.sml` before `bin/build`.
+
 # Things in `bin`
 
 The build process deposits various tools in the `bin` directory.
@@ -281,7 +299,8 @@ Unless otherwise noted, they are built by the configuration process.
 `unquote`
 :   The quotation filter that runs over sources before they are seen by SML implementations.
     This is used interactively (*via* a Unix filter that preprocesses all user-input under Moscow ML, or built into the Poly/ML REPL), and non-interactively (by being applied to source files).
-    The core sources are in `tools/Holmake`, but the standalone executable is built in `tools/quote-filter` and it is moved to `bin/` as part of configuration.
+    The core sources are in `tools/parsing`, but the standalone executable is built in `tools/quote-filter` and it is moved to `bin/` as part of configuration.
+    Because it is compiled at configuration time, edits to `tools/parsing` only take effect after reconfiguring; see [The Quotation Filter](#quote-filter).
 
 `h4pedant`
 :   Our tool for enforcing code style ([as documented below](#coding-standardsrequirements)).

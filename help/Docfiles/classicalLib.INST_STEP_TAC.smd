@@ -1,0 +1,53 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `INST_STEP_TAC`
+
+``` hol4
+classicalLib.INST_STEP_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Performs one instantiating classical-reasoning step.
+
+`INST_STEP_TAC thms` acts on the first goal and tries, in order, unifying
+assumption, contradiction, safe zero-premise rules and other safe rules.
+It may instantiate search metavariables. Unlike `STEP_TAC`, it does not
+first saturate the state, apply wrappers, or try unsafe rules. It performs
+a single engine step and replay, may solve the goal or leave residual
+goals, and has no numeric search bound.
+
+The theorem list modifies the current classical rule set for this call.
+The markers `SIntro`, `Intro`, `SElim`, `Elim`, `SDest`, `Dest` and `Del`
+add or remove rules. Every unmarked theorem is inserted as an assumption
+before the step is attempted, making it available to the unifying
+assumption and contradiction steps. Content-bearing generic simplifier
+wrappers are unwrapped and inserted; inert generic controls are ignored.
+
+### Failure
+
+Fails if none of its unifying assumption, contradiction or safe-rule steps
+applies. Success need not close the goal. Malformed extra rules can also
+fail while the theorem list is processed.
+
+### Example
+
+A reflexivity rule in the safe zero-premise net closes this goal:
+
+``` hol4
+Theorem inst_step_tac_example:
+  a = a
+Proof
+  classicalLib.INST_STEP_TAC []
+QED
+```
+
+### See also
+
+[`classicalLib.STEP_TAC`](#classicalLib.STEP_TAC),
+[`classicalLib.SLOW_STEP_TAC`](#classicalLib.SLOW_STEP_TAC),
+[`classicalLib.SAFE_STEP_TAC`](#classicalLib.SAFE_STEP_TAC),
+[`classicalLib.CLARIFY_STEP_TAC`](#classicalLib.CLARIFY_STEP_TAC),
+[`classicalLib.FAST_TAC`](#classicalLib.FAST_TAC),
+[`classicalLib.DEEPEN_TAC`](#classicalLib.DEEPEN_TAC),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC)

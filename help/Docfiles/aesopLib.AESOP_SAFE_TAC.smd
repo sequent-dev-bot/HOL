@@ -1,0 +1,50 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `AESOP_SAFE_TAC`
+
+``` hol4
+aesopLib.AESOP_SAFE_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Normalises and safely saturates a goal, leaving the safe frontier.
+
+`AESOP_SAFE_TAC thms` uses the claset and Aesop simpset current where the
+tactic is applied, so a tactic value bound before a declaration still sees
+that declaration. It repeatedly runs normalisation and commits
+deterministic safe rules, but does not try unsafe rules. The resulting
+safely saturated goals are returned as subgoals.
+
+Unmarked theorems in `thms` are inserted as assumptions. Safe classical
+markers and `SForward` add temporary safe rules. `Norm` adds a temporary
+normalisation rule, `Simp` adds a temporary rewrite, and `Iff` adds
+temporary rewrite and classical views. Unsafe markers may be accepted
+while the invocation context is assembled, but their rules are not
+applied by safe search.
+
+The tactic has change-or-fail semantics: it succeeds with the exact safe
+frontier only when insertion, normalisation, or safe reasoning changes the
+goal state.
+
+### Failure
+
+Fails if safe saturation leaves the goal unchanged, if the depth or
+normalisation limit is reached, or if a malformed marked rule is
+processed.
+
+### Example
+
+``` hol4
+Theorem aesop_safe_tac_example:
+  p /\ q ==> p
+Proof
+  aesopLib.AESOP_SAFE_TAC []
+QED
+```
+
+### See also
+
+[`aesopLib.AESOP_TAC`](#aesopLib.AESOP_TAC),
+[`aesopLib.CS_AESOP_SAFE_TAC`](#aesopLib.CS_AESOP_SAFE_TAC),
+[`clasetLib`](#clasetLib),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC)

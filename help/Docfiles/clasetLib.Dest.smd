@@ -1,0 +1,49 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `Dest`
+
+``` hol4
+clasetLib.Dest : thm -> thm
+```
+
+------------------------------------------------------------------------
+
+Marks a theorem as an unsafe destruction rule for one tactic invocation.
+
+`Dest th` is logically equivalent to `th`, but a classical tactic recognizes
+its marker and adds the theorem to a temporary rule set. A destruction rule
+derives consequences from a major premise matched against an assumption and
+is converted internally to elimination-rule form. This marker gives it the
+unsafe proof-search classification.
+
+The safe classical tactics do not apply unsafe rules. Use `SDest th` to
+make a rule available to those tactics. The corresponding theorem
+attribute is `[dest]`, optionally with an Aesop success percentage such as
+`[dest=75]`; despite its plain spelling it is unsafe. `[sdest]` registers
+the safe classification.
+
+### Failure
+
+Constructing `Dest th` does not validate the rule. A tactic that consumes
+the marker may fail if `th` has no suitable major premise or cannot be
+converted from destruction-rule form to elimination-rule form.
+
+### Example
+
+``` hol4
+classicalLib.SAFE_TAC [clasetLib.Dest my_dest_rule]
+```
+
+The theorem is accepted as an unsafe rule and is therefore not applied by
+`SAFE_TAC`.
+
+### See also
+
+[`clasetLib`](#clasetLib),
+[`clasetLib.SDest`](#clasetLib.SDest),
+[`clasetLib.Intro`](#clasetLib.Intro),
+[`clasetLib.Elim`](#clasetLib.Elim),
+[`clasetLib.Del`](#clasetLib.Del),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC),
+[`classicalLib.SAFE_STEP_TAC`](#classicalLib.SAFE_STEP_TAC),
+[`classicalLib.CLARIFY_STEP_TAC`](#classicalLib.CLARIFY_STEP_TAC)

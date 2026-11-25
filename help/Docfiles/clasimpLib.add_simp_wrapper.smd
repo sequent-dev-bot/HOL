@@ -1,0 +1,51 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `add_simp_wrapper`
+
+``` hol4
+clasimpLib.add_simp_wrapper :
+  simpExtLib.simpset -> thm list ->
+  clasetLib.claset -> clasetLib.claset
+```
+
+------------------------------------------------------------------------
+
+Adds assumption-aware full simplification as an unsafe classical wrapper.
+
+`add_simp_wrapper ss controls cs` returns `cs` with a wrapper named
+`"asm_full_simp_tac"`. Around an unsafe classical step, the wrapper offers
+a changed full-simplification transition using `ss` and `controls`, followed
+by the original step's transitions. The input is an extension simpset,
+constructed through `simpExtLib`, not an ordinary `srw_ss ()`. Controls
+include literal `markerLib.Excl` and `Cong`, and extension `simpExtLib.SF`,
+`Split` and explicit `ExclX`. Search can therefore
+simplify at unsafe choice points without losing the unsimplified
+alternatives.
+
+The operation does not change `cs`, `ss`, or the global claset. Adding a
+wrapper with the same name replaces the existing wrapper in the returned
+claset.
+
+Safe-only tactics do not consult unsafe wrappers. In particular, this
+wrapper is inert under `CS_CLARIFY_TAC`.
+
+### Failure
+
+Construction does not fail. The installed simplification alternative is
+absent when simplification leaves the goal unchanged.
+
+### Example
+
+``` hol4
+val search_cs =
+  clasimpLib.add_simp_wrapper
+    (clasimpLib.clasimp_ss ())
+    [markerLib.Excl "myTheory.expensive_rule"]
+    (clasetLib.the_claset ());
+```
+
+### See also
+
+[`clasimpLib.add_safe_simp_wrapper`](#clasimpLib.add_safe_simp_wrapper),
+[`clasimpLib.FORCE_TAC`](#clasimpLib.FORCE_TAC),
+[`classicalLib.CS_FAST_TAC`](#classicalLib.CS_FAST_TAC),
+[`clasetLib`](#clasetLib)

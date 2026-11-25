@@ -1,0 +1,15 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `remove_field_simps`
+
+``` hol4
+seedCollections.remove_field_simps : string -> unit
+```
+
+------------------------------------------------------------------------
+
+Removes a persistent theorem name from the current `field_simps`
+collection.  Names may use dotted or kernel-qualified theory notation.
+
+### See also
+
+[`seedCollections.field_ss`](#seedCollections.field_ss)

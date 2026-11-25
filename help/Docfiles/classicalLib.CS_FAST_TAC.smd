@@ -1,0 +1,38 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CS_FAST_TAC`
+
+``` hol4
+classicalLib.CS_FAST_TAC : clasetLib.claset -> NTactical.ntactic
+```
+
+------------------------------------------------------------------------
+
+Constructs the claset-explicit form of `FAST_TAC`.
+
+`CS_FAST_TAC cs` performs depth-first solve-completely search using `cs`. It
+safely saturates states, expands the first goal, and commits to the
+instantiating cascade whenever it has a candidate. Dynamic pruning removes
+choices that cannot affect remaining goals. There is no depth or node
+bound.
+
+Unlike `FAST_TAC`, this interface takes a prepared classical rule set and
+returns an ntactic without applying theorem-list markers or making the
+result deterministic.
+
+### Failure
+
+Produces no result if search is exhausted without a complete proof. Search
+can diverge, and replay failure is reported as an error.
+
+### Example
+
+``` hol4
+val fast = classicalLib.CS_FAST_TAC (clasetLib.the_claset ());
+```
+
+### See also
+
+[`classicalLib.FAST_TAC`](#classicalLib.FAST_TAC),
+[`classicalLib.CS_SLOW_TAC`](#classicalLib.CS_SLOW_TAC),
+[`classicalLib.CS_STEP_TAC`](#classicalLib.CS_STEP_TAC),
+[`clasetLib`](#clasetLib)

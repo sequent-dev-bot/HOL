@@ -1,0 +1,27 @@
+INCLUDES = ../rules ../classical ../blast ../linarith ../clasimp ../aesop \
+           ../linarith/instances ../../pred_set/src ../../finite_maps \
+           ../../integer ../../real ../../rational ../../string ../../sort \
+           ../../list/src ../../simp/src
+
+all: $(DEFAULT_TARGETS) selftest.exe
+.PHONY: all
+
+selftest.uo: seedAudit.uo seedCollections.uo \
+             autoSeedTheory.uo ../linarith/instances/intLinarith.uo \
+             ../../simp/src/simpLib.uo
+
+selftest.exe: selftest.uo seedAudit.uo seedCollections.uo
+	$(HOLMOSMLC) -o $@ $<
+
+ifdef HOLSELFTESTLEVEL
+all: seeds-selftest.log
+
+seeds-selftest.log: selftest.exe
+	$(tee ./selftest.exe 2>&1,$@)
+endif
+
+EXTRA_CLEANS = selftest.exe seeds-selftest.log
+
+ifeq ($(KERNELID),otknl)
+all: $(patsubst %Script.sml,%.ot.art,$(wildcard *Script.sml))
+endif

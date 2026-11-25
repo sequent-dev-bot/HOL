@@ -1,0 +1,15 @@
+HOLHEAP = $(HOLDIR)/bin/hol.state0
+INCLUDES = ..
+
+all: $(DEFAULT_TARGETS)
+.PHONY: all
+
+iffRoundTripChildTheory.uo: iffRoundTripBaseTheory.uo
+iffDiamondAddTheory.uo: iffDiamondRootTheory.uo
+iffDiamondRemoveTheory.uo: iffDiamondRootTheory.uo
+iffDiamondChildTheory.uo: iffDiamondAddTheory.uo \
+                          iffDiamondRemoveTheory.uo
+iffBatchChildTheory.uo: iffBatchTheory.uo
+iffWithinRemoveChildTheory.uo: iffWithinRemoveTheory.uo
+iffBottomUpChildTheory.uo: iffBottomUpTheory.uo
+transportPersistentChildTheory.uo: transportPersistentBaseTheory.uo

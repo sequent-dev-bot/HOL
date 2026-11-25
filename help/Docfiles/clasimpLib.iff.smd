@@ -1,0 +1,73 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `[iff]`
+
+``` hol4
+Theorem theorem_name[iff]: statement
+```
+
+------------------------------------------------------------------------
+
+Registers a theorem persistently as both a simplification and classical
+reasoning rule.
+
+The argument-free `[iff]` theorem attribute adds its theorem to `srw_ss()`
+and derives temporary-claset-style rules according to its conclusion:
+
+| Conclusion after antecedents | Classical rule |
+|---|---|
+| `A <=> B` | introduction from `B` and destruction from `A` |
+| `~A` | elimination from `A` |
+| any other `A` | introduction of `A` |
+
+The source theorem is universally specialized before classification. A
+derived rule is safe exactly when the source conclusion has no implication
+antecedents; otherwise it is unsafe. For an equivalence, the major premise
+is placed before the source antecedents.
+
+The declaration is inherited through theory ancestry. Its claset and
+simpset views are rebuilt when declarations are replayed. Because `[intro]`
+and `[iff]` use separate declaration streams, their relative recency can
+change across reload when otherwise equal candidates tie; rule meaning and
+priority are unaffected.
+
+The simpset view is an ordinary named rewrite. Its deletion key is the
+declaring theorem's `Thy.name`, so `Excl "Thy.name"`, `delsimps`, and
+`temp_delsimps` affect it exactly as they affect a rewrite declared with
+`[simp]`; none of those simpset-only controls removes the classical view.
+
+A theory's `[iff]` rewrites form a simpset fragment of their own, named
+`Thy-iff`, distinct from the `Thy` fragment carrying its `[simp]`
+declarations. `ExclSF`, `diminish_srw_ss` and `exclude_ssfrags` therefore
+address the two streams separately.
+
+Only a delsimps that names the rewrite in qualified form is persistent. A
+bare `delsimps ["name"]` matches any rewrite of that name from any theory,
+so it is read as aimed at the ancestor rewrite it names, and it reaches a
+same-named local `[iff]` declaration for the current session only. Use
+`clasimpLib.remove_iff "name"` to retract a declaration persistently, or
+`delsimps ["Thy.name.__clasimp_iff"]` to retract just its rewrite. Use
+`Iff th` for the same two derived views during one clasimp tactic
+invocation only.
+
+### Failure
+
+The attribute takes no arguments. Registration can fail if the theorem
+cannot be converted to the required rewrite or classical-rule form.
+
+### Example
+
+``` hol4
+Theorem iff_example[iff]:
+  p /\ T <=> p
+Proof
+  simp []
+QED
+```
+
+### See also
+
+[`clasimpLib.remove_iff`](#clasimpLib.remove_iff),
+[`clasetLib.Iff`](#clasetLib.Iff),
+[`clasetLib.Simp`](#clasetLib.Simp),
+[`clasetLib`](#clasetLib),
+[`bossLib.SIMP_TAC`](#bossLib.SIMP_TAC)

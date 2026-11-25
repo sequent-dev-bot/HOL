@@ -1,0 +1,55 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `DEEPEN_TAC`
+
+``` hol4
+classicalLib.DEEPEN_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Solves a goal by iteratively deepened classical search.
+
+`DEEPEN_TAC thms` first safely saturates the state, then tries bounded
+depth-first searches at bounds 4, 6, 8 and 10. Thus its default start is
+4, increment is 2 and ceiling is 10. Matching safe steps and unifying
+assumption, contradiction, and zero-premise safe steps consume no bound.
+Positive-premise instantiating and duplicating unsafe steps consume one
+unit on each branch. Search uses dynamic per-goal pruning and
+stops at the first successful bound.
+
+The claset-explicit `CS_DEEPEN_TAC cs {start = n}` interface permits
+another start;
+its increment and ceiling remain 2 and 10.
+
+The theorem list locally processes `SIntro`, `Intro`, `SElim`, `Elim`,
+`SDest`, `Dest` and `Del` markers. Every unmarked theorem is inserted as an
+assumption before search starts. Content-bearing generic simplifier
+wrappers are unwrapped and inserted; inert generic controls are ignored.
+
+The tactic succeeds only with a complete, replayed proof.
+
+### Failure
+
+Fails if none of the attempted bounds produces a complete proof. Malformed
+extra rules can also fail while the temporary rule set is built.
+
+### Example
+
+``` hol4
+Theorem deepen_tac_example:
+  (p ==> q) ==> (q ==> r) ==> p ==> r
+Proof
+  classicalLib.DEEPEN_TAC []
+QED
+```
+
+### See also
+
+[`classicalLib.FAST_TAC`](#classicalLib.FAST_TAC),
+[`classicalLib.SLOW_TAC`](#classicalLib.SLOW_TAC),
+[`classicalLib.BEST_TAC`](#classicalLib.BEST_TAC),
+[`classicalLib.ASTAR_TAC`](#classicalLib.ASTAR_TAC),
+[`classicalLib.STEP_TAC`](#classicalLib.STEP_TAC),
+[`classicalLib.INST_STEP_TAC`](#classicalLib.INST_STEP_TAC),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC)

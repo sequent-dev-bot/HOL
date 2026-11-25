@@ -1,0 +1,41 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CS_AUTO_TAC`
+
+``` hol4
+clasimpLib.CS_AUTO_TAC :
+  {blast : int, depth : int} ->
+  clasetLib.claset -> simpExtLib.simpset -> tactic
+```
+
+------------------------------------------------------------------------
+
+Constructs the claset- and simpset-explicit form of `AUTO_DEPTH_TAC`.
+
+`CS_AUTO_TAC bounds cs ss` runs the auto pipeline using exactly `cs` and
+`ss`. It does not read the current claset or clasimpset and has no theorem
+list to process. The supplied simpset is still used for assumption-aware
+full simplification and as the search wrappers' simplifier.
+
+The tactic may leave residual goals, but succeeds only if the goal state
+changes. The caller is responsible for adding any splitter, conditional
+depth, safe solvers, temporary rules, or inserted facts wanted in the
+explicit context.
+
+### Failure
+
+Fails when its complete pass leaves the goal unchanged.
+
+### Example
+
+``` hol4
+val auto =
+  clasimpLib.CS_AUTO_TAC {blast = 4, depth = 2}
+    (clasetLib.the_claset ()) (clasimpLib.clasimp_ss ());
+```
+
+### See also
+
+[`clasimpLib.AUTO_TAC`](#clasimpLib.AUTO_TAC),
+[`clasimpLib.AUTO_DEPTH_TAC`](#clasimpLib.AUTO_DEPTH_TAC),
+[`clasimpLib.add_simp_wrapper`](#clasimpLib.add_simp_wrapper),
+[`clasimpLib.add_safe_simp_wrapper`](#clasimpLib.add_safe_simp_wrapper)

@@ -345,16 +345,36 @@ fun parseSML file read parseError: scope -> result = let
   val parseIdentifierOrKw = parseIdentifier' (fn _ => true)
   val parseIdentifierOrEq = parseIdentifier' (fn s => s = "=")
 
-  fun parseIdentifiers' f acc = case parseIdentifier' f false of
+  fun parseIdentifiers acc = case parseIdentifier false of
     (_, "") => rev acc
-  | id => parseIdentifiers' f (id :: acc)
-  val parseIdentifiers = parseIdentifiers' (fn _ => false)
-  val parseIdentifiersOrKws = parseIdentifiers' (fn _ => true)
+  | id => parseIdentifiers (id :: acc)
+
+  (* An attribute value may also be a numeral, as in [elim=75] or the
+     signed penalty [norm=~3]. *)
+  fun parseAttributeValue () =
+    case token () of
+        (start, IntTk) => (start, ident start)
+      | tk => (unread tk; parseIdentifierOrKw false)
+
+  fun parseAttributeValues acc =
+    case parseAttributeValue () of
+        (_, "") => rev acc
+      | value => parseAttributeValues (value :: acc)
+
+  (* SML lexes [norm=~3] as "=~" "3"; re-lex from the "~". *)
+  fun parseAttributeEq () =
+    case token () of
+        tk as (start, IdentTk) =>
+          (case ident start of
+               "=" => SOME start
+             | "=~" => (lookahead := []; pos := start + 1; SOME start)
+             | _ => (unread tk; NONE))
+      | tk => (unread tk; NONE)
 
   fun parseKVals (): kvals = {
     key = parseIdentifierOrKw true,
-    bind = Option.map (fn eq_ => {eq_ = eq_, vals = parseIdentifiersOrKws []})
-      (parseKeyword "=" NONE) }
+    bind = Option.map (fn eq_ => {eq_ = eq_, vals = parseAttributeValues []})
+      (parseAttributeEq ()) }
 
   fun parseAttrs f: 'a attrs = case parseSymbol #"[" NONE of
     NONE => NONE

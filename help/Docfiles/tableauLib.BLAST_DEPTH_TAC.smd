@@ -1,0 +1,66 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `BLAST_DEPTH_TAC`
+
+``` hol4
+tableauLib.BLAST_DEPTH_TAC : int -> thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Solves a goal by classical tableau search at one fixed resource bound.
+
+After built-in preprocessing, `BLAST_DEPTH_TAC n thms` makes one tableau
+search with resource limit `n`; it neither iterates through smaller limits
+nor consults `tableauLib.depth_limit`. The limit is not a literal formula
+depth. Safe non-instantiating inferences are free, while unsafe and
+instantiating inferences consume it according to the tableau's branching
+penalty. A negative limit disables tableau search, although preprocessing
+can still solve a goal. There is no timeout.
+
+The theorem list locally processes `SIntro`, `Intro`, `SElim`, `Elim`,
+`SDest`, `Dest` and `Del` markers. Every unmarked theorem is inserted as an
+assumption before tableau translation. Content-bearing generic simplifier
+wrappers are unwrapped and inserted; inert generic controls are ignored.
+
+Found tableaux are replayed through typed HOL inference. A replay failure
+causes internal backtracking. Trace `"blast.trace"` reports such failures
+and rule warnings at level 1, statistics at level 2, and full tableau
+states at level 3 and above.
+
+The fixed-bound prover intentionally ignores classical wrappers and reads
+only the rule nets. It rejects weak elimination rules whose premises lose
+the arbitrary conclusion. Its search unifier is first-order, not
+higher-order, so some higher-order rule applications are unavailable.
+Equality support is also incomplete: suitable equality assumptions can be
+used for restricted substitution, but there is no complete equational
+reasoner.
+
+This classical tableau tactic is distinct from `blastLib.BBLAST_TAC`, the
+finite-word bit-blasting tactic.
+
+### Failure
+
+Fails unless preprocessing or a reconstructed tableau proof closes the
+goal within the specified limit. Marker processing can also fail on
+malformed extra rules.
+
+### Example
+
+``` hol4
+Theorem blast_depth_tac_example:
+  (p \/ q) ==> (p ==> r) ==> (q ==> r) ==> r
+Proof
+  tableauLib.BLAST_DEPTH_TAC 2 []
+QED
+```
+
+### See also
+
+[`tableauLib.BLAST_TAC`](#tableauLib.BLAST_TAC),
+[`tableauLib.CS_BLAST_DEPTH_TAC`](#tableauLib.CS_BLAST_DEPTH_TAC),
+[`blastLib.BBLAST_TAC`](#blastLib.BBLAST_TAC),
+[`classicalLib.DEEPEN_TAC`](#classicalLib.DEEPEN_TAC),
+[`classicalLib.FAST_TAC`](#classicalLib.FAST_TAC),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC),
+[`HOLFlags.set_trace`](#HOLFlags.set_trace)

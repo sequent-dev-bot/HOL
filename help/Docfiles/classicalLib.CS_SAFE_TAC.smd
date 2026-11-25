@@ -1,0 +1,25 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CS_SAFE_TAC`
+
+``` hol4
+classicalLib.CS_SAFE_TAC : clasetLib.claset -> NTactical.ntactic
+```
+
+------------------------------------------------------------------------
+
+Constructs the claset-explicit form of `SAFE_TAC`.
+
+`CS_SAFE_TAC cs` repeatedly applies matching safe steps to every open goal
+until saturation. It returns the resulting state through
+`NTactical.ntactic`, without committing to one result or processing
+theorem-list markers.
+
+### Failure
+
+Produces no result when safe saturation leaves the state unchanged.
+
+### See also
+
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CS_CLARIFY_TAC`](#classicalLib.CS_CLARIFY_TAC),
+[`classicalLib.CS_SAFE_STEP_TAC`](#classicalLib.CS_SAFE_STEP_TAC)

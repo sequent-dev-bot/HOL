@@ -1,0 +1,3 @@
+Theory seedDiamondRight
+Ancestors
+  pairAutoSeed

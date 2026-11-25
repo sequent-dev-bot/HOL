@@ -1,0 +1,25 @@
+HOLHEAP = $(HOLDIR)/bin/hol.state0
+INCLUDES = $(HOLDIR)/src/auto/rules $(HOLDIR)/src/auto/classical
+
+all: $(DEFAULT_TARGETS) selftest.exe
+.PHONY: all
+
+blastRule.uo: blastTerm.ui
+blastSearch.uo: blastTerm.uo blastRule.uo
+blastReconstruct.uo: blastSearch.uo
+tableauLib.uo: blastReconstruct.uo
+selftest.uo: blastTerm.uo blastRule.uo blastSearch.uo blastReconstruct.uo \
+             tableauLib.uo
+
+selftest.exe: selftest.uo blastTerm.uo blastRule.uo blastSearch.uo \
+              blastReconstruct.uo tableauLib.uo
+	$(HOLMOSMLC) -o $@ $<
+
+ifdef HOLSELFTESTLEVEL
+all: blast-selftest.log
+
+blast-selftest.log: selftest.exe
+	$(tee ./selftest.exe 2>&1,$@)
+endif
+
+EXTRA_CLEANS = selftest.exe blast-selftest.log

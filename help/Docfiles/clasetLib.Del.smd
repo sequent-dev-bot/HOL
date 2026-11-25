@@ -1,0 +1,52 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `Del`
+
+``` hol4
+clasetLib.Del : string -> thm
+```
+
+------------------------------------------------------------------------
+
+Marks a named classical rule for removal during one tactic invocation.
+
+`Del name` produces a theorem marker recognized in classical tactic theorem
+lists. Before running the tactic, every rule with exactly that claset name
+is removed from the temporary rule set. Stored theorem rules normally use a
+fully qualified database name such as `bool$AND_INTRO_THM`. Removing an
+absent name has no effect.
+
+`Del` neither changes the current theory's classical rule set nor removes
+the theorem from the theorem database. For persistent or session-local
+programmatic removal, use `delrule` or `temp_delrule`. There is no classical
+rule-removal theorem attribute. `Del` is distinct from the simplifier's
+`Excl` marker.
+
+### Failure
+
+`Del name` does not fail. Processing the marker is also a no-op when `name`
+is not present.
+
+### Example
+
+The seed conjunction-introduction rule is suppressed only in this call:
+
+``` hol4
+TRY (classicalLib.SAFE_TAC
+       [clasetLib.Del "bool$AND_INTRO_THM"])
+```
+
+A later `SAFE_TAC []` again sees the seed rule.
+
+### See also
+
+[`clasetLib`](#clasetLib),
+[`clasetLib.SIntro`](#clasetLib.SIntro),
+[`clasetLib.Intro`](#clasetLib.Intro),
+[`clasetLib.SElim`](#clasetLib.SElim),
+[`clasetLib.Elim`](#clasetLib.Elim),
+[`clasetLib.SDest`](#clasetLib.SDest),
+[`clasetLib.Dest`](#clasetLib.Dest),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC),
+[`classicalLib.SAFE_STEP_TAC`](#classicalLib.SAFE_STEP_TAC),
+[`classicalLib.CLARIFY_STEP_TAC`](#classicalLib.CLARIFY_STEP_TAC)

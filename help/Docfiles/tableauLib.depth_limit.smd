@@ -1,0 +1,40 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `depth_limit`
+
+``` hol4
+tableauLib.depth_limit : int ref
+```
+
+------------------------------------------------------------------------
+
+Controls the largest tableau resource bound tried by `BLAST_TAC`.
+
+The initial value is 20. `BLAST_TAC` reads the reference when the tactic is
+applied and, after preprocessing, searches bounds from 0 through the
+current value. A negative value makes `BLAST_TAC` fail outright without
+invoking the tableau engine. Use 0 for the minimal single-depth run.
+`BLAST_DEPTH_TAC` and `tryIt` use their explicit arguments and do not
+consult this reference.
+
+The bound is not a timeout or literal formula depth. There is no automatic
+time limit.
+
+### Failure
+
+Assigning the reference cannot fail. A value too small for a goal can make
+`BLAST_TAC` fail to find a tableau proof.
+
+### Example
+
+``` hol4
+val old_limit = !tableauLib.depth_limit;
+val _ = tableauLib.depth_limit := 12;
+```
+
+Clients that change this global reference should normally restore it.
+
+### See also
+
+[`tableauLib.BLAST_TAC`](#tableauLib.BLAST_TAC),
+[`tableauLib.BLAST_DEPTH_TAC`](#tableauLib.BLAST_DEPTH_TAC),
+[`tableauLib.tryIt`](#tableauLib.tryIt)

@@ -1,0 +1,32 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `run_family`
+
+``` hol4
+benchLib.run_family :
+  {family : string, goals : benchLib.corpus_goal list,
+   shortfalls : benchLib.shortfall list, budget : Time.time,
+   battery : benchLib.tactic_id list, level : int} ->
+  benchLib.family_result
+```
+
+------------------------------------------------------------------------
+
+The argument names use the following terminology:
+
+* `goals` is the complete collection of benchmark theorem statements.
+* Each goal's `mapped` tactic is the HOL4 tactic assigned as the closest
+  counterpart of its recorded Isabelle method.
+* `shortfalls` lists expected non-solutions, each with a cause, date, and
+  explanation.
+* `battery` lists additional tactics whose results are recorded for
+  information but do not decide whether the test passes.
+
+Runs each selected goal with its assigned tactic and checks exact two-way
+agreement with the expected non-solution records.  Level 1 selects the
+fixed goals whose `representative` field is true.  Level 2 runs every
+supplied goal and records the requested additional-tactic results.
+
+Before execution, the harness checks every theorem excluded because it is
+the direct HOL4 counterpart of the source result.  This prevents the test
+from succeeding merely by reusing the theorem it is intended to benchmark.
+A newly solved expected failure is an error just like an unexpected failure.

@@ -1,0 +1,38 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CS_INST_STEP_TAC`
+
+``` hol4
+classicalLib.CS_INST_STEP_TAC : clasetLib.claset -> NTactical.ntactic
+```
+
+------------------------------------------------------------------------
+
+Constructs a claset-explicit, instantiating one-step tactic.
+
+`CS_INST_STEP_TAC cs` tries unifying assumption, contradiction, zero-premise
+safe rules and positive-premise safe rules on the first goal. It performs
+no preliminary safe saturation, applies no wrappers, and tries no unsafe
+rules. Each result is replayed and may contain residual goals.
+
+Unlike `INST_STEP_TAC`, this interface uses a prepared rule set, exposes
+its alternative result sequence, and processes no theorem-list markers.
+
+### Failure
+
+Produces no result if no unifying assumption, contradiction or safe rule
+applies. Replay failure is reported as an error.
+
+### Example
+
+``` hol4
+val inst_step =
+  classicalLib.CS_INST_STEP_TAC (clasetLib.the_claset ());
+```
+
+### See also
+
+[`classicalLib.INST_STEP_TAC`](#classicalLib.INST_STEP_TAC),
+[`classicalLib.CS_STEP_TAC`](#classicalLib.CS_STEP_TAC),
+[`classicalLib.CS_SLOW_STEP_TAC`](#classicalLib.CS_SLOW_STEP_TAC),
+[`classicalLib.CS_DEEPEN_TAC`](#classicalLib.CS_DEEPEN_TAC),
+[`clasetLib`](#clasetLib)

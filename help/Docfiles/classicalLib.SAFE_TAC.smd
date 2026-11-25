@@ -1,0 +1,76 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `SAFE_TAC`
+
+``` hol4
+classicalLib.SAFE_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Repeatedly applies safe classical-reasoning steps to all goals.
+
+`SAFE_TAC thms` starts with the current theory's classical rule set and
+uses matching, rather than instantiating variables in the goal. It applies
+built-in assumption, contradiction, assumption modus-ponens, implication,
+universal-introduction and hypothesis-substitution steps, together with
+registered safe introduction, elimination and destruction rules. Registered
+safe wrappers also participate. Newly generated goals are rescanned from the
+left, and rule-premise order is preserved.
+
+Safe rules derived from `TypeBase` include constructor introduction as well
+as constructor injectivity and distinctness, so datatype equalities can be
+both decomposed and rebuilt during saturation.
+
+The theorem list can modify the rule set for this invocation. The markers
+`SIntro`, `Intro`, `SElim`, `Elim`, `SDest`, `Dest` and `Del` respectively
+add or remove rules. Every unmarked theorem is inserted into the goal as an
+assumption before safe reasoning starts, so `SAFE_TAC` can use it through
+the ordinary assumption channel. Content-bearing generic simplifier
+wrappers such as `Once th` are unwrapped and inserted; inert controls such
+as `Cong`, `Excl` and `SF` are ignored. No modification survives the tactic
+invocation.
+
+The tactic need not solve the goal: successful safe steps may leave
+residual goals.
+
+### Failure
+
+After its temporary rule set has been constructed, fails exactly when
+saturation leaves the goal unchanged, up to alpha conversion. Use
+`TRY (SAFE_TAC thms)` when an inapplicable tactic should succeed without
+changing the goal.
+
+Malformed extra rules can also cause failure while the theorem list is
+processed.
+
+### Example
+
+The seed rule set proves this propositional theorem without extra rules:
+
+``` hol4
+Theorem safe_tac_example:
+  p /\ q ==> q /\ p
+Proof
+  classicalLib.SAFE_TAC []
+QED
+```
+
+A rule named `my_intro_rule` can be made safe for just one call:
+
+``` hol4
+classicalLib.SAFE_TAC [clasetLib.SIntro my_intro_rule]
+```
+
+### See also
+
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC),
+[`classicalLib.SAFE_STEP_TAC`](#classicalLib.SAFE_STEP_TAC),
+[`classicalLib.CLARIFY_STEP_TAC`](#classicalLib.CLARIFY_STEP_TAC),
+[`clasetLib`](#clasetLib),
+[`clasetLib.SIntro`](#clasetLib.SIntro),
+[`clasetLib.Intro`](#clasetLib.Intro),
+[`clasetLib.SElim`](#clasetLib.SElim),
+[`clasetLib.Elim`](#clasetLib.Elim),
+[`clasetLib.SDest`](#clasetLib.SDest),
+[`clasetLib.Dest`](#clasetLib.Dest),
+[`clasetLib.Del`](#clasetLib.Del)

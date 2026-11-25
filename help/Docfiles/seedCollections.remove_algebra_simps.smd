@@ -1,0 +1,15 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `remove_algebra_simps`
+
+``` hol4
+seedCollections.remove_algebra_simps : string -> unit
+```
+
+------------------------------------------------------------------------
+
+Removes a persistent theorem name from the current `algebra_simps`
+collection.  Names may use dotted or kernel-qualified theory notation.
+
+### See also
+
+[`seedCollections.algebra_ss`](#seedCollections.algebra_ss)

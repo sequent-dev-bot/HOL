@@ -1,0 +1,36 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CS_BEST_TAC`
+
+``` hol4
+classicalLib.CS_BEST_TAC : clasetLib.claset -> NTactical.ntactic
+```
+
+------------------------------------------------------------------------
+
+Constructs the claset-explicit form of `BEST_TAC`.
+
+`CS_BEST_TAC cs` performs solve-completely best-first search. It safely
+saturates the whole state, then expands the first goal with the fast
+instantiating or unsafe cascade. States use total normalized goal size.
+`clasetSearch.node_limit`, initially 100000, limits expanded states.
+
+This programmatic interface uses `cs` directly, exposes the result
+sequence, and does not process theorem-list markers.
+
+### Failure
+
+Produces no result on frontier exhaustion or when the expansion limit is
+reached without a complete proof. Replay failure is reported as an error.
+
+### Example
+
+``` hol4
+val best = classicalLib.CS_BEST_TAC (clasetLib.the_claset ());
+```
+
+### See also
+
+[`classicalLib.BEST_TAC`](#classicalLib.BEST_TAC),
+[`classicalLib.CS_SLOW_BEST_TAC`](#classicalLib.CS_SLOW_BEST_TAC),
+[`classicalLib.CS_FIRST_BEST_TAC`](#classicalLib.CS_FIRST_BEST_TAC),
+[`clasetLib`](#clasetLib)

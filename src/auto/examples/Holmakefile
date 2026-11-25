@@ -1,0 +1,11 @@
+INCLUDES = ../rules ../classical ../blast ../clasimp ../aesop \
+           ../linarith ../linarith/instances \
+           ../../integer ../../real ../../rational
+
+all: $(DEFAULT_TARGETS)
+.PHONY: all
+
+ifeq ($(KERNELID),otknl)
+all: $(patsubst %Script.sml,%.ot.art,$(wildcard *Script.sml))
+
+endif

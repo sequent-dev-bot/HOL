@@ -1,0 +1,22 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `algebra_ss`
+
+``` hol4
+seedCollections.algebra_ss : unit -> simpLib.ssfrag
+```
+
+------------------------------------------------------------------------
+
+Returns an ssfrag containing the ancestry-backed `algebra_simps` collection.
+The collection is opt-in and is not installed in `srw_ss()`.
+
+### Example
+
+``` hol4
+SIMP_TAC (srw_ss() ++ seedCollections.algebra_ss ()) []
+```
+
+### See also
+
+[`seedCollections.field_ss`](#seedCollections.field_ss),
+[`seedCollections.remove_algebra_simps`](#seedCollections.remove_algebra_simps)

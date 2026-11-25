@@ -1,0 +1,45 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `tryIt`
+
+``` hol4
+tableauLib.tryIt : int -> thm list -> goal -> tableauLib.try_result
+```
+
+------------------------------------------------------------------------
+
+Runs one fixed-bound tableau search for debugging.
+
+`tryIt n thms goal` returns a record with fields `result` and `fullTrace`.
+The result is a recorded tableau proof option. A returned proof's `script`
+field is the ordered search script, while `fullTrace` contains the
+successive branch forests visited by search. No typed reconstruction is
+attempted, so a returned proof is a search artifact rather than a HOL
+theorem.
+
+The theorem list locally processes `SIntro`, `Intro`, `SElim`, `Elim`,
+`SDest`, `Dest` and `Del` markers. Every unmarked theorem is inserted as an
+assumption before tableau translation. Content-bearing generic simplifier
+wrappers are unwrapped and inserted; inert generic controls are ignored.
+Classical wrappers are not used.
+
+Unlike `BLAST_DEPTH_TAC`, this function performs neither the public
+tactic's preprocessing nor reconstruction.
+
+### Failure
+
+Ordinary search exhaustion is represented by `result = NONE`. Goal
+translation or malformed extra rules can raise an exception.
+
+### Example
+
+``` hol4
+val report = tableauLib.tryIt 2 [] ([], “p ==> p”);
+val visited = #fullTrace report;
+```
+
+### See also
+
+[`tableauLib.BLAST_TAC`](#tableauLib.BLAST_TAC),
+[`tableauLib.BLAST_DEPTH_TAC`](#tableauLib.BLAST_DEPTH_TAC),
+[`tableauLib.depth_limit`](#tableauLib.depth_limit),
+[`HOLFlags.set_trace`](#HOLFlags.set_trace)

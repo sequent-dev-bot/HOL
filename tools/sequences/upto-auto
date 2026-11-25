@@ -1,0 +1,41 @@
+#include sequences/kernel
+#include sequences/core-theories
+
+# The pre-boss part of src/auto: each of these pins
+# HOLHEAP = $(HOLDIR)/bin/hol.state0 and may only use libraries built
+# before src/boss.
+src/auto/rules
+src/auto/classical
+src/auto/blast
+src/auto/linarith
+src/auto/order
+src/auto/clasimp
+src/auto/aesop
+
+# The layer's first post-boss directory, kept after the pre-boss block so
+# that block stays contiguous.  Holmake recurses from here into src/integer,
+# src/real, src/rational and their INCLUDES closure, so the gate really
+# does build those; a failure in any of them is reported against this
+# entry.  Do not promote them to sequence entries of their own: their
+# Holmakefiles run HOL_LNSIGOBJ themselves under HOLBUILD, which then
+# collides with bin/build's own upload step ("Unable to link old file
+# ...: File exists").  src/quotient/src is the one directory that is
+# both, and it pays for it by commenting that block out.
+src/auto/linarith/instances
+
+# Post-boss opt-in rule corpus and its parity gate.  Seeds depend on the
+# source theories and linarith instances.  None of these directories
+# runs HOL_LNSIGOBJ under HOLBUILD.
+src/auto/seeds
+src/auto/benchmarks
+
+# User-level showcase theories for the layer's tactics.  Post-boss like
+# instances/ (they use bossLib and the int, real and rat instances), so
+# they stay below the pre-boss block.
+src/auto/examples
+
+!src/auto/rules/theory_tests
+!src/auto/linarith/theory_tests
+!src/auto/clasimp/theory_tests
+!src/auto/aesop/theory_tests
+!src/auto/seeds/theory_tests

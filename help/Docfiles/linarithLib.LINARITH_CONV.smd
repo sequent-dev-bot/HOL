@@ -1,0 +1,44 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `LINARITH_CONV`
+
+``` hol4
+linarithLib.LINARITH_CONV : conv
+```
+
+------------------------------------------------------------------------
+
+Proves or disproves a linear-arithmetic proposition.
+
+For a term `tm`, the conversion first attempts `LINARITH_PROVE tm` and
+then `LINARITH_PROVE (~tm)`. It returns `|- tm = T` in the first case and
+`|- tm = F` in the second. It has the same forward-interface limitations
+as `LINARITH_PROVE`: no ambient assumptions or persistent `[arith]` facts
+are used, and the full tactic's operator and Boolean preprocessing is not
+run. It is therefore not a decision procedure for arbitrary Boolean
+syntax.
+
+### Failure
+
+Fails if neither `tm` nor its negation follows by supported direct linear
+arithmetic, or if a needed carrier has no registered instance. As with
+`LINARITH_PROVE`, a failure of the replay machinery itself is reported as
+it stands rather than as a failure to find a proof; the second attempt is
+made only when the first was an honest refusal.
+
+### Example
+
+``` hol4
+val true_result =
+  linarithLib.LINARITH_CONV
+    ``!x y : num. x <= y ==> x < y + 1``;
+
+val false_result =
+  linarithLib.LINARITH_CONV ``(3 : num) < 2``;
+```
+
+### See also
+
+[`linarithLib`](#linarithLib),
+[`linarithLib.LINARITH_PROVE`](#linarithLib.LINARITH_PROVE),
+[`linarithLib.LINARITH_TAC`](#linarithLib.LINARITH_TAC),
+[`Conv`](#Conv)

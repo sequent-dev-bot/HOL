@@ -1,0 +1,29 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `ORDER_ext_ss`
+
+``` hol4
+orderLib.ORDER_ext_ss : simpExtLib.ssfrag
+orderLib.ORDER_ext_ss_budgeted :
+  searchBudget.budget -> simpExtLib.ssfrag
+```
+
+------------------------------------------------------------------------
+
+Provides the explicitly tracked order-decision fragment.
+
+The extension fragments lift the same ordinary reducer closures used by
+`ORDER_ss` and `ORDER_ss_budgeted`, retaining their context collection
+and budget ownership. Select this fragment before installing it in an
+extension simpset. Ordinary standalone order fragments and their clients
+remain ordinary.
+
+### Example
+
+``` hol4
+val order_ss = simpExtLib.++
+  (simpExtLib.lift_simpset (BasicProvers.srw_ss ()), orderLib.ORDER_ext_ss);
+```
+
+### See also
+
+[`linarithLib.LINARITH_ext_ss`](#linarithLib.LINARITH_ext_ss)

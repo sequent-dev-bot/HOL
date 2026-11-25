@@ -1,0 +1,18 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `field_ss`
+
+``` hol4
+seedCollections.field_ss : unit -> simpLib.ssfrag
+```
+
+------------------------------------------------------------------------
+
+Returns an ssfrag containing the ancestry-backed `field_simps` collection.
+It includes the algebra collection's concrete rearrangement rules plus real
+and rational division-elimination rules.  It is never added to a default
+simpset.
+
+### See also
+
+[`seedCollections.algebra_ss`](#seedCollections.algebra_ss),
+[`seedCollections.remove_field_simps`](#seedCollections.remove_field_simps)

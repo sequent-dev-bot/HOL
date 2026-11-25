@@ -1,0 +1,58 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `linarith_solver`
+
+``` hol4
+linarithLib.linarith_solver : TraverseExt.ssolver
+```
+
+------------------------------------------------------------------------
+
+Provides the named unsafe simplifier solver `"lin_arith"`.
+
+The solver proves arithmetic side conditions from the simplifier's
+`context_thms` and the [global `[arith]` facts](#linarithData.arith), by
+the same direct forward arithmetic, and the same cache (reset by
+`linarithLib.clear_linarith_caches ()`), as
+[`LINARITH_ss`](#linarithLib.LINARITH_ss). A proposition outside linear
+arithmetic is proved only when the context, together with the `[arith]`
+facts, is arithmetically contradictory; a context with no arithmetic in
+it is declined, whatever facts are declared.
+
+Solvers of this name, built with
+[`linarith_solver_with_facts`](#linarithLib.linarith_solver_with_facts)
+over the context's `[arith]` facts, are installed in the clasimp and
+Aesop simpsets. One can be suppressed for one invocation with
+[`simpExtLib.ExclX "solver:lin_arith"`](#simpExtLib.ExclX) or removed
+with [`simpExtLib.remove_solver "lin_arith"`](#simpExtLib.remove_solver).
+This solver can be added to another simpset with
+[`simpExtLib.add_unsafe_solver`](#simpExtLib.add_unsafe_solver).
+
+### Failure
+
+The solver raises a `HOL_ERR` when its requested proposition does not
+follow by supported direct linear arithmetic. The simplifier treats this
+as the solver being inapplicable and may try another solver.
+
+### Example
+
+``` hol4
+val arithmetic_ss =
+  simpExtLib.add_unsafe_solver linarithLib.linarith_solver
+    (simpExtLib.lift_simpset (BasicProvers.srw_ss ()));
+
+Theorem linarith_solver_example:
+  !x y z : num. x <= y /\ y <= z ==> x <= z
+Proof
+  rpt strip_tac >>
+  simpExtLib.FULL_SIMP_TAC arithmetic_ss []
+QED
+```
+
+### See also
+
+[`linarithLib`](#linarithLib),
+[`linarithLib.LINARITH_ss`](#linarithLib.LINARITH_ss),
+[`linarithLib.linarith_solver_with_facts`](#linarithLib.linarith_solver_with_facts),
+[`simpExtLib.add_unsafe_solver`](#simpExtLib.add_unsafe_solver),
+[`simpExtLib.remove_solver`](#simpExtLib.remove_solver),
+[`linarithData.arith`](#linarithData.arith)

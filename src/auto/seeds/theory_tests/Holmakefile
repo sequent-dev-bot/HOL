@@ -1,0 +1,15 @@
+INCLUDES = .. ../../rules ../../classical ../../blast ../../linarith \
+           ../../clasimp ../../aesop ../../linarith/instances \
+           ../../../pred_set/src ../../../finite_maps ../../../integer \
+           ../../../real ../../../rational ../../../string ../../../sort \
+           ../../../list/src
+
+all: $(DEFAULT_TARGETS)
+.PHONY: all
+
+seedDiamondChildTheory.uo: seedDiamondLeftTheory.uo \
+                           seedDiamondRightTheory.uo
+
+ifeq ($(KERNELID),otknl)
+all: $(patsubst %Script.sml,%.ot.art,$(wildcard *Script.sml))
+endif

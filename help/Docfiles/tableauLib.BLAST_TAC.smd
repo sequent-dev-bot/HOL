@@ -1,0 +1,78 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `BLAST_TAC`
+
+``` hol4
+tableauLib.BLAST_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Solves a goal by classical tableau search and kernel-checked replay.
+
+After built-in preprocessing, `BLAST_TAC thms` tries increasing tableau
+resource bounds from 0 through `!tableauLib.depth_limit`, whose initial
+value is 20. The reference is read when the tactic is applied. Safe
+non-instantiating inferences are free; unsafe and instantiating inferences
+consume the bound according to the tableau's branching penalty. There is
+no timeout.
+
+The theorem list locally modifies the current classical rule set. The
+markers `SIntro`, `Intro`, `SElim`, `Elim`, `SDest`, `Dest` and `Del` add
+or remove rules. Every unmarked theorem is inserted as an assumption before
+tableau translation, so it becomes an ordinary branch formula.
+Content-bearing generic simplifier wrappers are unwrapped and inserted;
+inert generic controls are ignored.
+
+The rule nets include both safe directions of datatype constructor
+injectivity supplied by `TypeBase`, allowing the tableau to decompose and
+rebuild constructor equalities.
+
+The raw `CS_BLAST_DEPTH_TAC` export does not change `BLAST_TAC`'s public
+packaging: preprocessing, iterative deepening through `depth_limit`, typed
+reconstruction, and tracing retain their existing behaviour.
+
+A candidate tableau is replayed through HOL's typed inference kernel. If
+replay fails, search backtracks and tries another candidate. Set the
+`"blast.trace"` trace with `HOLFlags.set_trace`: level 1 reports replay failures
+and rejected elimination rules, level 2 also reports search statistics,
+and level 3 or more includes full tableau traces.
+
+This tactic has deliberate limitations. Classical safe and unsafe wrappers
+are ignored because the tableau consults only rule nets. Weak elimination
+rules, whose premises lose the arbitrary conclusion, cannot be represented
+and are skipped. Search uses first-order rather than higher-order
+unification, so rules requiring higher-order unification may be missed.
+Equality handling is simple and incomplete: restricted substitution from
+suitable equality assumptions is provided, but not a complete equational
+calculus.
+
+This is a general classical prover. It is unrelated to
+`blastLib.BBLAST_TAC`, which expands finite-word operations into Boolean
+bit formulas.
+
+### Failure
+
+Fails unless preprocessing or a reconstructible tableau proof closes the
+goal within the configured bounds. Malformed extra rules can also fail
+during marker processing.
+
+### Example
+
+``` hol4
+Theorem blast_tac_example:
+  (!x. P x ==> Q x) ==> P a ==> Q a
+Proof
+  tableauLib.BLAST_TAC []
+QED
+```
+
+### See also
+
+[`tableauLib.CS_BLAST_DEPTH_TAC`](#tableauLib.CS_BLAST_DEPTH_TAC),
+[`tableauLib.BLAST_DEPTH_TAC`](#tableauLib.BLAST_DEPTH_TAC),
+[`blastLib.BBLAST_TAC`](#blastLib.BBLAST_TAC),
+[`classicalLib.FAST_TAC`](#classicalLib.FAST_TAC),
+[`classicalLib.DEEPEN_TAC`](#classicalLib.DEEPEN_TAC),
+[`classicalLib.SAFE_TAC`](#classicalLib.SAFE_TAC),
+[`classicalLib.CLARIFY_TAC`](#classicalLib.CLARIFY_TAC),
+[`HOLFlags.set_trace`](#HOLFlags.set_trace)

@@ -1,0 +1,36 @@
+INCLUDES = ..
+
+all: $(DEFAULT_TARGETS) reload-check state-replay-check
+.PHONY: all reload-check state-replay-check
+
+# This is deliberately phony: each Holmake invocation starts a fresh HOL
+# process, reloads the datatype theory, and verifies hook idempotence.
+reload-check: reloadCheck.exe
+	./reloadCheck.exe
+
+# This starts with an unforced global claset and checks pending TypeBase
+# catch-up events against intervening temporary modifications.
+state-replay-check: stateReplayCheck.exe
+	./stateReplayCheck.exe
+
+reloadCheck.uo: reloadBaseTheory.uo
+reloadCheck.exe: reloadCheck.uo reloadBaseTheory.uo ../NTactical.uo \
+                 ../clasetNet.uo ../clasetRules.uo ../clasetLib.uo \
+                 ../clasetMarkerTheory.uo ../clasetSeedTheory.uo
+	$(HOLMOSMLC) -o $@ $<
+
+stateReplayCheck.uo: reloadBaseTheory.uo
+stateReplayCheck.exe: stateReplayCheck.uo reloadBaseTheory.uo ../NTactical.uo \
+                      ../clasetNet.uo ../clasetRules.uo ../clasetLib.uo \
+                      ../clasetMarkerTheory.uo ../clasetSeedTheory.uo
+	$(HOLMOSMLC) -o $@ $<
+
+declBTheory.uo: declATheory.uo
+specReloadChildTheory.uo: specReloadBaseTheory.uo
+batchAddChildTheory.uo: batchAddBaseTheory.uo
+diamondAddTheory.uo: diamondRootTheory.uo
+diamondRemoveTheory.uo: diamondRootTheory.uo
+diamondChildTheory.uo: diamondAddTheory.uo diamondRemoveTheory.uo
+tyinfoDelChildTheory.uo: tyinfoDelBaseTheory.uo
+
+EXTRA_CLEANS = reloadCheck.exe stateReplayCheck.exe

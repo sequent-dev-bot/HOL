@@ -1,0 +1,39 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `CS_DEEPEN_TAC`
+
+``` hol4
+classicalLib.CS_DEEPEN_TAC : clasetLib.claset ->
+                          {start : int} -> NTactical.ntactic
+```
+
+------------------------------------------------------------------------
+
+Constructs an iteratively deepened, claset-explicit tactic.
+
+`CS_DEEPEN_TAC cs {start = n}` safely saturates states and performs bounded
+depth-first solve-completely searches starting at `n`. Bounds increase by
+2 up to the fixed ceiling 10. Matching safe and zero-premise instantiating
+steps are free; positive-premise instantiating and duplicating unsafe steps
+consume one unit per branch.
+
+Unlike `DEEPEN_TAC`, this interface permits another starting bound, takes
+`cs` directly, exposes its result sequence, and processes no markers.
+
+### Failure
+
+Produces no result if no attempted bound yields a complete proof. Replay
+failure is reported as an error.
+
+### Example
+
+``` hol4
+val deep =
+  classicalLib.CS_DEEPEN_TAC (clasetLib.the_claset ()) {start = 2};
+```
+
+### See also
+
+[`classicalLib.DEEPEN_TAC`](#classicalLib.DEEPEN_TAC),
+[`classicalLib.CS_FAST_TAC`](#classicalLib.CS_FAST_TAC),
+[`classicalLib.CS_INST_STEP_TAC`](#classicalLib.CS_INST_STEP_TAC),
+[`clasetLib`](#clasetLib)

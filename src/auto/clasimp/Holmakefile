@@ -1,0 +1,27 @@
+HOLHEAP = $(HOLDIR)/bin/hol.state0
+INCLUDES = $(HOLDIR)/src/auto/rules \
+           $(HOLDIR)/src/auto/classical \
+           $(HOLDIR)/src/auto/blast \
+           $(HOLDIR)/src/auto/linarith \
+           $(HOLDIR)/src/auto/order \
+           $(HOLDIR)/src/simp/src \
+           $(HOLDIR)/src/metis
+
+all: $(DEFAULT_TARGETS) selftest.exe
+.PHONY: all
+
+clasimpLib.uo: forceScheduler.uo
+iffTestSupport.uo: clasimpLib.uo
+selftest.uo: clasimpLib.uo forceScheduler.uo iffTestSupport.uo
+
+selftest.exe: selftest.uo clasimpLib.uo forceScheduler.uo iffTestSupport.uo
+	$(HOLMOSMLC) -o $@ $<
+
+ifdef HOLSELFTESTLEVEL
+all: clasimp-selftest.log
+
+clasimp-selftest.log: selftest.exe
+	$(tee ./selftest.exe 2>&1,$@)
+endif
+
+EXTRA_CLEANS = selftest.exe clasimp-selftest.log

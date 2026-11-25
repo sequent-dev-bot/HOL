@@ -1,0 +1,25 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `audit`
+
+``` hol4
+seedAudit.audit : {waivers : seedAudit.waiver list} -> seedAudit.report
+```
+
+------------------------------------------------------------------------
+
+Checks inversion and preservation obligations for every safe rule in the
+assembled claset, and validates all persistent split rules.
+
+The fixed prover stack runs each nontrivial obligation for at most five
+seconds.  A waiver needs a unique rule name, a reason, and a date.  A stale
+waiver is an error: waivers may explain only obligations that still fail the
+fixed stack.
+
+### Failure
+
+Raises a HOL error for any unwaivered failure or stale waiver.
+
+### See also
+
+[`clasetLib.the_claset`](#clasetLib.the_claset),
+[`seedCollections.algebra_ss`](#seedCollections.algebra_ss)

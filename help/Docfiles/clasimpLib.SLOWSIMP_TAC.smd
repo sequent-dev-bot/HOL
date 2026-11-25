@@ -1,0 +1,39 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `SLOWSIMP_TAC`
+
+``` hol4
+clasimpLib.SLOWSIMP_TAC : thm list -> tactic
+```
+
+------------------------------------------------------------------------
+
+Solves a goal by non-committing depth-first search with simplification.
+
+`SLOWSIMP_TAC thms` uses the classical slow search driver, which retains
+unsafe alternatives after instantiating alternatives. Assumption-aware
+full simplification from the current clasimpset is installed as an unsafe
+wrapper on the current claset. Search is unbounded and can diverge.
+
+Unmarked theorems are inserted as assumptions. Explicit classical markers,
+`Simp`, `Iff`, and generic simplifier controls configure only this call.
+
+### Failure
+
+Fails unless search closes the goal. Search can diverge.
+
+### Example
+
+``` hol4
+Theorem slowsimp_tac_example:
+  (p ==> q) ==> p ==> q
+Proof
+  clasimpLib.SLOWSIMP_TAC []
+QED
+```
+
+### See also
+
+[`clasimpLib.CS_SLOWSIMP_TAC`](#clasimpLib.CS_SLOWSIMP_TAC),
+[`clasimpLib.FASTFORCE_TAC`](#clasimpLib.FASTFORCE_TAC),
+[`clasimpLib.BESTSIMP_TAC`](#clasimpLib.BESTSIMP_TAC),
+[`classicalLib.SLOW_TAC`](#classicalLib.SLOW_TAC)

@@ -1,0 +1,59 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `[arith]`
+
+``` hol4
+Theorem theorem_name[arith]:
+  statement
+```
+
+------------------------------------------------------------------------
+
+Registers a persistent extra fact for linear arithmetic.
+
+The argument-free `[arith]` theorem attribute adds its theorem verbatim to
+the arithmetic fact set. Declarations are inherited through theory
+ancestry. The linarith tactics, the clasimp tactics and Aesop read the
+`[arith]` set of the context they run in, while `LINARITH_ss`,
+`LINARITH_ext_ss` and `linarith_solver` read the global
+set. The shipped set is initially empty.
+Because facts are not automatically specialised, a universally quantified
+declaration may be less useful than a fact about a named constant.
+
+Use `linarithData.remove_arith` to remove a declaration persistently.
+The `[arith]` set is independent of the operator rules in
+`[arith_split]`.
+
+### Failure
+
+The attribute takes no arguments. A declared theorem may simply be
+irrelevant to a particular arithmetic call.
+
+### Example
+
+``` hol4
+Definition linarith_threshold_def:
+  linarith_threshold = (7 : num)
+End
+
+Theorem linarith_threshold_lower_bound[arith]:
+  3 <= linarith_threshold
+Proof
+  simp [linarith_threshold_def]
+QED
+
+Theorem arith_attribute_example:
+  2 < linarith_threshold
+Proof
+  linarithLib.LINARITH_TAC []
+QED
+```
+
+### See also
+
+[`linarithLib`](#linarithLib),
+[`linarithLib.LINARITH_TAC`](#linarithLib.LINARITH_TAC),
+[`linarithLib.LINARITH_ss`](#linarithLib.LINARITH_ss),
+[`linarithLib.LINARITH_ext_ss`](#linarithLib.LINARITH_ext_ss),
+[`linarithLib.linarith_solver`](#linarithLib.linarith_solver),
+[`linarithData.arith_split`](#linarithData.arith_split),
+[`linarithData.remove_arith`](#linarithData.remove_arith)

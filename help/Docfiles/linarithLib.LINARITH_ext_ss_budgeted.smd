@@ -1,0 +1,29 @@
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="hol"};
+## `LINARITH_ext_ss_budgeted`
+
+``` hol4
+linarithLib.LINARITH_ext_ss_budgeted :
+  Context.t -> searchBudget.budget -> simpExtLib.ssfrag
+```
+
+------------------------------------------------------------------------
+
+Provides `LINARITH_ext_ss` charging the arithmetic work to a budget.
+
+`LINARITH_ext_ss_budgeted ctxt budget` is the fragment of
+[`LINARITH_ext_ss`](#linarithLib.LINARITH_ext_ss) whose facts are the
+[`[arith]`](#linarithData.arith) facts of `ctxt` and whose arithmetic
+search and replay are charged to `budget`. Its result cache belongs to
+the fragment, not to the process.
+
+### Failure
+
+Applying the fragment's reducer raises `searchBudget.LimitReached` when
+`budget` is exhausted. Otherwise as for
+[`LINARITH_ext_ss`](#linarithLib.LINARITH_ext_ss).
+
+### See also
+
+[`linarithLib.LINARITH_ext_ss`](#linarithLib.LINARITH_ext_ss),
+[`linarithLib.LINARITH_ext_ss_with`](#linarithLib.LINARITH_ext_ss_with),
+[`linarithData.arith`](#linarithData.arith)

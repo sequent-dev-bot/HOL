@@ -1,0 +1,28 @@
+HOLHEAP = $(HOLDIR)/bin/hol.state0
+all: $(DEFAULT_TARGETS) selftest.exe
+.PHONY: all
+
+clasetLib.uo: clasetMarkerTheory.uo clasetFacts.uo searchBudget.uo
+clasetFacts.uo: searchBudget.uo
+clasetSeedTheory.uo: clasetLib.uo
+selftest.uo: clasetSeedTheory.uo
+
+selftest.exe: selftest.uo NTactical.uo searchBudget.uo listUtil.uo \
+              memoUtil.uo traceUtil.uo clasetFacts.uo \
+              clasetNet.uo clasetRules.uo \
+              clasetLib.uo clasetMarkerTheory.uo clasetSeedTheory.uo
+	$(HOLMOSMLC) -o $@ $<
+
+ifdef HOLSELFTESTLEVEL
+all: ntactical-selftest.log
+
+ntactical-selftest.log: selftest.exe
+	$(tee ./selftest.exe 2>&1,$@)
+endif
+
+EXTRA_CLEANS = selftest.exe ntactical-selftest.log
+
+ifeq ($(KERNELID),otknl)
+all: $(patsubst %Script.sml,%.ot.art,$(wildcard *Script.sml))
+
+endif

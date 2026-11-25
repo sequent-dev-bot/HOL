@@ -1,4 +1,5 @@
->>__ load "blastLib"; Parse.temp_set_grammars $ valOf $ grammarDB {thyname="words"};
+>>__ load "blastLib";
+>>__ Parse.temp_set_grammars $ valOf $ grammarDB {thyname="words"};
 ## `BBLAST_CONV`
 
 ``` hol4
@@ -15,7 +16,7 @@ addition, subtraction and orderings. Consequently, this conversion can
 automatically handle small, but tricky, bit-vector goals that
 `wordsLib.WORD_DECIDE` cannot handle. Obviously bit-blasting is a brute
 force approach, so this conversion should be used with care. It will
-only work well for smallish word sizes and when there is only and
+only work well for smallish word sizes and when there is only a
 handful of additions around. It is also "eager" -- additions are
 expanded out even when not strictly necessary. For example, in
 
@@ -54,7 +55,7 @@ Word orderings are handled:
 ``` hol4
 >>__ load "blastLib";
 
->> blastLib.BBLAST_CONV 
+>> blastLib.BBLAST_CONV
      “!a b. ~word_msb a /\ ~word_msb b ==> (a <+ b <=> a < b:word32)”;
 ```
 
@@ -68,12 +69,14 @@ This conversion is especially useful where "logical" and "arithmetic"
 bit-vector operations are combined:
 
 ``` hol4
->> blastLib.BBLAST_CONV 
-     “!a. ((((((a:word8) * 16w) + 0x10w)) && 0xF0w) >>> 4) = (3 -- 0) (a + 1w)”;
+>> blastLib.BBLAST_CONV
+     “!a. ((((((a:word8) * 16w) + 0x10w)) && 0xF0w) >>> 4) =
+           (3 -- 0) (a + 1w)”;
 ```
 
 ### See also
 
+[`blastLib.BBLAST_TAC`](#blastLib.BBLAST_TAC),
 [`wordsLib.WORD_ss`](#wordsLib.WORD_ss),
 [`wordsLib.WORD_ARITH_CONV`](#wordsLib.WORD_ARITH_CONV),
 [`wordsLib.WORD_LOGIC_CONV`](#wordsLib.WORD_LOGIC_CONV),
