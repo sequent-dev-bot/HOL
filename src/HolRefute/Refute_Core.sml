@@ -996,9 +996,11 @@ structure Refute_Core :> Refute_Core = struct
     (* [e = C p1 .. pn] matches with case variables [vs] and tests: a
        binder's first occurrence among the [pi] is its own case variable;
        any other [pi] (a nested pattern, a binder-free term, a repeated
-       binder) gets a fresh case variable [v] and the test [v = pi].  An
-       outer pair with such an argument is left to [pair_split_equation]. *)
-    fun constructor_match avoid binders (e, pattern) =
+       binder) gets a fresh case variable [v] and the test [v = pi], or
+       [pi = v] when [flipped] (the pattern on the equation's left), so
+       that the case split leaves it as the test reads.  An outer pair
+       with such an argument is left to [pair_split_equation]. *)
+    fun constructor_match avoid binders flipped (e, pattern) =
       case constructor_application pattern of
           NONE => NONE
         | SOME (constructor, arguments) =>
@@ -1018,7 +1020,9 @@ structure Refute_Core :> Refute_Core = struct
                                 (Term.mk_var ("v", Term.type_of argument))
                     in
                       avoid := v :: !avoid;
-                      (vs @ [v], tests @ [boolSyntax.mk_eq (v, argument)])
+                      (vs @ [v],
+                       tests @ [if flipped then boolSyntax.mk_eq (argument, v)
+                                else boolSyntax.mk_eq (v, argument)])
                     end
                 val (vs, tests) = List.foldl variable ([], []) arguments
               in
@@ -1030,8 +1034,8 @@ structure Refute_Core :> Refute_Core = struct
       case Lib.total boolSyntax.dest_eq conj of
           NONE => NONE
         | SOME (left, right) =>
-            (case constructor_match avoid binders (left, right) of
-                 NONE => constructor_match avoid binders (right, left)
+            (case constructor_match avoid binders false (left, right) of
+                 NONE => constructor_match avoid binders true (right, left)
                | found => found)
     fun pair_split_equation binders conj =
       case Lib.total boolSyntax.dest_eq conj of
@@ -1304,17 +1308,20 @@ structure Refute_Core :> Refute_Core = struct
                       (constructor_equation avoid binders conj))
                   (Lib.enumerate 0 conjuncts)
               (* a flat match first: it unwinds without tests.  A nested
-                 match is taken only when its pattern mentions every
-                 binder: one it leaves fixes nothing, and would stay
-                 quantified around the case. *)
+                 match is taken only when every binder is in some
+                 constructor equation's pattern: one that none fixes
+                 would stay quantified around the case. *)
               val (flat, nested) =
                 List.partition (fn (_, (_, _, _, tests)) => null tests) found
-              fun covers (_, (_, _, variables, tests)) =
-                List.all (fn b => is_binder variables b orelse
-                                  List.exists (Term.free_in b) tests)
-                  binders
+              fun matched b =
+                List.exists (fn (_, (_, _, variables, tests)) =>
+                    is_binder variables b orelse
+                    List.exists (Term.free_in b) tests)
+                  found
+              val candidates =
+                flat @ (if List.all matched binders then nested else [])
             in
-              case flat @ List.filter covers nested of
+              case candidates of
                  (index, (e, constructor, variables, tests)) :: _ =>
                    let
                      val (equation, rest) = split_at index conjuncts

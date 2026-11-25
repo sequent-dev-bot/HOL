@@ -1683,7 +1683,12 @@ local
      ``!x : num. ?a. (if x = 0 then NONE else SOME (x, x + 1)) =
                      SOME (a, a)``,
      ``!x : num. ?a b rest. (if x = 0 then [] else [(x, x)]) =
-                            (a, b) :: rest``]
+                            (a, b) :: rest``,
+     ``!x : num. ?y. INL (y, [] : num list) =
+                     (if x = 0 then INR T else INL (x, []))``,
+     ``!x : num. ?a b.
+         (if x = 0 then [] else [INL (x, []); INL (x, [])]) =
+         [INL (a, [] : num list); INL (b, []) : num # num list + bool]``]
   fun cfg backend = qc |> upd_timeout 60.0 |> upd_sequential true
     |> upd_seed (SOME 42) |> only [backend]
 in
