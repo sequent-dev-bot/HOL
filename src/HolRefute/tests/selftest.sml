@@ -1666,6 +1666,8 @@ val _ = test "a constructor equation beside a binder equation is unwound"
       List.all unwound goals
     end)
 
+val _ = Datatype.Datatype `rf_tri = RFTri num num num`
+
 (* A constructor argument that is a nested pattern, a binder-free term or
    a repeated binder gets a case variable of its own and a test in the
    branch, so the quantifier unwinds one constructor at a time; before,
@@ -1688,7 +1690,9 @@ local
                      (if x = 0 then INR T else INL (x, []))``,
      ``!x : num. ?a b.
          (if x = 0 then [] else [INL (x, []); INL (x, [])]) =
-         [INL (a, [] : num list); INL (b, []) : num # num list + bool]``]
+         [INL (a, [] : num list); INL (b, []) : num # num list + bool]``,
+     ``!x : num. ?a. (if x = 0 then RFTri 0 1 2 else RFTri x x x) =
+                     RFTri a a a``]
   fun cfg backend = qc |> upd_timeout 60.0 |> upd_sequential true
     |> upd_seed (SOME 42) |> only [backend]
 in
@@ -1700,9 +1704,14 @@ in
 
   val _ = test "a nested constructor pattern that holds is not refuted"
     (fn () =>
-      not_refuted (refute (cfg Exhaustive)
-        ``!x : num. ?y. (if x = 0 then INL (1, [])
-                         else INL (x, [] : num list)) = INL (y, [])``))
+      let
+        val outcome = refute (cfg Exhaustive)
+          ``!x : num. ?y. (if x = 0 then INL (1, [])
+                           else INL (x, [] : num list)) = INL (y, [])``
+      in
+        not_refuted outcome andalso
+        not (unknown_with "not executable" outcome)
+      end)
 end
 
 (* ------------------------------------------------------------------- *)

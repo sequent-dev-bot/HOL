@@ -1110,7 +1110,9 @@ structure Refute_Core :> Refute_Core = struct
           Tactical.THEN
             (Tactic.STRUCT_CASES_TAC
                (Drule.ISPEC v (Refute_TypeBase.nchotomy_of ty)),
-             simpLib.SIMP_TAC ss []))
+             (* conjunctions nested one way: unwinding a repeated binder
+                flattens the tests it leaves *)
+             simpLib.SIMP_TAC ss [Conv.GSYM boolTheory.CONJ_ASSOC]))
       in
         Thm.INST [{redex = v, residue = e}] th
       end
