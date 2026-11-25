@@ -628,4 +628,64 @@ val _ =
                      concl (markerLib.IgnAsm ‘x = _’))]
   end
 
+(* Configured traversals (Traverse.TRAVERSE_WITH_CONTEXT) *)
+val _ = let
+  open Traverse
+  fun config policy subgoaler solvers root_only : traverse_config =
+      {policy = policy, subgoaler = subgoaler, solvers = solvers,
+       root_only = root_only, check_abort = NONE, observer = NONE}
+  fun child_first charge =
+      ChildFirst {charge = charge, keep_abstraction = K false}
+  fun traverse cfg rules (reducer, solver) =
+      TRAVERSE_WITH_CONTEXT cfg
+        (traversedata_for_ss (bool_ss ++ rewrites rules))
+        {reducer_context = reducer, solver_context = solver}
+  fun gives msg cfg rules context t want =
+      (tprint msg;
+       require_msg (check_result (fn th => rhs (concl th) ~~ want))
+                   thm_to_string (QCONV (traverse cfg rules context)) t)
+  val f = “f : 'a -> 'a” and g = “g : 'a -> 'a” and h = “h : 'a -> 'a”
+  val x = “x : 'a” and a = “a : 'a” and b = “b : 'a”
+  val Px = “(P : 'a -> bool) x”
+  val fg_rule = ASSUME “!y:'a. ^f (^g y) = ^a”
+  val g_rule = ASSUME “!y:'a. ^g y = ^b”
+  val h_rule = ASSUME “!y:'a. ^h y = ^g y”
+  val cond_rule = ASSUME “!y:'a. (P : 'a -> bool) y ==> (^h y = ^b)”
+  fun solve_from_context ({context_thms, ...} : simp_prover_ctxt) t =
+      case List.find (fn th => concl th ~~ t) context_thms of
+          SOME th => th
+        | NONE => raise mk_HOL_ERR "selftest" "solve" "not in context"
+  val budget = mk_HOL_ERR "selftest" "charge" "budget exhausted"
+in
+  gives "Child-first traversal rewrites the argument first"
+        (config (child_first (fn () => ())) NONE [] false)
+        [fg_rule, g_rule] ([], [])
+        “^f (^g ^x)” “^f ^b”;
+  gives "Root-only traversal rewrites the root once"
+        (config ParentFirst NONE [] true)
+        [h_rule, g_rule] ([], [])
+        “^h (^g ^x)” “^g (^g ^x)”;
+  gives "Solvers see solver-only context; reducers don't"
+        (config ParentFirst NONE
+                [{name = "context", solve = solve_from_context}] false)
+        [cond_rule] ([], [ASSUME Px])
+        “^Px /\ (^h ^x = ^a)” “^Px /\ (^b = ^a)”;
+  gives "Subgoaler proves a side condition"
+        (config ParentFirst (SOME (fn _ => EQT_INTRO o ASSUME)) [] false)
+        [cond_rule] ([], [])
+        “^h ^x” b;
+  tprint "Child-first charge exception escapes the traversal";
+  require_msg
+    (check_result
+       (fn e => Option.map General.exnMessage e =
+                SOME (General.exnMessage budget)))
+    (fn NONE => "no exception" | SOME e => General.exnMessage e)
+    (fn t => (ignore (traverse (config (child_first (fn () => raise budget))
+                                       NONE [] false)
+                               [g_rule] ([], []) t);
+              NONE)
+             handle e => SOME e)
+    “^f (^g ^x)”
+end
+
 val _ = exit_count0 failcount
