@@ -12,6 +12,16 @@ structure Refute_EvalSML :> Refute_EvalSML = struct
 
   fun lazy_hole position = Susp.delay (fn () => raise Hole position)
 
+  (* What generated code calls in place of a constant extraction found no
+     equations for: the sample is stuck. *)
+  fun unextractable name =
+    if Refute_Eval.hands_over () then raise Refute_Eval.HandOver name
+    else
+      (Refute_Eval.note_stuck_reason
+         ("native code has no equations for " ^ name ^
+          "; samples reaching it were stuck");
+       raise Stuck ("no equations for " ^ name))
+
   type reconstruction = unit -> term
   type generated_environment = (int * reconstruction) list
   type generated_hit =

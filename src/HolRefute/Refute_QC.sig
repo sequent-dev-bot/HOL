@@ -30,6 +30,7 @@ signature Refute_QC = sig
     ((string * int) list -> (string * int) list) -> int ref ->
     (string * int) list ref -> int -> int -> int -> (string * int) list
   val add_reason : ''a -> ''a list ref -> unit
+  val report_stuck_at_deadline : string list ref -> unit
   val retain_potential :
     Refute_Core.counterexample option ref -> Refute_Core.counterexample ->
     unit

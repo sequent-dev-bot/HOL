@@ -2582,6 +2582,13 @@ structure Refute_Core :> Refute_Core = struct
   fun publish_counterexamples cexs = publish_found Counterexample cexs
   fun publish_models models = publish_found Model models
 
+  (* A substrate that hands its problem on takes back what it published:
+     its candidates are not the backend's. *)
+  fun withdraw_published () =
+    case Thread_Data.get active_backend_result of
+        NONE => ()
+      | SOME published => published := NONE
+
   fun search_context_for (cfg : config) =
     case Thread_Data.get active_search_context of
         SOME context => context

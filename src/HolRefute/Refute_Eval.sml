@@ -327,6 +327,30 @@ structure Refute_Eval :> Refute_Eval = struct
   fun ignored_candidate candidate ignored =
     List.exists (same_candidate candidate) ignored
 
+  (* Why samples were stuck, noted by the thread evaluating them (native
+     code reaching a constant it has no equations for) and taken by the
+     search that ran them, which reports them if it ends [Unknown]. *)
+  val stuck_reasons : string list ref Thread_Data.var = Thread_Data.var ()
+
+  fun note_stuck_reason reason =
+    case Thread_Data.get stuck_reasons of
+        SOME reasons =>
+          reasons := Refute_Core.add_reason (reason, !reasons)
+      | NONE => Thread_Data.put stuck_reasons (SOME (ref [reason]))
+
+  fun take_stuck_reasons () =
+    case Thread_Data.get stuck_reasons of
+        SOME reasons => !reasons before reasons := []
+      | NONE => []
+
+  (* Set by a search that has a later substrate to hand the problem to:
+     native code reaching such a constant then raises [HandOver] instead
+     of being stuck. *)
+  exception HandOver of string
+  val hand_over : bool Thread_Data.var = Thread_Data.var ()
+  fun hands_over () = Thread_Data.get hand_over = SOME true
+  fun with_hand_over enabled f = Thread_Data.setmp hand_over (SOME enabled) f ()
+
   fun fully_applied_constructor tm =
     let
       val (constructor, arguments) = boolSyntax.strip_comb tm

@@ -129,6 +129,11 @@ structure Refute_QC_Narrow :> Refute_QC_Narrow = struct
          [spend]'s certification retries, not just one per schedule
          entry -- so a narrowing vacuity report reflects the whole run. *)
       val counters = QC.new_counter_totals ()
+      (* The constants samples were stuck on, kept apart from [gave_up],
+         which makes a finished depth inconclusive *)
+      val _ = Refute_Eval.take_stuck_reasons ()
+      val stuck_reasons = ref []
+      val _ = QC.report_stuck_at_deadline stuck_reasons
       val complete_entries = ref ([] : (int * int) list)
       val incomplete_entries = ref ([] : (int * int) list)
       val totally_exhausted_depth = ref (NONE : int option)
@@ -197,6 +202,9 @@ structure Refute_QC_Narrow :> Refute_QC_Narrow = struct
                            size = size, draws = 0, ignored = ignored}
                         val msec = Refute_Util.elapsed_msec start
                         val _ = #absorb counters (!(#last_stats compiled))
+                        val _ = List.app (fn reason =>
+                            QC.add_reason reason stuck_reasons)
+                          (Refute_Eval.take_stuck_reasons ())
                       in
                         case result of
                             Exhausted {complete} =>
@@ -318,7 +326,7 @@ structure Refute_QC_Narrow :> Refute_QC_Narrow = struct
               ((if Option.isSome (!frontier) then
                   "narrowing search exhausted"
                 else "narrowing reached no depth") ::
-               !gave_up @ frontier_reason))
+               !gave_up @ frontier_reason @ !stuck_reasons))
     end
 
   fun run config instances =

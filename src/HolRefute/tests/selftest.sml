@@ -3031,6 +3031,142 @@ val _ = test "trace 2 reports selection and the race" (fn () =>
      String.isSubstring "Refute backend started (weight 50): kodkod" race)
   end)
 
+(* A constant native code has no equations for ([@] under [OWHILE]'s
+   definition, [CHOICE]) doesn't decline the problem: native code stubs
+   it, a sample reaching the stub is stuck as on compute, the search is
+   incomplete, and its reasons name the constant. *)
+local
+  val _ = TotalDefn.Define
+    `rf_stub_wrap (G : 'a -> bool) f s = OWHILE G f s`
+  val _ = TotalDefn.Define
+    `rf_stub_wrap2 b (G : 'a -> bool) f s = if b then NONE else OWHILE G f s`
+  val _ = TotalDefn.Define `rf_stub_pick (s : bool set) = CHOICE s`
+  val _ = TotalDefn.Define
+    `rf_stub_pick2 b (s : num set) = if b then 1 else CHOICE s`
+  val _ = TotalDefn.Define `rf_stub_second (x : bool) (y : bool) = y`
+  fun on substrate =
+    exhaustive |> upd_substrate substrate |> upd_timeout 10.0
+  fun stuck_on name =
+    "exhaustive: native code has no equations for " ^ name ^
+    "; samples reaching it were stuck"
+  (* The outcome, the candidate counts and the trace at level 2.  The
+     counts' "conclusions evaluated" leaves out samples stuck in the
+     conclusion; a premise stuck or false counts alike. *)
+  fun run_counted substrate goal =
+    let
+      val (outcome, text) = capture 2 (fn () =>
+        refute (on substrate |> upd_quiet false) goal)
+      val counts =
+        List.filter (String.isSubstring "exhaustive: candidates generated")
+          (String.tokens (fn c => c = #"\n") text)
+    in
+      (outcome, counts, text)
+    end
+  fun same_split goal =
+    let val native_counts = #2 (run_counted NativeSML goal)
+    in
+      not (null native_counts) andalso
+      native_counts = #2 (run_counted Compute goal)
+    end
+in
+  val _ = test "a stub no sample reaches leaves native as compute" (fn () =>
+    let
+      val goal = ``rf_stub_wrap2 T (G : 'a -> bool) f s = SOME t ==> F``
+      val (native, native_counts, _) = run_counted NativeSML goal
+      val (compute, compute_counts, _) = run_counted Compute goal
+      val (auto, auto_counts, auto_text) = run_counted Auto goal
+    in
+      not (null native_counts) andalso
+      native == compute andalso native_counts = compute_counts andalso
+      auto == native andalso auto_counts = native_counts andalso
+      String.isSubstring "Refute substrate selection: selected native\n"
+        auto_text andalso
+      not (String.isSubstring "handed over" auto_text)
+    end)
+
+  (* Native code evaluates the unused argument and reaches [CHOICE];
+     compute leaves [CHOICE s] unreduced and decides the sample. *)
+  val _ = test "under Auto a sample reaching a stub hands over to compute"
+    (fn () =>
+      let val goal = ``rf_stub_second (rf_stub_pick s) b ==> F``
+      in
+        (case run_counted Auto goal of
+           (Counterexample (c :: _), _, text) =>
+             certifies goal c andalso
+             List.all (fn line => String.isSubstring line text)
+               ["Refute substrate selection: selected native\n",
+                "Refute substrate selection: native handed over at " ^
+                "pred_set$CHOICE (no equations)\n",
+                "Refute substrate selection: selected compute\n"]
+         | _ => false) andalso
+        unknown_with (stuck_on "pred_set$CHOICE")
+          (refute (on NativeSML) goal)
+      end)
+
+  val _ = test "samples reaching a stub are stuck as on compute" (fn () =>
+    List.all (fn goal =>
+        case refute (on Compute) goal of
+          Unknown reasons =>
+            refute (on NativeSML) goal
+              == Unknown (reasons @ [stuck_on "min$@"]) andalso
+            same_split goal
+        | _ => false)
+      [``rf_stub_wrap (G : 'a -> bool) f s = SOME t ==> G t``,
+       ``rf_stub_wrap2 b (G : 'a -> bool) f s = SOME t ==> ~G t``])
+
+  (* Stuck in the conclusion, so conclusions evaluated counts exactly the
+     decided samples: [b = T] decides, [b = F] reaches [OWHILE]. *)
+  val _ = test "decided and stuck conclusions split as on compute" (fn () =>
+    let
+      val goal = ``rf_stub_wrap2 b (G : 'a -> bool) f s = NONE``
+      val numbers =
+        List.mapPartial Int.fromString o
+        String.tokens (not o Char.isDigit)
+    in
+      same_split goal andalso
+      (case run_counted NativeSML goal of
+         (Unknown _, [line], _) =>
+           (case numbers line of
+              [_, satisfied, evaluated] =>
+                0 < evaluated andalso evaluated < satisfied
+            | _ => false)
+       | _ => false)
+    end)
+
+  val _ = test "a sample beside a choice is refuted natively" (fn () =>
+    let val goal = ``rf_stub_pick2 b s = 1 ==> ~b``
+    in
+      List.all (fn substrate =>
+          case refute (on substrate) goal of
+            Counterexample (c :: _) => certifies goal c
+          | _ => false)
+        [NativeSML, Compute]
+    end)
+
+  (* [F /\ x = F] on native code as on compute, whichever side is stuck *)
+  val _ = test "a connective decided by its other side isn't stuck"
+    (fn () =>
+      let val goal = ``rf_stub_pick s /\ b``
+      in
+        List.all (fn substrate =>
+            case refute (on substrate) goal of
+              Counterexample (c :: _) => certifies goal c
+            | _ => false)
+          [NativeSML, Compute]
+      end)
+
+  val _ = test "a search the deadline ends still names the constant"
+    (fn () =>
+      let
+        val outcome = refute (on NativeSML |> upd_size 1000
+                                |> upd_timeout 2.0)
+                             ``rf_stub_pick2 F s = n``
+      in
+        unknown_with "timed out" outcome andalso
+        unknown_with (stuck_on "pred_set$CHOICE") outcome
+      end)
+end
+
 (* ------------------------------------------------------------------- *)
 (* Function-recursive datatypes                                        *)
 (* ------------------------------------------------------------------- *)

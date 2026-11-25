@@ -202,6 +202,11 @@ structure Refute_Extract :> Refute_Extract = struct
 
   fun reject message = raise NotExtractable [message]
 
+  (* Nothing supplies equations for the constant (no TypeBase entry,
+     compset rule or theory definition), as for Hilbert choice;
+     [ensure_definition] stubs it. *)
+  exception NoEquations of term
+
   type datatype_desc =
     { hol_ty : hol_type,
       ml_name : string,
@@ -217,7 +222,7 @@ structure Refute_Extract :> Refute_Extract = struct
       datatypes : datatype_desc list ref,
       types : (hol_type * ml_ty * string) list ref,
       equalities : hol_type list ref,
-      definitions : (term * string * int * Thm.thm) list ref,
+      definitions : (term * string * int * Thm.thm option) list ref,
       definition_groups : term list list ref,
       definition_clauses : (term * string) list ref,
       pending : term list ref,
@@ -976,6 +981,25 @@ structure Refute_Extract :> Refute_Extract = struct
     "      val normalized = IntInf.mod (value, modulus)\n" ^
     "  in if normalized < IntInf.div (modulus, 2) then normalized\n" ^
     "     else normalized - modulus end\n" ^
+    (* In Quickcheck's (strict) code, a connective with a stuck operand
+       is decided by the other operand when that one alone fixes the
+       value ([F /\ x = F], [T \/ x = T], [x ==> T = T]), as the compute
+       substrate's rewriting decides it; otherwise it is stuck.
+       Narrowing's (lazy) code keeps left-to-right connectives: it
+       refines variables as evaluation forces them, and a right operand
+       evaluated after a stuck left one would refine variables the
+       search would otherwise leave open. *)
+    "fun refute_known f =\n" ^
+    "  SOME (f ()) handle Refute_EvalSML.Stuck _ => NONE | Match => NONE\n" ^
+    "fun refute_and l r = case refute_known l of\n" ^
+    "    SOME b => b andalso r ()\n" ^
+    "  | NONE => r () andalso raise Refute_EvalSML.Stuck \"/\\\\\"\n" ^
+    "fun refute_or l r = case refute_known l of\n" ^
+    "    SOME b => b orelse r ()\n" ^
+    "  | NONE => r () orelse raise Refute_EvalSML.Stuck \"\\\\/\"\n" ^
+    "fun refute_imp l r = case refute_known l of\n" ^
+    "    SOME b => not b orelse r ()\n" ^
+    "  | NONE => r () orelse raise Refute_EvalSML.Stuck \"==>\"\n" ^
     "fun refute_hd [] = raise Refute_EvalSML.Stuck \"HD []\"\n" ^
     "  | refute_hd (x :: _) = x\n" ^
     "fun refute_tl [] = []\n" ^
@@ -1223,7 +1247,11 @@ structure Refute_Extract :> Refute_Extract = struct
      still carry its equations, and no foreign shadow is in scope there.
      Recovery is best effort: a recursive constant leaves only its curried
      witness in that class, and extraction refuses further down. *)
-  fun theorem_for_theory constant =
+  (* [constant]'s theory definitions that are equations about it,
+     instantiated to its type: the candidates are
+     [Refute_Core.theory_definitions], cut to [constant]'s own conjuncts,
+     without [WFREC] primitives, and read with no current theory too. *)
+  fun theory_equations constant =
     let
       fun instantiate theorem =
         let
@@ -1234,22 +1262,17 @@ structure Refute_Extract :> Refute_Extract = struct
         in
           Thm.INST_TYPE theta theorem
         end
-      fun usable theorem =
-        case Lib.total instantiate theorem of
-          NONE => NONE
-        | SOME instance =>
-            if Option.isSome (shape_refusal constant instance) then NONE
-            else SOME instance
     in
-      (* Last wins, as it does when [DefnBase] folds the same list.  The
-         candidates are [Refute_Core.theory_definitions]: cut to
-         [constant]'s own conjuncts, without [WFREC] primitives, and read
-         with no current theory too. *)
-      case List.mapPartial usable
-             (Refute_Core.theory_definitions constant) of
-        [] => NONE
-      | candidates => SOME (List.last candidates)
+      List.mapPartial (Lib.total instantiate)
+        (Refute_Core.theory_definitions constant)
     end
+
+  fun theorem_for_theory constant =
+    (* Last wins, as it does when [DefnBase] folds the same list. *)
+    case List.filter (not o Option.isSome o shape_refusal constant)
+           (theory_equations constant) of
+      [] => NONE
+    | candidates => SOME (List.last candidates)
 
   fun definition_theorem context constant =
     Refute_Core.normalize_definition (presented_definition context constant)
@@ -1268,8 +1291,13 @@ structure Refute_Extract :> Refute_Extract = struct
                  (case theorem_for_theory constant of
                     SOME theorem => theorem
                   | NONE =>
-                      reject ("no extractable equations for constant " ^
-                              kname_text (kname constant))))
+                      (* stubbed only when no equation exists, refused
+                         or not *)
+                      if null (theory_equations constant) then
+                        raise NoEquations constant
+                      else
+                        reject ("no extractable equations for constant " ^
+                                kname_text (kname constant))))
       fun usable_without_userdef () =
         case Lib.total without_userdef () of
           SOME theorem =>
@@ -1320,10 +1348,22 @@ structure Refute_Extract :> Refute_Extract = struct
       | SOME {thm = DefnBase.OTHER _, ...} =>
           (* The registration is a fact about the constant, never handed
              on; the constant is read as an unregistered one is. *)
-          (case usable_without_userdef () of
-             SOME theorem => theorem
-           | NONE => reject ("non-equational definition for " ^
-                             kname_text (kname constant)))
+          let
+            fun refuse () =
+              reject ("non-equational definition for " ^
+                      kname_text (kname constant))
+          in
+            (* A specification such as [CHOICE]'s, with no equations
+               anywhere, is stubbed. *)
+            case Exn.capture without_userdef () of
+              Exn.Res theorem =>
+                if Option.isSome (shape_refusal constant theorem) then
+                  refuse ()
+                else theorem
+            | Exn.Exn (error as NoEquations _) => raise error
+            | Exn.Exn Interrupt => raise Interrupt
+            | Exn.Exn _ => refuse ()
+          end
       | NONE => without_userdef ()
     end
 
@@ -1364,9 +1404,18 @@ structure Refute_Extract :> Refute_Extract = struct
               | NONE =>
                   let
                     val (_, base) = kname member
-                    val theorem = definition_theorem context member
-                    val item = (member, fresh_const context base,
-                                definition_arity member theorem, theorem)
+                    val name = fresh_const context base
+                    (* A constant with no equations becomes a stub,
+                       [NONE]: a sample reaching it is stuck, as on the
+                       compute substrate, instead of the whole problem
+                       being declined. *)
+                    val item =
+                      let val theorem = definition_theorem context member
+                      in
+                        (member, name, definition_arity member theorem,
+                         SOME theorem)
+                      end
+                      handle NoEquations _ => (member, name, 0, NONE)
                     val _ = #definitions context :=
                       item :: !(#definitions context)
                     val _ = #pending context :=
@@ -1561,6 +1610,10 @@ structure Refute_Extract :> Refute_Extract = struct
   fun binary operator arguments =
     arity2 with_arity arguments (fn (left, right) =>
       parens (left ^ " " ^ operator ^ " " ^ right))
+
+  fun connective name arguments =
+    arity2 with_arity arguments (fn (left, right) =>
+      parens (name ^ " (fn () => " ^ left ^ ") (fn () => " ^ right ^ ")"))
 
   fun call name arity arguments = with_arity arguments arity (fn values =>
     parens (name ^ " " ^ join " " (List.map parens values)))
@@ -1958,8 +2011,8 @@ structure Refute_Extract :> Refute_Extract = struct
           SOME "(raise Refute_EvalSML.Stuck \"ARB\")"
       | ("bool", "F") => SOME "false"
       | ("bool", "~") => SOME (call "not" 1 arguments)
-      | ("bool", "/\\") => SOME (binary "andalso" arguments)
-      | ("bool", "\\/") => SOME (binary "orelse" arguments)
+      | ("bool", "/\\") => SOME (connective "refute_and" arguments)
+      | ("bool", "\\/") => SOME (connective "refute_or" arguments)
       (* [IN_DEF] makes membership plain application.  Keep the intrinsic:
          [DefnBase.lookup_userdef] answers for [bool$IN] with
          [GSPECIFICATION], a rewrite about [GSPEC] rather than [IN]'s
@@ -1978,8 +2031,7 @@ structure Refute_Extract :> Refute_Extract = struct
                 " refute_element " ^ atom element ^ " orelse " ^
                 atom set ^ " refute_element")))
           end
-      | ("min", "==>") => SOME (with2 (fn (left, right) =>
-            parens ("not " ^ parens left ^ " orelse " ^ right)))
+      | ("min", "==>") => SOME (connective "refute_imp" arguments)
       | ("min", "=") =>
           let val compared = #1 (Type.dom_rng (Term.type_of head))
           in SOME (call (equality_name context compared) 2 arguments) end
@@ -2116,9 +2168,11 @@ structure Refute_Extract :> Refute_Extract = struct
             1 arguments)
       | ("list", "EL") => SOME (with2 (fn (n, xs) =>
             if string_argument 1 then
+              (* Only the index's failures: a handover raised while
+                 evaluating the arguments passes. *)
               "(String.sub (" ^ xs ^ ", IntInf.toInt " ^ atom n ^ ") " ^
-              "handle Interrupt => raise Interrupt " ^
-              "| _ => raise Refute_EvalSML.Stuck \"EL\")"
+              "handle Subscript => raise Refute_EvalSML.Stuck \"EL\" " ^
+              "| Overflow => raise Refute_EvalSML.Stuck \"EL\")"
             else "refute_nth " ^ atom xs ^ " " ^ atom n))
       | ("list", "LAST") =>
           SOME (call (if string_list () then
@@ -2945,11 +2999,17 @@ structure Refute_Extract :> Refute_Extract = struct
       lhs ^ " = " ^ row_chain context (List.map row equations)
     end
 
-  fun definition_clause context item =
-    (* The observation matcher also serves strict extraction: its strict
-       operations are identities.  In particular this avoids rendering a
-       char-list CONS expression as an SML pattern in definition clauses. *)
-    lazy_definition_clause context item
+  fun definition_clause context (constant, name, arity, theorem) =
+    case theorem of
+      (* The observation matcher also serves strict extraction: its strict
+         operations are identities.  In particular this avoids rendering a
+         char-list CONS expression as an SML pattern in definition
+         clauses. *)
+      SOME theorem =>
+        lazy_definition_clause context (constant, name, arity, theorem)
+    | NONE =>
+        name ^ " () = Refute_EvalSML.unextractable " ^
+        quote (kname_text (kname constant))
 
   (* Compiling a clause is the expensive part of extraction and its text
      is final once produced (names are fixed at registration), so the
@@ -3004,7 +3064,10 @@ structure Refute_Extract :> Refute_Extract = struct
       fun group_for constant =
         List.find (List.exists (same_term constant)) groups
       fun constants_in (_, _, _, theorem) =
-        HolKernel.find_terms Term.is_const (Thm.concl theorem)
+        case theorem of
+          SOME theorem =>
+            HolKernel.find_terms Term.is_const (Thm.concl theorem)
+        | NONE => []
       fun same_group left right =
         List.all (fn constant => List.exists (same_term constant) right)
           left andalso

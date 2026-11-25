@@ -129,6 +129,13 @@ signature Refute_Eval = sig
      [Guard] -- that the executability gate must account for. *)
   val plan_uses_smart : plan -> bool
   val ignored_candidate : candidate -> candidate list -> bool
+  (* Constants native code has no equations for: noted when a sample is
+     stuck on one, or handed over at. *)
+  val note_stuck_reason : string -> unit
+  val take_stuck_reasons : unit -> string list
+  exception HandOver of string
+  val hands_over : unit -> bool
+  val with_hand_over : bool -> (unit -> 'a) -> 'a
   val fully_applied_constructor : term -> (term * term list) option
 
   val register_substrate : substrate -> unit

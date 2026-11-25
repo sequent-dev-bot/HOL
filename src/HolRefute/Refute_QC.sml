@@ -1324,6 +1324,16 @@ structure Refute_QC :> Refute_QC = struct
   fun add_reason reason reasons =
     reasons := Refute_Core.add_reason (reason, !reasons)
 
+  (* A search the backend's deadline ends still names the constants its
+     samples were stuck on, those of the entry it cut short included.
+     Shared with [Refute_QC_Narrow]. *)
+  fun report_stuck_at_deadline stuck_reasons =
+    Refute_Core.set_backend_diagnostics (fn () => [])
+      (fn Refute_Core.Unknown reasons =>
+            Refute_Core.Unknown (List.foldl Refute_Core.add_reason
+              reasons (!stuck_reasons @ Refute_Eval.take_stuck_reasons ()))
+        | outcome => outcome)
+
   (* Keep a replay failure as the fallback outcome and publish it now. *)
   fun retain_potential slot potential =
     (slot := SOME potential;
@@ -1452,11 +1462,15 @@ structure Refute_QC :> Refute_QC = struct
 
   (* Smart-generator preflight and ordinary compilation use the same
      substrate order, including higher-priority custom substrates. *)
-  fun select_registered config report problem attempt =
+  fun select_registered config skip report problem attempt =
     case ordered_substrate_candidates config of
         CandidatesUnavailable reasons => SelectionFailed reasons
-      | Candidates {explicit, substrates} =>
+      | Candidates {explicit, substrates = candidates} =>
           let
+            (* Past those a run handed over. *)
+            val substrates = List.filter
+              (fn substrate => not (Lib.mem (#name substrate) skip))
+              candidates
             fun failed [] =
                   if explicit then [] else ["no substrate is registered"]
               | failed reasons = reasons
@@ -1501,13 +1515,33 @@ structure Refute_QC :> Refute_QC = struct
   (* [select_registered] already reads the configured substrate choice and
      applies the Auto fallthrough, so there is nothing left to dispatch on
      here. *)
-  fun compile_selected config strategy problem =
-    select_registered config true problem (fn substrate =>
+  fun compile_selected_skipping skip config strategy problem =
+    select_registered config skip true problem (fn substrate =>
       #compile substrate config strategy problem)
 
-  fun compile_smart_selected config report strategy plans evals =
-    select_registered config report (Plans plans) (fn substrate =>
+  fun compile_selected config = compile_selected_skipping [] config
+
+  fun compile_smart_selected config skip report strategy plans evals =
+    select_registered config skip report (Plans plans) (fn substrate =>
       preflight_substrate substrate config strategy plans evals)
+
+  (* Under [Auto], when a substrate follows [name] in the chain, the
+     substrates a run of [name] hands its problem past: [name] and those
+     before it. *)
+  fun hand_over_skip (config : Refute_Core.config) name =
+    case #substrate (#qc config) of
+        Refute_Core.Auto =>
+          let
+            fun upto [] _ = NONE
+              | upto (substrate :: rest) seen =
+                  if #name substrate <> name then
+                    upto rest (#name substrate :: seen)
+                  else if null rest then NONE
+                  else SOME (rev (name :: seen))
+          in
+            upto (get_substrates ()) []
+          end
+      | _ => NONE
 
   (* Admission checks only plan eligibility.
      Substrate compilation belongs to the backend's run budget, or it can
@@ -1555,9 +1589,9 @@ structure Refute_QC :> Refute_QC = struct
         | SOME error => raise error
     end
 
-  fun strategy_run_body Narrowing _ _ =
+  fun strategy_run_body _ Narrowing _ _ =
         raise Fail "narrowing is owned by Refute_QC_Narrow"
-    | strategy_run_body strategy (config : Refute_Core.config)
+    | strategy_run_body skip strategy (config : Refute_Core.config)
       (instances : Refute_Core.instance list) =
     let
       (* Smart generators are the positive exhaustive CPS compilation.
@@ -1592,7 +1626,7 @@ structure Refute_QC :> Refute_QC = struct
           instances)
       val smart_selection =
         if can_preflight then
-          SOME (compile_smart_selected config true strategy plans evals)
+          SOME (compile_smart_selected config skip true strategy plans evals)
         else NONE
       val preflight_reasons =
         case smart_selection of
@@ -1608,7 +1642,7 @@ structure Refute_QC :> Refute_QC = struct
       val selection =
         case smart_selection of
             SOME selected => selected
-          | NONE => compile_selected config strategy (Plans plans)
+          | NONE => compile_selected_skipping skip config strategy (Plans plans)
     in
       (* [selection] may already hold a compiled test even when the gate
          reasons veto the run, so release it before reporting. *)
@@ -1644,6 +1678,13 @@ structure Refute_QC :> Refute_QC = struct
               val gave_up = ref []
               val frontier = ref (NONE : (int * int) option)
               val counters = new_counter_totals ()
+              (* The constants samples were stuck on, kept apart from
+                 [gave_up], which ends a random entry's draws *)
+              val _ = Refute_Eval.take_stuck_reasons ()
+              val stuck_reasons = ref []
+              (* after a handover, the handover's own report stands *)
+              val _ = if null skip then report_stuck_at_deadline stuck_reasons
+                      else ()
               fun instance_for card = List.nth (instances, card - 1)
               val stats_for = stats_for_entry (#decorate counters)
                 discarded (#last_stats compiled)
@@ -1664,6 +1705,9 @@ structure Refute_QC :> Refute_QC = struct
                       ignored = ignored }
                   val msec = elapsed_msec start
                   val _ = #absorb counters (!(#last_stats compiled))
+                  val _ = List.app (fn reason =>
+                      add_reason reason stuck_reasons)
+                    (Refute_Eval.take_stuck_reasons ())
                 in
                   case result of
                       Exhausted {complete = entry_complete} =>
@@ -1810,24 +1854,52 @@ structure Refute_QC :> Refute_QC = struct
                 (!replay_potential) counter_reason (fn () =>
                   if !complete then Refute_Core.NoCounterexample
                   else Refute_Core.Unknown
-                    (generic_reason :: !gave_up @ frontier_reason))
+                    (generic_reason :: !gave_up @ frontier_reason @
+                     !stuck_reasons))
                 end
-              val body_result = Exn.capture selected_body ()
+              (* Native code reaching a constant it has no equations for
+                 hands the problem to the next substrate, which searches
+                 from the start: nothing the run found is reported. *)
+              val hand_over = hand_over_skip config substrate
+              val body_result = Exn.capture (fn () =>
+                Refute_Eval.with_hand_over (Option.isSome hand_over)
+                  selected_body) ()
               val close_result = bounded_close (#close compiled)
+              (* Native's results are withdrawn and the reason is in
+                 place before a cleanup interrupt is released, so the
+                 deadline reports neither native's results nor less. *)
+              fun handed_over name passed =
+                let
+                  val reason =
+                    substrate ^ " handed over at " ^ name ^ " (no equations)"
+                  fun report (Refute_Core.Unknown reasons) =
+                        Refute_Core.Unknown (reasons @ [reason])
+                    | report outcome = outcome
+                in
+                  Refute_Core.Private.say 2
+                    ("Refute substrate selection: " ^ reason ^ "\n");
+                  Refute_Core.withdraw_published ();
+                  Refute_Core.set_backend_diagnostics (fn () => []) report;
+                  Exn.release close_result;
+                  report (strategy_run_body (skip @ passed) strategy config
+                    instances)
+                end
             in
-              case body_result of
-                  Exn.Exn error =>
+              case (body_result, hand_over) of
+                  (Exn.Exn (Refute_Eval.HandOver name), SOME passed) =>
+                    handed_over name passed
+                | (Exn.Exn error, _) =>
                     (ignore close_result; Exn.reraise error)
                   (* Surface a close failure even on a successful search,
                      then hand back the search's own outcome. *)
-                | Exn.Res _ =>
+                | (Exn.Res _, _) =>
                     (Exn.release close_result; Exn.release body_result)
             end
     end
 
   fun strategy_run strategy config instances =
     Refute_Core.with_search_context config
-      (strategy_run_body strategy config) instances
+      (strategy_run_body [] strategy config) instances
 
   val exhaustive_backend : Refute_Core.backend =
     { name = "exhaustive",

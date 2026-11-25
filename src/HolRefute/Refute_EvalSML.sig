@@ -7,6 +7,9 @@ signature Refute_EvalSML = sig
 
   val lazy_hole : int list -> 'a Susp.susp
 
+  (* The stub of a constant with no equations. *)
+  val unextractable : string -> 'a
+
   type reconstruction = unit -> term
 
   type generated_environment = (int * reconstruction) list

@@ -110,6 +110,22 @@ boundary values (`Refute_Eval.word_boundary_values`: the ends of the
 unsigned and signed ranges and each single-bit value), and half of the
 random draws pick one, so a wrap at `2 ** w - 1` shows at any width.
 
+A constant NativeSML finds no equations for (`@`, `CHOICE`) is compiled
+as a stub.  Under `Auto`, with a substrate after NativeSML in the chain,
+the first sample reaching a stub hands the problem to that substrate,
+which searches from the start in the remaining time; nothing NativeSML
+found is reported, and an `Unknown` says it handed over and at which
+constant.  With NativeSML chosen explicitly, last in the chain, or
+narrowing, a sample reaching a stub is stuck, the search is incomplete,
+and the final `Unknown` names the constant.  Constants whose equations
+are refused for their shape still make NativeSML decline the problem.
+Native Quickcheck's `/\`, `\/` and `==>` decide when the other operand
+alone fixes the value, as Compute's rewriting does, so a stuck operand of
+these connectives doesn't leave a sample stuck that Compute decides
+(strict NativeSML code still evaluates arguments Compute leaves
+unreduced, and is stuck on them); narrowing keeps left-to-right
+connectives.
+
 Smart generators (default on) serve exhaustive testing only; random
 testing keeps generate-and-guard plans.  They mode-compile `Hol_reln`
 premises and Horn-shaped Boolean function equations into CPS enumerators

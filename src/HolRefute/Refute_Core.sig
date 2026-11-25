@@ -200,6 +200,9 @@ signature Refute_Core = sig
 
   val publish_counterexamples : counterexample list -> unit
   val publish_models : counterexample list -> unit
+  (* A substrate that hands its problem on takes back what it
+     published. *)
+  val withdraw_published : unit -> unit
   (* Retain current backend diagnostics across an outer deadline. *)
   val set_backend_diagnostics :
     (unit -> string list) -> (outcome -> outcome) -> unit
