@@ -136,6 +136,10 @@ struct
       fun positive_existential polarity existential =
         (polarity = Util.Pos andalso existential) orelse
         (polarity = Util.Neg andalso not existential)
+      (* as in the pass it is compared with *)
+      fun is_wide_tuple ty =
+        MFH.is_pair_type ty andalso
+        length (MFH.factor_types ty) > Refute_Forl.max_arity 2
       fun type_size ty =
         if Type.is_vartype ty then 1
         else 1 + List.foldl (op +) 0
@@ -160,7 +164,9 @@ struct
           (* a function-typed binder is boxed whatever its polarity, as in
              the pass it is compared with *)
           val new_ty =
-            if MFH.is_fun_type old_ty orelse
+            if is_wide_tuple old_ty then
+              MFH.box_type context MFH.InPair old_ty
+            else if MFH.is_fun_type old_ty orelse
                polarity = Util.Neut orelse
                positive_existential polarity existential then
               MFH.box_type context MFH.InFunLHS old_ty
@@ -307,7 +313,9 @@ struct
             val variable_ty = Term.type_of variable
             val (variable', body', environment') =
               rebind environment variable
-                (if MFH.is_fun_type variable_ty then
+                (if is_wide_tuple variable_ty then
+                   MFH.box_type context MFH.InPair variable_ty
+                 else if MFH.is_fun_type variable_ty then
                    MFH.box_type context MFH.InFunLHS variable_ty
                  else variable_ty)
                 body

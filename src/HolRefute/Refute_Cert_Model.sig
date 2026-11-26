@@ -12,6 +12,7 @@ signature Refute_Cert_Model = sig
     | TrustRejected
     | FuelExhausted
     | DeadlineExhausted
+    | MemoryExhausted
     | InternalFailure
 
   type failure =

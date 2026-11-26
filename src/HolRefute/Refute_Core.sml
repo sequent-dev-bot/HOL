@@ -950,51 +950,68 @@ structure Refute_Core :> Refute_Core = struct
     handle Interrupt => raise Interrupt
          | _ => tm
 
+  (* Expanding a quantifier copies its body once
+     per value, so quantifiers in a chain multiply the copies: the 31
+     boolean variables that [pairTheory.EXISTS_PROD] makes of one
+     existential over a 31-tuple would be 2^31 copies.  A quantifier is
+     expanded only while the copies it makes, times those of the quantifiers
+     around it, stay within [expansion_cap]; one past the cap is left for the
+     model finder, which does not enumerate. *)
+  val expansion_cap = 4096
+
   fun expand_quantifiers tm =
     let
-      fun expand tm =
+      fun expand budget tm =
         if boolSyntax.is_forall tm then
           let
             val (variable, body) = boolSyntax.dest_forall tm
-            val body = expand body
           in
             case Refute_Gen.enumerate (Term.type_of variable) of
-                NONE => boolSyntax.mk_forall (variable, body)
-              | SOME values =>
-                  boolSyntax.list_mk_conj
-                    (map (fn value => Term.subst
-                      [{redex = variable, residue = value}] body)
-                      values)
+                SOME values =>
+                  if length values <= budget then
+                    let val body = expand (budget div Int.max (1, length values)) body
+                    in
+                      boolSyntax.list_mk_conj
+                        (map (fn value => Term.subst
+                          [{redex = variable, residue = value}] body)
+                          values)
+                    end
+                  else boolSyntax.mk_forall (variable, expand budget body)
+              | NONE => boolSyntax.mk_forall (variable, expand budget body)
           end
         else if boolSyntax.is_exists tm then
           let
             val (variable, body) = boolSyntax.dest_exists tm
-            val body = expand body
           in
             case Refute_Gen.enumerate (Term.type_of variable) of
-                NONE => boolSyntax.mk_exists (variable, body)
-              | SOME values =>
-                  boolSyntax.list_mk_disj
-                    (map (fn value => Term.subst
-                      [{redex = variable, residue = value}] body)
-                      values)
+                SOME values =>
+                  if length values <= budget then
+                    let val body = expand (budget div Int.max (1, length values)) body
+                    in
+                      boolSyntax.list_mk_disj
+                        (map (fn value => Term.subst
+                          [{redex = variable, residue = value}] body)
+                          values)
+                    end
+                  else boolSyntax.mk_exists (variable, expand budget body)
+              | NONE => boolSyntax.mk_exists (variable, expand budget body)
           end
         else if Term.is_comb tm then
           let
             val (left, right) = Term.dest_comb tm
           in
-            Term.mk_comb (expand left, expand right)
+            Term.mk_comb (expand budget left, expand budget right)
           end
         else if Term.is_abs tm then
           let
             val (variable, body) = Term.dest_abs tm
           in
-            Term.mk_abs (variable, expand body)
+            Term.mk_abs (variable, expand budget body)
           end
         else
           tm
     in
-      expand tm
+      expand expansion_cap tm
     end
 
   fun has_unexpanded_binder tm =

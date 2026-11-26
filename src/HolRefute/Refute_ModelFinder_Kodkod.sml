@@ -2643,7 +2643,10 @@ fun kodkod_formula_from_nut offsets
                   val (domain, range) =
                     MFR.dest_Func (MFNT.rep_of selector)
                   val selector_rel = to_r selector
-                  val argument_rel = to_opt range argument
+                  (* the argument is translated
+                     once, for the selector and the guard *)
+                  val pre = pre_of argument
+                  val argument_rel = to_opt_pre pre range argument
                 in
                   if MFR.is_one_rep range then
                     kk_n_fold_join kk true range domain argument_rel
@@ -2658,7 +2661,7 @@ fun kodkod_formula_from_nut offsets
                           argument_rel)
                     in
                       if MFR.is_opt_rep (MFNT.rep_of argument) then
-                        to_guard [argument] domain relation
+                        to_guard_pre pre [argument] domain relation
                       else
                         relation
                     end
@@ -2735,17 +2738,47 @@ fun kodkod_formula_from_nut offsets
         (MFR.one_rep offsets (MFNT.type_of candidate)
           (MFNT.rep_of candidate)) candidate
 
+    (* [to_r_pre pre candidate] is the relation of
+       [candidate], taken from [pre] when the very node was translated
+       already.  A node that is both a function's argument and a guard of
+       the application was translated twice, and so was each of its own
+       such nodes: a chain of n nested applications cost 2^n translations
+       (the 16-argument uncurried [blake2f] body: 12 million calls for 2271
+       nodes), and every translation built its own copy of the relation. *)
+    and to_r_pre pre candidate =
+      case List.find (fn (node, _) => PolyML.pointerEq (node, candidate)) pre of
+          SOME (_, relation) => relation
+        | NONE => to_r candidate
+
+    and to_opt_pre pre rep candidate =
+      case List.find (fn (node, _) => PolyML.pointerEq (node, candidate)) pre of
+          SOME (_, relation) =>
+            rel_expr_from_rel_expr kk (MFR.Opt rep) (MFNT.rep_of candidate)
+              relation
+        | NONE => to_opt rep candidate
+
+    (* The translation of an optional node, to be shared by [to_opt_pre]
+       and [to_guard_pre]. *)
+    and pre_of candidate =
+      if MFR.is_opt_rep (MFNT.rep_of candidate) then
+        [(candidate, to_r candidate)]
+      else []
+
     and to_guard guards representation relation =
+      to_guard_pre [] guards representation relation
+
+    (* [pre] holds nodes already translated *)
+    and to_guard_pre pre guards representation relation =
       let
         val unpacked = unpack_joins relation
         val plain_guards = guards
           |> List.filter (MFR.is_Opt o MFNT.rep_of)
-          |> map to_r
+          |> map (to_r_pre pre)
           |> List.filter (fn guard => not (mem guard unpacked))
         val function_guards = List.filter (fn guard =>
           MFR.is_Func (MFNT.rep_of guard) andalso
           MFR.is_opt_rep (MFNT.rep_of guard)) guards
-        val function_relations = map to_r function_guards
+        val function_relations = map (to_r_pre pre) function_guards
         val guard_formulas = map kk_no plain_guards @
           ListPair.mapEq
             (fn (guard, guard_relation) =>
@@ -2959,18 +2992,25 @@ fun kodkod_formula_from_nut offsets
                  to_apply_vect count range_rep result_rep
                    (to_r function) argument
              | MFR.Func (domain, MFR.Formula Util.Neut) =>
-                 to_guard [argument] result_rep
-                   (rel_expr_from_formula kk result_rep
-                     (kk_subset (to_opt domain argument)
-                       (to_r function)))
+                 (* the argument is translated once,
+                    for the application and the guard *)
+                 let val pre = pre_of argument
+                 in
+                   to_guard_pre pre [argument] result_rep
+                     (rel_expr_from_formula kk result_rep
+                       (kk_subset (to_opt_pre pre domain argument)
+                         (to_r function)))
+                 end
              | MFR.Func (domain, range) =>
+                 (* as above *)
                  let
+                   val pre = pre_of argument
                    val result = rel_expr_from_rel_expr kk result_rep range
                      (kk_n_fold_join kk true domain range
-                       (to_opt domain argument) (to_r function))
+                       (to_opt_pre pre domain argument) (to_r function))
                  in
                    if MFR.body_rep range = MFR.Formula Util.Neut then
-                     to_guard [argument] result_rep result
+                     to_guard_pre pre [argument] result_rep result
                    else
                      result
                  end
