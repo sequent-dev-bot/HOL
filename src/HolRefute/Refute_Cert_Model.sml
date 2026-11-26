@@ -20,6 +20,7 @@ structure Refute_Cert_Model :> Refute_Cert_Model = struct
     | TrustRejected
     | FuelExhausted
     | DeadlineExhausted
+    | MemoryExhausted
     | InternalFailure
 
   type failure =
@@ -91,6 +92,7 @@ structure Refute_Cert_Model :> Refute_Cert_Model = struct
     | failure_kind_name TrustRejected = "trust-rejected"
     | failure_kind_name FuelExhausted = "fuel-exhausted"
     | failure_kind_name DeadlineExhausted = "deadline-exhausted"
+    | failure_kind_name MemoryExhausted = "memory-exhausted"
     | failure_kind_name InternalFailure = "internal-failure"
 
   fun render_failure ({kind, stage, depth, detail} : failure) =
@@ -126,8 +128,59 @@ structure Refute_Cert_Model :> Refute_Cert_Model = struct
           then Tactical.TRY tactic goal
           else Tactical.ALL_TAC goal
 
+  (* A replay step that holds more than
+     [replay_live_heap_limit] bytes of live heap is interrupted, the way the
+     deadline interrupts one that runs too long.  A leaf evaluation that
+     diverges grows its terms until the heap is full and the collector
+     thrashes to the deadline, which on a goal whose model is found early
+     costs the rest of the call and every later goal in the same process.
+     The heap is only inspected when it is larger than the limit, after a
+     full collection, so garbage does not count. *)
+  val replay_live_heap_limit = Int.toLarge 3 * 1024 * 1024 * 1024
+
+  fun live_heap_exceeds limit =
+    #sizeHeap (PolyML.Statistics.getLocalStats ()) > limit andalso
+    (PolyML.fullGC ();
+     let val stats = PolyML.Statistics.getLocalStats ()
+     in #sizeHeap stats - #sizeHeapFreeLastGC stats > limit end)
+
+  exception HeapLimit
+
+  fun with_heap_limit limit operation input =
+    let
+      val self = Thread.self ()
+      val finished = ref false
+      val interrupted = ref false
+      val lock = Mutex.mutex ()
+      fun watch () =
+        if !finished then ()
+        else
+          (OS.Process.sleep (Time.fromMilliseconds 500);
+           if !finished then ()
+           else if live_heap_exceeds limit then
+             (Mutex.lock lock;
+              (if !finished then ()
+               else (interrupted := true;
+                     Standard_Thread.interrupt_unsynchronized self));
+              Mutex.unlock lock)
+           else watch ())
+      fun stop () =
+        (Mutex.lock lock; finished := true; Mutex.unlock lock;
+         if !interrupted then Thread.testInterrupt () else ())
+      val _ = Thread.fork (watch, [Thread.EnableBroadcastInterrupt false])
+      val result = Exn.capture operation input
+      val _ = (stop () handle Interrupt => ())
+    in
+      case result of
+          Exn.Res value => value
+        | Exn.Exn Interrupt =>
+            if !interrupted then raise HeapLimit else raise Interrupt
+        | Exn.Exn error => raise error
+    end
+
   fun resource_failure ({kind, ...} : failure) =
-    kind = DeadlineExhausted orelse kind = FuelExhausted
+    kind = DeadlineExhausted orelse kind = FuelExhausted orelse
+    kind = MemoryExhausted
 
   fun theorem_acceptable expected theorem =
     null (Thm.hyp theorem) andalso trusted theorem andalso
@@ -298,8 +351,8 @@ structure Refute_Cert_Model :> Refute_Cert_Model = struct
         let
           val _ = check_deadline stage depth
           val result =
-            case deadline of
-                NONE => operation input
+            (case deadline of
+                NONE => with_heap_limit replay_live_heap_limit operation input
               | SOME limit =>
                   let val allowance = Time.- (limit, Time.now ())
                   in
@@ -307,11 +360,15 @@ structure Refute_Cert_Model :> Refute_Cert_Model = struct
                       fail DeadlineExhausted stage depth
                         "replay deadline exhausted"
                     else
-                      Timeout.apply allowance operation input
+                      Timeout.apply allowance
+                        (with_heap_limit replay_live_heap_limit operation) input
                   end
                   handle Timeout.TIMEOUT _ =>
                     fail DeadlineExhausted stage depth
-                      "proof operation timed out"
+                      "proof operation timed out")
+            handle HeapLimit =>
+              fail MemoryExhausted stage depth
+                "proof operation exceeded the replay heap limit"
           val _ = check_deadline stage depth
         in
           result
