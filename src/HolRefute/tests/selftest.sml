@@ -2897,6 +2897,42 @@ in
       reaches_solver
         (refute (arity_config |> upd_card [(NONE, [4])]) l_bound_goal))
 
+  (* A bound variable of a tuple type with more
+     leaves than a relation has columns (31 booleans: arity 31, past the 30
+     of a universe of 2) is boxed, whatever its quantifier or polarity, and
+     the goals reach the solver instead of being rejected as "arity 31 of
+     source bound variable". *)
+  local
+    val wide_ty = pairSyntax.list_mk_prod
+      (List.tabulate (31, fn _ => Type.bool))
+    val wide_p = Term.mk_var ("p", wide_ty)
+    val wide_q = Term.mk_var ("q", wide_ty)
+    val wide_f = Term.mk_var ("f", Type.-->(wide_ty, Type.bool))
+    val wide_fp = Term.mk_comb (wide_f, wide_p)
+    val wide_fq = Term.mk_comb (wide_f, wide_q)
+  in
+    val u_wide_goal =
+      boolSyntax.mk_imp (boolSyntax.mk_forall (wide_p, wide_fp), wide_fq)
+    val e_wide_goal =
+      boolSyntax.mk_imp (wide_fq, boolSyntax.mk_exists (wide_p, wide_fp))
+    val l_wide_goal =
+      boolSyntax.mk_eq (Term.mk_abs (wide_p, wide_fp),
+                        Term.mk_abs (wide_p, boolSyntax.mk_neg wide_fp))
+  end
+  fun wide_binder_test name goal =
+    level2_test name (fn () =>
+      let val outcome = refute (arity_config |> upd_card [(NONE, [2])]) goal
+      in
+        reaches_solver outcome andalso
+        not (unknown_with "source bound variable" outcome)
+      end)
+  val _ = wide_binder_test "a universal over a wide tuple-typed binder reaches the solver"
+    u_wide_goal
+  val _ = wide_binder_test "an existential over a wide tuple-typed binder reaches the solver"
+    e_wide_goal
+  val _ = wide_binder_test "a lambda over a wide tuple-typed binder reaches the solver"
+    l_wide_goal
+
   (* A successor relation is keyed by its atom
      sequence, whatever its offset: [suc_tree] sits after the 50 atoms of
      [suc_chain], at offset 50, where the arithmetic key of upstream refused

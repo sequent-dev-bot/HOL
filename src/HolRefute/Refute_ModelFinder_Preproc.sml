@@ -2293,6 +2293,11 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
         polarity = Util.Neut orelse
         (polarity = Util.Pos andalso existential) orelse
         (polarity = Util.Neg andalso not existential)
+      (* A pair-typed binder with more leaves
+         than a relation has columns is boxed whatever its polarity. *)
+      fun is_wide_tuple ty =
+        MFH.is_pair_type ty andalso
+        length (MFH.factor_types ty) > Refute_Forl.max_arity 2
       fun type_size ty =
         if Type.is_vartype ty then 1
         else 1 + List.foldl (op +) 0
@@ -2334,7 +2339,10 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
              keep the polarity rule: a boxed pair-typed universal is one box
              atom that is never split. *)
           val new_ty =
-            if MFH.is_fun_type old_ty orelse
+            (* a wide tuple is boxed (see [is_wide_tuple]) *)
+            if is_wide_tuple old_ty then
+              MFH.box_type context MFH.InPair old_ty
+            else if MFH.is_fun_type old_ty orelse
                boxes_by_polarity polarity existential then
               MFH.box_type context MFH.InFunLHS old_ty
             else old_ty
@@ -2505,7 +2513,10 @@ structure Refute_ModelFinder_Preproc :> Refute_ModelFinder_Preproc = struct
             val variable_ty = Term.type_of variable
             val (variable', body', environment') =
               rebind environment variable
-                (if MFH.is_fun_type variable_ty then
+                (* a wide tuple is boxed *)
+                (if is_wide_tuple variable_ty then
+                   MFH.box_type context MFH.InPair variable_ty
+                 else if MFH.is_fun_type variable_ty then
                    MFH.box_type context MFH.InFunLHS variable_ty
                  else variable_ty)
                 body
