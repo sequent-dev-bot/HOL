@@ -70,6 +70,37 @@ structure Refute_EvalCompute :> Refute_EvalCompute = struct
       else IsStuck
     end
 
+  (* An evaluated smart-enumerator input is stuck when its type's values
+     are literals and constructor terms and it is neither, such as an
+     unreduced [HD []].  The constructors are a datatype's or a registered
+     family's (a finite map's [FEMPTY] and [FUPDATE]).  An input of
+     another type (a function, a set, a real) is never called stuck. *)
+  fun valued_type ty =
+    List.exists (fn other => ty = other)
+      [Type.bool, numSyntax.num, intSyntax.int_ty, stringSyntax.char_ty,
+       oneSyntax.one_ty] orelse
+    wordsSyntax.is_word_type ty orelse
+    Refute_Gen.is_family_type ty orelse
+    (case Refute_TypeBase.fetch ty of
+         SOME info => not (null (TypeBasePure.constructors_of info))
+       | NONE => false)
+
+  fun constructor_arguments tm =
+    case fully_applied_constructor tm of
+        SOME (_, arguments) => SOME arguments
+      | NONE =>
+          let val (head, arguments) = boolSyntax.strip_comb tm in
+            if Refute_Gen.is_family_constructor head then SOME arguments
+            else NONE
+          end
+
+  fun stuck_input tm =
+    valued_type (Term.type_of tm) andalso
+    not (Refute_EvalEnum.special_literal tm orelse
+         (case constructor_arguments tm of
+              SOME arguments => not (List.exists stuck_input arguments)
+            | NONE => false))
+
   fun numeric_terms Refute_Gen.Num size =
         List.tabulate (Int.max (0, size) + 1, numSyntax.term_of_int)
     | numeric_terms Refute_Gen.Int size =
@@ -338,6 +369,15 @@ structure Refute_EvalCompute :> Refute_EvalCompute = struct
       fun dropped () =
         (candidates_generated := !candidates_generated + 1; Continue)
 
+      (* A smart enumerator's stuck input drops the sample and the
+         enumeration goes on, as on native, where building the input raises
+         [Stuck] before the enumerator is called.
+         The check sits before the call for that reason: applied to a stuck
+         input, the enumerator would not reduce to a list, which [run]
+         reports as GaveUp for the whole search, the right answer only for
+         an enumerator stuck on values. *)
+      fun stuck_inputs () = (complete := false; dropped ())
+
       fun candidate env genuine =
         let
           val found =
@@ -398,7 +438,8 @@ structure Refute_EvalCompute :> Refute_EvalCompute = struct
                        (* A smart Guard binds no outputs, so it is an
                           existence test: the continuation runs once, as on
                           the native substrate. *)
-                       if null (enum_values program inputs) then
+                       if List.exists stuck_input inputs then stuck_inputs ()
+                       else if null (enum_values program inputs) then
                          dropped ()
                        else visit env genuine cont
                      end
@@ -413,12 +454,15 @@ structure Refute_EvalCompute :> Refute_EvalCompute = struct
           | Enum {rel, mode, ins, outs, cont, ...} =>
               let
                 val program = enum_program_for programs rel mode
+                val inputs = List.map (eval_rhs env) ins
               in
-                each (enum_values program (List.map (eval_rhs env) ins))
-                  (fn values =>
-                    case match_enum_terms env outs values of
-                        SOME extended => visit extended genuine cont
-                      | NONE => dropped ())
+                if List.exists stuck_input inputs then stuck_inputs ()
+                else
+                  each (enum_values program inputs)
+                    (fn values =>
+                      case match_enum_terms env outs values of
+                          SOME extended => visit extended genuine cont
+                        | NONE => dropped ())
               end
           (* [fallback] is the native substrate's recovery from a raised
              Stuck; computeLib has no such signal (see [eval_rhs]), so the

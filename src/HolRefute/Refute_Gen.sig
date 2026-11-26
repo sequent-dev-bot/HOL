@@ -40,6 +40,7 @@ signature Refute_Gen = sig
     unit
   val snapshot_family_canonicals : unit -> hol_type -> (term -> term) option
   val is_family_constructor : term -> bool
+  val is_family_type : hol_type -> bool
   val own_floor : genspec -> int
   val spec_of : hol_type -> genspec
   val type_recursive_under_function : hol_type -> bool

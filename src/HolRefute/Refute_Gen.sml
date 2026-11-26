@@ -475,6 +475,9 @@ structure Refute_Gen :> Refute_Gen = struct
       List.exists (fn c => Term.same_const c constant) (#constructors fam))
       (#families (registrations ()))
 
+  (* Whether a family is registered for the type, such as finite maps' *)
+  fun is_family_type ty = Option.isSome (family_for ty)
+
   fun own_floor (GenDatatype {min_size, ...}) =
         List.foldl Int.min 1073741823
           (List.map (fn row => List.foldl Int.max 0 row) min_size)

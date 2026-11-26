@@ -2453,6 +2453,34 @@ val _ = test "an inductive premise is enumerated at depth" (fn () =>
          | _ => false)
     end))
 
+(* A smart enumerator's input that is stuck drops its sample on both
+   substrates and the enumeration goes on to a later counterexample:
+   [xs = []] comes first, in an enumerator's input (a number's and a
+   finite map's) and in a smart Guard's. *)
+local
+  val _ = IndDefLib.Hol_reln
+    `rf_enum_succ (0 : num) (0 : num) /\
+     (!n m. rf_enum_succ n m ==> rf_enum_succ (SUC n) (SUC m))`
+  val _ = IndDefLib.Hol_reln
+    `!fm n. (FLOOKUP fm (0 : num) = SOME (n : num)) ==> rf_enum_lookup fm n`
+  (* [rf_enum_succ] has no equations to certify by, so the samples
+     decide: a counterexample from a sample that wasn't stuck is
+     Genuine *)
+  fun refuted_on substrate goal =
+    case refute (exhaustive |> upd_substrate substrate |> upd_timeout 30.0)
+                 goal of
+      Counterexample (c :: _) => is_genuine c
+    | _ => false
+in
+  val _ = test "a stuck enumerator input drops only its sample" (fn () =>
+    List.all (fn substrate =>
+        refuted_on substrate ``rf_enum_succ (HD xs) y ==> y < 1`` andalso
+        refuted_on substrate ``rf_enum_lookup (HD ms) y ==> y < 1`` andalso
+        with_compset [zoo_sg_linear_compute] (fn () =>
+          refuted_on substrate ``zoo_sg_linear (HD xs) ==> xs = []``))
+      [NativeSML, Compute])
+end
+
 val _ = test "smart_generators false reports the gate" (fn () =>
   let
     val (outcome, text) = capture 2 (fn () =>

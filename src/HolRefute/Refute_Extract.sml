@@ -4126,22 +4126,38 @@ structure Refute_Extract :> Refute_Extract = struct
           enum_name program
         end
 
+      (* A smart enumerator's inputs are evaluated before it is called.  A
+         stuck input ([Stuck] or [Match]) drops the sample through [failure]
+         and the enumeration goes on, as on compute, instead of escaping
+         [#run] and ending the search.
+         [safe_value] lets [HandOver] through.  [call] gets the names the
+         inputs are bound to. *)
+      fun with_inputs environment ins failure call =
+        let
+          val generated = map (generated_from environment) ins
+          val names = List.tabulate (length generated, fn index =>
+            "refute_input_" ^ integer index)
+        in
+          if null generated then call ""
+          else
+            safe_value (parens (join ", " generated)) failure ^
+            "let val " ^ parens (join ", " names) ^ " = refute_value\n" ^
+            "in " ^ call (join " " names ^ " ") ^ " end)"
+        end
+
       fun compile_smart_guard predicate version environment success failure =
         case cached_all_input predicate version of
             NONE => NONE
           | SOME (program, ins) =>
               let
-                val generated_inputs = map (generated_from environment) ins
                 val fuel = Int.max (0, #depth (#qc config))
-                val call = enum_name program ^ " " ^
-                  join " " (map parens generated_inputs) ^
-                  (if null generated_inputs then "" else " ") ^
-                  "(fn () => RefuteGuardSuccess) " ^ integer fuel ^
-                  " size complete"
+                fun call inputs = "case " ^ enum_name program ^ " " ^
+                  inputs ^ "(fn () => RefuteGuardSuccess) " ^
+                  integer fuel ^ " size complete of " ^
+                  "RefuteGuardSuccess => " ^ success ^ " | _ => " ^ failure
               in
-                SOME (parens ("complete := false; case " ^ call ^ " of " ^
-                  "RefuteGuardSuccess => " ^ success ^
-                  " | _ => " ^ failure))
+                SOME (parens ("complete := false; " ^
+                  with_inputs environment ins failure call))
               end
 
       fun compile_enum_program program =
@@ -4325,7 +4341,6 @@ structure Refute_Extract :> Refute_Extract = struct
             end
         | Enum {rel, mode, ins, outs, cont, ...} =>
             let
-              val generated_inputs = map (generated_from environment) ins
               val output_names = List.tabulate (length outs, fn index =>
                 "plan_smart_out_" ^ integer index)
               fun success extended =
@@ -4333,11 +4348,11 @@ structure Refute_Extract :> Refute_Extract = struct
               val callback = cps_lambda output_names
                 (match_generated outs output_names environment success bump)
               val fuel = Int.max (0, #depth (#qc config))
+              fun call inputs = enum_call_name rel mode ^ " " ^ inputs ^
+                callback ^ " " ^ integer fuel ^ " size complete"
             in
-              parens ("complete := false; " ^ enum_call_name rel mode ^ " " ^
-                join " " (map parens generated_inputs) ^
-                (if null generated_inputs then "" else " ") ^ callback ^
-                " " ^ integer fuel ^ " size complete")
+              parens ("complete := false; " ^
+                with_inputs environment ins bump call)
             end
 
       fun compile_random_plan current environment genuine state =
