@@ -138,6 +138,9 @@ signature Refute_Core = sig
   val bounded_rewrites : thm list
   (* The rewrites and the unwinding conversions together. *)
   val normal_conv : term -> thm
+  (* A quantifier heading a boolean case's branch lifted out in front of
+     the case, at any depth. *)
+  val lift_case_quantifiers_conv : term -> thm
   val has_bounded_quantifier : term -> bool
   val normalize : term -> term
   val has_unexpanded_binder : term -> bool

@@ -1997,6 +1997,30 @@ val _ = test "an exhausted narrowing search is Unknown" (fn () =>
   unknown_with "narrowing search exhausted"
     (refute (nar |> upd_size 2) ``?xs : bool list. LENGTH xs = 3``))
 
+(* A quantifier behind a connective in a case branch reaches narrowing's
+   prefix: prenexing brings it to the branch's head and lifts it out of
+   the case.  Before, it stayed in the branch, where narrowing gets stuck
+   on a choice.  The second goal's case comes from unwinding. *)
+local
+  val false_goals =
+    [``!xs. case oHD (xs : num list) of
+              NONE => T | SOME x => x < 3 ==> ?z. z < x``,
+     ``!f : bool -> num option.
+         (!b x. f b = SOME x ==> x < 3 ==> ?z. z < x) ==> f T = NONE``]
+  val true_goal =
+    ``!xs. case oHD (xs : num list) of
+             NONE => T | SOME x => x < 3 ==> ?z. x < z``
+in
+  val _ = test "narrowing refutes a quantifier behind a connective in a case"
+    (fn () =>
+      List.all (genuine_certified o
+                refute (nar |> upd_size 10 |> upd_sequential true))
+        false_goals andalso
+      refute (nar |> upd_size 5) true_goal ==
+        Unknown ["narrowing: narrowing search exhausted",
+                 "narrowing: searched up to size 5"])
+end
+
 val _ = test "true existential goals never yield Genuine" (fn () =>
   let
     fun sound size goal =

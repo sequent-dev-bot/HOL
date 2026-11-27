@@ -958,12 +958,18 @@ structure Refute_Narrow :> Refute_Narrow = struct
          out of a top-level val also keeps the net off the load path. *)
       val rewrite_conv = Ho_Rewrite.REWRITE_CONV prenex_rewrites
 
+      (* The rewrites reach under a case branch's lambda but not past the
+         case itself: a quantifier they bring to a boolean branch's head
+         is lifted out of the case, so a later round carries it on to the
+         prefix. *)
       fun step tm =
         let
           val beta = Conv.QCONV (Conv.DEPTH_CONV Thm.BETA_CONV) tm
           val rewrite = Conv.QCONV rewrite_conv (rhs_of beta)
+          val lift = Conv.QCONV Refute_Core.lift_case_quantifiers_conv
+                       (rhs_of rewrite)
         in
-          Thm.TRANS beta rewrite
+          Thm.TRANS (Thm.TRANS beta rewrite) lift
         end
 
       fun normalize tm accumulated =
