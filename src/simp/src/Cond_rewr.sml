@@ -44,6 +44,74 @@ in
       end
 end
 
+(* Scratch-only matcher accounting.  The normal path does no work here.  A
+   profile is enabled around one target proof by the measurement harness. *)
+local
+  type rule_stats = {name : string,
+                     attempts : int ref,
+                     repeated : int ref,
+                     terms : int Termtab.table ref}
+  val enabled = ref false
+  val total = ref 0
+  val repeated = ref 0
+  val rules : (string, rule_stats) Redblackmap.dict ref =
+    ref (Redblackmap.mkDict String.compare)
+
+  fun rule_name (nm, th) = nm ^ "|" ^ Parse.term_to_string (concl th)
+
+  fun record (nm, th, tm) =
+    if not (!enabled) then ()
+    else
+      let
+        val key = rule_name (nm, th)
+        val stats =
+          case Redblackmap.peek (!rules, key) of
+              SOME s => s
+            | NONE =>
+                let
+                  val s = {name = key, attempts = ref 0,
+                           repeated = ref 0, terms = ref Termtab.empty}
+                  val () = rules := Redblackmap.insert (!rules, key, s)
+                in s end
+        val seen = !(#terms stats)
+      in
+        total := !total + 1;
+        #attempts stats := !(#attempts stats) + 1;
+        case Termtab.lookup seen tm of
+            NONE => #terms stats := Termtab.update (tm, 1) seen
+          | SOME n =>
+              (repeated := !repeated + 1;
+               #repeated stats := !(#repeated stats) + 1;
+               #terms stats := Termtab.update (tm, n + 1) seen)
+      end
+
+  fun start () =
+    (enabled := true;
+     total := 0;
+     repeated := 0;
+     rules := Redblackmap.mkDict String.compare)
+
+  fun stop () =
+    let
+      val rows =
+        ("summary\t" ^ Int.toString (!total) ^ "\t" ^
+         Int.toString (!repeated)) ::
+        map (fn (_, s) =>
+          "rule\t" ^ #name s ^ "\t" ^
+          Int.toString (!(#attempts s)) ^ "\t" ^
+          Int.toString (!(#repeated s)) ^ "\t" ^
+          Int.toString (Termtab.size (!(#terms s))))
+          (Redblackmap.listItems (!rules))
+    in
+      enabled := false;
+      rows
+    end
+in
+  val match_profile_start = start
+  val match_profile_stop = stop
+  val note_match_attempt = record
+end
+
 (* -----------------------------------------------------------------------*
  * A total ordering on terms.  The behaviour of the simplifier depends    *
  * on this, so don't change it without thinking.                          *
@@ -176,7 +244,8 @@ fun ac_term_ord(tm1,tm2) =
                          "bad theorem argument (not a conditional equation)")
       in
       fn solver => fn stack => fn tm =>
-       (let val conditional_eqn = instth tm
+       (let val _ = note_match_attempt (nm, th, tm)
+            val conditional_eqn = instth tm
             val (conditions,eqn) = strip_imp (concl conditional_eqn)
             val _ = if exists (C (op_mem aconv) stack) conditions
                         then (trace(1, TEXT "looping - cut");

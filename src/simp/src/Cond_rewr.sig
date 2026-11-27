@@ -47,4 +47,8 @@ sig
   (* run something, and report which rewrites fired while it ran *)
   val with_tracking : ('a -> 'b) -> 'a -> 'b * thm list
 
+  (* scratch measurement of matcher inputs, disabled by default *)
+  val match_profile_start : unit -> unit
+  val match_profile_stop : unit -> string list
+
 end
