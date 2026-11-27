@@ -961,11 +961,11 @@ structure Refute_Core :> Refute_Core = struct
        !xs. ~(e = C xs /\ P)        becomes  case e of C xs => ~P | _ => T
 
      where [xs] are distinct binders of the prefix and [e] mentions none
-     of them; binders outside [xs] are quantified outside the case, so
-     the prefix stays prenex.  A binder that another conjunct fixes by a
-     plain equation is not split on: [UNWIND_ss] substitutes it, in all
-     three shapes; one that a second constructor equation fixes stays
-     quantified.  A pair
+     of them; binders outside [xs] are quantified in the branch, where a
+     later step (a plain equation, a second constructor equation, a pair,
+     a nested pattern's test) may unwind them, and [unwind_conv]'s last
+     pass lifts any left at the head of the branch out of the case, so
+     the prefix stays prenex.  A pair
      equation whose binder sits inside a component, [?a. p = (a, f b)],
      has no constructor match; it is split into [FST p = a /\ SND p = f b]
      for [UNWIND_ss] to substitute.  Each rewrite is proved by a case
@@ -1049,13 +1049,6 @@ structure Refute_Core :> Refute_Core = struct
             in
               splits (left, right) orelse splits (right, left)
             end
-    fun fixes binders conj =
-      case Lib.total boolSyntax.dest_eq conj of
-          NONE => false
-        | SOME (left, right) =>
-            (is_binder binders left andalso not (Term.free_in left right))
-            orelse
-            (is_binder binders right andalso not (Term.free_in right left))
     fun split_at index others =
       (List.nth (others, index),
        List.take (others, index) @ List.drop (others, index + 1))
@@ -1309,54 +1302,27 @@ structure Refute_Core :> Refute_Core = struct
                     Option.map (fn found => (index, found))
                       (constructor_equation avoid binders conj))
                   (Lib.enumerate 0 conjuncts)
-              (* a flat match first: it unwinds without tests.  A nested
-                 match is taken only when every binder is in some
-                 constructor equation's pattern: one that none fixes
-                 would stay quantified around the case. *)
+              (* a flat match first: it unwinds without tests *)
               val (flat, nested) =
                 List.partition (fn (_, (_, _, _, tests)) => null tests) found
-              fun matched b =
-                List.exists (fn (_, (_, _, variables, tests)) =>
-                    is_binder variables b orelse
-                    List.exists (Term.free_in b) tests)
-                  found
-              val candidates =
-                flat @ (if List.all matched binders then nested else [])
             in
-              case candidates of
+              case flat @ nested of
                  (index, (e, constructor, variables, tests)) :: _ =>
                    let
                      val (equation, rest) = split_at index conjuncts
                      val others =
                        List.filter (not o is_binder variables) binders
-                     (* a flat match's other binders stay outside the
-                        case, so one-point unwinding takes them first *)
-                     val _ = if null tests andalso
-                                List.exists (fixes others) rest
-                             then raise Conv.UNCHANGED else ()
-                     (* a nested match's other binders are each fixed by
-                        a test or another equation of the branch, so they
-                        are quantified in the branch, where those unwind
-                        them; outside the case they would stay *)
-                     val (inner, outer) =
-                       if null tests then ([], others) else (others, [])
                      fun make body =
-                       let
-                         val target =
-                           case_term e (constructor, variables)
-                             (if null inner then body
-                              else requantify (inner, body))
-                             default
-                       in
-                         (* outside the case, so the prefix stays prenex *)
-                         if null outer then target
-                         else requantify (outer, target)
-                       end
+                       case_term e (constructor, variables)
+                         (if null others then body
+                          else requantify (others, body))
+                         default
                      val branch = assemble rest
                      val tested = assemble (tests @ rest)
                    in
                      prove_case (boolSyntax.is_exists tm) binders equation
-                       rest branch tests inner tested make e tm (make tested)
+                       rest branch tests others tested make e tm
+                       (make tested)
                    end
                | [] =>
                    if List.exists (pair_split_equation binders) conjuncts
@@ -1385,11 +1351,102 @@ structure Refute_Core :> Refute_Core = struct
          rewrs = [], filter = NONE, ac = [], dprocs = [], congs = []}
   end
 
+  (* A binder the unwinding leaves quantified at the head of a case
+     branch is lifted out of the case, so the prefix stays prenex for
+     narrowing, which turns a quantifier under a case into a choice:
+
+       case e of C xs => ?y. P xs y | D => Q
+         becomes  ?y. case e of C xs => P xs y | D => Q
+
+     since the other branches don't mention [y] and HOL types are
+     nonempty; [!] alike.  Bottom-up, so the lifted quantifier reaches an
+     enclosing case's branch head and is lifted from there too.  Each
+     lift is proved by a case split on [e] of a schema with the branches
+     as variables; a lift that fails leaves the case as it is. *)
+  local
+    (* a case constant applied to its scrutinee and one branch per
+       constructor, no more *)
+    fun case_parts tm =
+      let
+        val (constant, arguments) = boolSyntax.strip_comb tm
+      in
+        if Term.type_of tm = Type.bool andalso Term.is_const constant andalso
+           not (null arguments) andalso
+           (case Option.mapPartial (Lib.total TypeBasePure.case_const_of)
+                   (Refute_TypeBase.fetch (Term.type_of (hd arguments))) of
+              SOME case_const =>
+                Term.same_const constant case_const andalso
+                length arguments =
+                  length (#1 (boolSyntax.strip_fun
+                                (Term.type_of case_const)))
+            | NONE => false)
+        then SOME (constant, hd arguments, tl arguments)
+        else NONE
+      end
+    fun leading_quantifier branch =
+      let val body = #2 (boolSyntax.strip_abs branch)
+      in boolSyntax.is_exists body orelse boolSyntax.is_forall body end
+    (* lift the quantifier heading branch [index] *)
+    fun lift_at (constant, e, branches) tm index =
+      let
+        val (xs, body) = boolSyntax.strip_abs (List.nth (branches, index))
+        val (quantify, (y, _)) =
+          if boolSyntax.is_exists body
+          then (boolSyntax.mk_exists, boolSyntax.dest_exists body)
+          else (boolSyntax.mk_forall, boolSyntax.dest_forall body)
+        (* apart from the branch's own variables, which [y] may shadow *)
+        val y = Term.variant xs y
+        val ty = Term.type_of e
+        val e' = Term.genvar ty
+        val branches' = map (Term.genvar o Term.type_of) branches
+        val P = Term.genvar
+          (boolSyntax.list_mk_fun
+             (map Term.type_of xs @ [Term.type_of y], Type.bool))
+        val applied = Term.list_mk_comb (P, xs @ [y])
+        fun case_with branch =
+          Term.list_mk_comb (constant, e' ::
+            Lib.mapi (fn i => fn b => if i = index then branch else b)
+              branches')
+        val schema =
+          Tactical.prove
+            (boolSyntax.mk_eq
+               (case_with (Term.list_mk_abs (xs, quantify (y, applied))),
+                quantify (y, case_with (Term.list_mk_abs (xs, applied)))),
+             Tactical.THEN
+               (Tactic.STRUCT_CASES_TAC
+                  (Drule.ISPEC e' (Refute_TypeBase.nchotomy_of ty)),
+                simpLib.SIMP_TAC
+                  (simpLib.++ (boolSimps.bool_ss, simpLib.type_ssfrag ty))
+                  []))
+      in
+        Conv.HO_REWR_CONV schema tm
+      end
+    (* the first quantified branch whose lift succeeds *)
+    fun lift tm =
+      case case_parts tm of
+          NONE => raise Conv.UNCHANGED
+        | SOME (parts as (_, _, branches)) =>
+            Lib.tryfind (lift_at parts tm)
+              (List.filter
+                 (fn i => leading_quantifier (List.nth (branches, i)))
+                 (List.tabulate (length branches, Lib.I)))
+            handle Feedback.HOL_ERR _ => raise Conv.UNCHANGED
+    (* after a lift the case sits under the new binder, where the next
+       branch's quantifier (or the next binder of [?y z. P]) is lifted *)
+    fun lift_top tm =
+      Conv.TRY_CONV (Conv.THENC (lift, Conv.BINDER_CONV lift_top)) tm
+    fun lift_conv tm = Conv.THENC (Conv.SUB_CONV lift_conv, lift_top) tm
+  in
+    val lift_case_quantifiers_conv = lift_conv
+  end
+
   val unwind_conv =
-    simpLib.SIMP_CONV
-      (simpLib.++ (simpLib.++ (pureSimps.pure_ss, boolSimps.UNWIND_ss),
-                   constructor_unwind_ss))
-      [pairTheory.PAIR_EQ, optionTheory.SOME_11]
+    Conv.THENC
+      (simpLib.SIMP_CONV
+         (simpLib.++ (simpLib.++ (pureSimps.pure_ss, boolSimps.UNWIND_ss),
+                      constructor_unwind_ss))
+         [pairTheory.PAIR_EQ, optionTheory.SOME_11],
+       lift_case_quantifiers_conv)
 
   fun has_unexpanded_binder tm =
     if boolSyntax.is_forall tm orelse boolSyntax.is_exists tm orelse

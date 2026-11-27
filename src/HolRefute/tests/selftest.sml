@@ -1694,7 +1694,8 @@ local
      ``!x : num. ?a. (if x = 0 then RFTri 0 1 2 else RFTri x x x) =
                      RFTri a a a``,
      ``!x : num. ?b a. (if x = 0 then INR T else INL (x + 1, x)) =
-                       INL (a, b) /\ a = b + 1``]
+                       INL (a, b) /\ a = b + 1``,
+     ``?a b. (e : num option list) = [SOME a; SOME b] /\ a < 3``]
   fun cfg backend = qc |> upd_timeout 60.0 |> upd_sequential true
     |> upd_seed (SOME 42) |> only [backend]
 in
@@ -1715,6 +1716,108 @@ in
         not_refuted outcome andalso
         not (unknown_with "not executable" outcome)
       end)
+end
+
+(* A binder the unwinding leaves at the head of a case branch is lifted
+   out of the case, so the prefix stays prenex for narrowing, which
+   would unfold it to a choice; what the unwinding removes inside the
+   branch (a plain equation, a second constructor equation, a pair, a
+   nested pattern's test) is still removed there.  Before, a flat
+   match's leftover binders went outside the case, where a second
+   constructor equation on them was left unwound, and a nested match
+   with a leftover binder wasn't taken. *)
+local
+  fun has_quantifier tm =
+    is_forall tm orelse is_exists tm orelse
+    (is_abs tm andalso has_quantifier (body tm)) orelse
+    (is_comb tm andalso
+     (has_quantifier (rator tm) orelse has_quantifier (rand tm)))
+  fun quantifier_under_case tm =
+    if TypeBase.is_case tm then
+      List.exists (fn (_, branch) => has_quantifier branch orelse
+                                     quantifier_under_case branch)
+        (#2 (TypeBase.strip_case tm))
+    else if is_abs tm then quantifier_under_case (body tm)
+    else if is_comb tm then
+      quantifier_under_case (rator tm) orelse quantifier_under_case (rand tm)
+    else false
+  fun normal tm = rhs (concl (Refute_Core.normal_conv tm))
+  val goals =
+    [(* flat, a leftover binder, in each shape and either orientation *)
+     ``?w z zs. xs = z :: zs /\ f w = (y : num) /\
+                MAP (f : num -> num) zs = ys``,
+     ``c \/ !w z zs. xs = z :: zs /\ f w = (y : num) ==>
+                     MAP (f : num -> num) zs = ys``,
+     ``c \/ !z zs w. ~(xs = z :: zs /\ f w = (y : num) /\
+                       MAP (f : num -> num) zs = ys)``,
+     ``?w z zs. z :: zs = xs /\ f w = (y : num) /\
+                MAP (f : num -> num) zs = ys``,
+     (* two leftover binders *)
+     ``?v w z zs. xs = z :: zs /\ f v w = (y : num) /\
+                  MAP (g : num -> num) zs = ys``,
+     (* the goal's own quantifiers heading two branches *)
+     ``case (xs : num list) of [] => (?a. P a) | h :: t => ?b. Q b h``,
+     ``if c then (case (x : num option) of NONE => F | SOME w => P w)
+       else ?s (t : num). R (s : num) t``,
+     (* a binder shadowing the branch's own variable *)
+     ``case (xs : num list) of [] => F | h :: t => ?h. P h t``,
+     (* a second constructor equation fixes h2 t2, k is left *)
+     ``?h1 h2 t1 t2 k. (a0 : num list) = h1 :: t1 /\
+                       (a1 : num list) = h2 :: t2 /\ R h1 h2 k /\
+                       LIST_REL (R k) t1 t2``,
+     (* a second constructor equation mentions w without fixing it *)
+     ``?h1 t1 w. (a0 : num list) = h1 :: t1 /\
+                 (a1 : num option) = SOME (f w) /\ g w h1``,
+     (* a pair equation, and a plain one, unwind w in the branch *)
+     ``?h t w. (a0 : num list) = h :: t /\ (p : num # num) = (w, 3) /\
+               g w h``,
+     ``?w z zs. xs = z :: zs /\ w = z + 1 /\ f w = (y : num) /\
+                MAP (f : num -> num) zs = ys``,
+     (* overlapping later patterns *)
+     ``?h t n b d. (xs : num list) = h :: t /\ (u : ubox) = UBox n b /\
+                   (v : ubox) = UBox n d /\ P h t n b d``,
+     ``?h t a b. (xs : num list) = h :: t /\ (u : ubox) = UBox a b /\
+                 (v : ubox) = UBox a (Q a) /\ P h t a b``,
+     (* nested patterns: a leftover binder *)
+     ``?w y. (e : (num # num list) + bool) = INL (y, []) /\
+             R (w : num) (y : num)``,
+     ``c \/ !w y. ~((e : (num # num list) + bool) = INL (y, []) /\
+                    R (w : num) (y : num))``,
+     ``?w y. INL (y, []) = (e : (num # num list) + bool) /\
+             R (w : num) (y : num)``,
+     (* a plain equation between two binders of a nested pattern *)
+     ``?h x y z. (a : num list) = [h; x; y] /\
+                 (g : num -> num option) h = SOME z /\
+                 x = (f : num -> num) y /\ R h y (z : num)``]
+in
+  val _ = test "no quantifier is left under a case" (fn () =>
+    List.all (fn goal =>
+        let val result = normal goal
+        in
+          can (find_term TypeBase.is_case) result andalso
+          not (quantifier_under_case result)
+        end) goals)
+
+  val _ = test "a second constructor equation unwinds beside the first"
+    (fn () =>
+      let
+        val a1 = mk_var ("a1", ``:num list``)
+        fun equation_on_a1 t =
+          is_eq t andalso (aconv (lhs t) a1 orelse aconv (rhs t) a1)
+        fun case_on_a1 t =
+          TypeBase.is_case t andalso aconv (#1 (TypeBase.strip_case t)) a1
+        val result = normal (List.nth (goals, 8))
+      in
+        not (can (find_term equation_on_a1) result) andalso
+        can (find_term case_on_a1) result
+      end)
+
+  val _ = test "narrowing refutes a goal with a binder the equation leaves"
+    (fn () =>
+      genuine_certified (refute (narrowing |> upd_sequential true)
+        ``(MAP (f : num -> num) xs = y :: ys) =
+          (?w z zs. xs = z :: zs /\ f w = y /\ MAP f zs = ys /\
+                    z = (z' : num))``))
 end
 
 (* ------------------------------------------------------------------- *)
