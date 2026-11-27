@@ -1362,7 +1362,11 @@ structure Refute_Core :> Refute_Core = struct
      nonempty; [!] alike.  Bottom-up, so the lifted quantifier reaches an
      enclosing case's branch head and is lifted from there too.  Each
      lift is proved by a case split on [e] of a schema with the branches
-     as variables; a lift that fails leaves the case as it is. *)
+     as variables; a lift that fails leaves the case as it is.
+
+     A case over literals, [literal_case (\v. ?y. P v y) e], has one
+     branch: it becomes [?y. literal_case (\v. P v y) e], proved from
+     [literal_case]'s definition. *)
   local
     (* a case constant applied to its scrutinee and one branch per
        constructor, no more *)
@@ -1421,10 +1425,44 @@ structure Refute_Core :> Refute_Core = struct
       in
         Conv.HO_REWR_CONV schema tm
       end
+    (* lift [Q y] out of [literal_case (\v. Q y. P v y) e] *)
+    fun lift_literal tm =
+      let
+        val (f, e) = boolSyntax.dest_literal_case tm
+        val (v, body) = Term.dest_abs f
+        val (quantify, (y, _)) =
+          if boolSyntax.is_exists body
+          then (boolSyntax.mk_exists, boolSyntax.dest_exists body)
+          else (boolSyntax.mk_forall, boolSyntax.dest_forall body)
+        val y = Term.variant [v] y
+        val e' = Term.genvar (Term.type_of e)
+        val P = Term.genvar
+          (boolSyntax.list_mk_fun ([Term.type_of v, Term.type_of y],
+                                  Type.bool))
+        val applied = Term.list_mk_comb (P, [v, y])
+        fun case_with body =
+          boolSyntax.mk_literal_case (Term.mk_abs (v, body), e')
+        (* both sides unfold [literal_case] to [Q y. P e y] *)
+        val unfold =
+          Conv.THENC (Conv.REWR_CONV boolTheory.literal_case_THM,
+                      Thm.BETA_CONV)
+        val schema =
+          Thm.TRANS (unfold (case_with (quantify (y, applied))))
+            (Thm.SYM (Conv.QUANT_CONV unfold
+                        (quantify (y, case_with applied))))
+      in
+        Conv.HO_REWR_CONV schema tm
+      end
     (* the first quantified branch whose lift succeeds *)
     fun lift tm =
       case case_parts tm of
-          NONE => raise Conv.UNCHANGED
+          NONE =>
+            if boolSyntax.is_literal_case tm andalso
+               Term.type_of tm = Type.bool andalso
+               leading_quantifier (#1 (boolSyntax.dest_literal_case tm))
+            then lift_literal tm
+                 handle Feedback.HOL_ERR _ => raise Conv.UNCHANGED
+            else raise Conv.UNCHANGED
         | SOME (parts as (_, _, branches)) =>
             Lib.tryfind (lift_at parts tm)
               (List.filter

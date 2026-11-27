@@ -2021,6 +2021,23 @@ in
                  "narrowing: searched up to size 5"])
 end
 
+(* A case over literals normalizes to one [literal_case] over a lambda,
+   and its quantifier is lifted out of it the same way. *)
+local
+  val false_goal =
+    ``!n : num. case n of 0 => T | 1 => (n < 3 ==> ?z. z + n < 1) | _ => T``
+  val true_goal =
+    ``!n : num. case n of 0 => T | 1 => (n < 3 ==> ?z. n < z) | _ => T``
+in
+  val _ = test "narrowing refutes a quantifier in a literal case" (fn () =>
+    genuine_certified
+      (refute (nar |> upd_size 10 |> upd_sequential true) false_goal)
+    andalso
+    refute (nar |> upd_size 5) true_goal ==
+      Unknown ["narrowing: narrowing search exhausted",
+               "narrowing: searched up to size 5"])
+end
+
 val _ = test "true existential goals never yield Genuine" (fn () =>
   let
     fun sound size goal =
