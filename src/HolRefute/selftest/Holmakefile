@@ -16,7 +16,8 @@ CLINE_OPTIONS = -r
 
 INCLUDES = ../tests \
            ../loading_tests/core ../loading_tests/rat \
-           ../loading_tests/real ../loading_tests/persistence
+           ../loading_tests/real ../loading_tests/persistence \
+           ../loading_tests/no_theory
 
 # theory_tests needs a fresh user theory per check, and runs at level 2
 # only.  Each directory below decides for itself what the level means;

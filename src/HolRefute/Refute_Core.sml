@@ -2770,11 +2770,43 @@ structure Refute_Core :> Refute_Core = struct
        ", got " ^ actual_name result ^ "\n" ^
        format_outcome cfg result)
 
+  (* TAC_PROOF refuses every proof while no theory is current (a bare
+     [hol run] script sets none), unless the trace
+     [Tactics.TAC_PROOF-requires-CT] is off.  The case lifts, the
+     unwinding and the certificates are tactic proofs whose failure is
+     caught, so in that case those steps are silently left undone.  A
+     call says so instead: in its output, and among an Unknown result's
+     reasons.  Nothing is refused. *)
+  val no_current_theory_reason =
+    "no current theory, so HOL refuses Refute's proofs (case lifts, \
+    \unwinding, certificates); set one first (new_theory)"
+
   fun refute_problem_unquiet (cfg : config) (problem : problem) =
     let
       val search_context = make_search_context (#timeout cfg)
+      val theory_missing =
+        let val context = Refute_Session.context ()
+        in
+          not (Option.isSome (Context.current_thy context)) andalso
+          HOLFlags.gen_get_trace_C context
+            {group = "Tactics", name = "TAC_PROOF-requires-CT"} <> 0
+        end
+      val _ =
+        if theory_missing then
+          Private.say 1 ("Refute: " ^ no_current_theory_reason ^ "\n")
+        else ()
       fun finish result =
-        (report_outcome cfg result; check_expect cfg result; result)
+        let
+          val result =
+            case result of
+                Unknown reasons =>
+                  if theory_missing then
+                    Unknown (add_reason (no_current_theory_reason, reasons))
+                  else result
+              | _ => result
+        in
+          report_outcome cfg result; check_expect cfg result; result
+        end
       fun execute () =
         let
           val (candidates, unknown) =
