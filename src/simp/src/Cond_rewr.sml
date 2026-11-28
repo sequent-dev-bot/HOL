@@ -47,58 +47,108 @@ end
 (* Scratch-only matcher accounting.  The normal path does no work here.  A
    profile is enabled around one target proof by the measurement harness. *)
 local
-  type rule_stats = {name : string,
-                     attempts : int ref,
-                     repeated : int ref,
-                     terms : int Termtab.table ref}
+  val table_size = 1048576
+  val table_mask = Word64.fromInt (table_size - 1)
+  val next_rule_id = ref 0
+  val rule_names : (int, string) Redblackmap.dict ref =
+    ref (Redblackmap.mkDict Int.compare)
   val enabled = ref false
   val total = ref 0
   val repeated = ref 0
-  val rules : (string, rule_stats) Redblackmap.dict ref =
-    ref (Redblackmap.mkDict String.compare)
+  val distinct = ref 0
+  val overflow = ref 0
+  val keys : Word64.word array ref = ref (Array.array (table_size, 0w0))
+  val counts : int array ref = ref (Array.array (table_size, 0))
+  val attempts : int array ref = ref (Array.array (1024, 0))
+  val repeats : int array ref = ref (Array.array (1024, 0))
 
-  fun record (key, tm) =
+  fun mix (a, b) =
+    Word64.+ (Word64.* (Word64.xorb (a, Word64.>> (a, 0w30)),
+                        0wx9E3779B185EBCA87), b)
+
+  fun str_hash s =
+    CharVector.foldl (fn (c, h) => mix (h, Word64.fromInt (Char.ord c)))
+                     (0w0 : Word64.word) s
+
+  fun term_hash tm =
+    if is_var tm then
+      let val (name, _) = dest_var tm
+      in mix (0wx01, str_hash name) end
+    else if is_const tm then
+      let val {Name, Thy, ...} = dest_thy_const tm
+      in mix (str_hash Thy, str_hash Name) end
+    else if is_comb tm then
+      mix (term_hash (rator tm), term_hash (rand tm))
+    else if is_abs tm then
+      let val (bv, body) = dest_abs tm
+      in mix (mix (0wx02, term_hash bv), term_hash body) end
+    else 0w0
+
+  fun register_rule key =
+    let
+      val id = !next_rule_id
+      val () = next_rule_id := id + 1
+      val () = rule_names := Redblackmap.insert (!rule_names, id, key)
+    in id end
+
+  fun bump arr id =
+    if id < Array.length (!arr) then
+      Array.update (!arr, id, Array.sub (!arr, id) + 1)
+    else ()
+
+  fun record (id, tm) =
     if not (!enabled) then ()
     else
       let
-        val stats =
-          case Redblackmap.peek (!rules, key) of
-              SOME s => s
-            | NONE =>
-                let
-                  val s = {name = key, attempts = ref 0,
-                           repeated = ref 0, terms = ref Termtab.empty}
-                  val () = rules := Redblackmap.insert (!rules, key, s)
-                in s end
-        val seen = !(#terms stats)
+        val hash = term_hash tm
+        val key =
+          let val k = Word64.xorb (hash, Word64.fromInt (id + 1))
+          in if k = 0w0 then 0w1 else k end
+        val start = Word64.toInt (Word64.andb (key, table_mask))
+        fun search i probes =
+          if probes = table_size then overflow := !overflow + 1
+          else
+            let val old = Array.sub (!keys, i)
+            in
+              if old = 0w0 then
+                (Array.update (!keys, i, key);
+                 Array.update (!counts, i, 1);
+                 distinct := !distinct + 1)
+              else if old = key then
+                (repeated := !repeated + 1;
+                 Array.update (!counts, i, Array.sub (!counts, i) + 1);
+                 bump repeats id)
+              else search ((i + 1) mod table_size) (probes + 1)
+            end
       in
         total := !total + 1;
-        #attempts stats := !(#attempts stats) + 1;
-        case Termtab.lookup seen tm of
-            NONE => #terms stats := Termtab.update (tm, 1) seen
-          | SOME n =>
-              (repeated := !repeated + 1;
-               #repeated stats := !(#repeated stats) + 1;
-               #terms stats := Termtab.update (tm, n + 1) seen)
+        bump attempts id;
+        search start 0
       end
 
   fun start () =
     (enabled := true;
      total := 0;
      repeated := 0;
-     rules := Redblackmap.mkDict String.compare)
+     distinct := 0;
+     overflow := 0;
+     keys := Array.array (table_size, 0w0);
+     counts := Array.array (table_size, 0);
+     attempts := Array.array (Int.max (1024, !next_rule_id + 1), 0);
+     repeats := Array.array (Int.max (1024, !next_rule_id + 1), 0))
 
   fun stop () =
     let
       val rows =
         ("summary\t" ^ Int.toString (!total) ^ "\t" ^
-         Int.toString (!repeated)) ::
-        map (fn (_, s) =>
-          "rule\t" ^ #name s ^ "\t" ^
-          Int.toString (!(#attempts s)) ^ "\t" ^
-          Int.toString (!(#repeated s)) ^ "\t" ^
-          Int.toString (Termtab.size (!(#terms s))))
-          (Redblackmap.listItems (!rules))
+         Int.toString (!repeated) ^ "\t" ^
+         Int.toString (!distinct) ^ "\t" ^
+         Int.toString (!overflow)) ::
+        map (fn (id, name) =>
+          "rule\t" ^ name ^ "\t" ^
+          Int.toString (Array.sub (!attempts, id)) ^ "\t" ^
+          Int.toString (Array.sub (!repeats, id)))
+          (Redblackmap.listItems (!rule_names))
     in
       enabled := false;
       rows
@@ -107,6 +157,7 @@ in
   val match_profile_start = start
   val match_profile_stop = stop
   val note_match_attempt = record
+  val new_match_rule = register_rule
 end
 
 (* -----------------------------------------------------------------------*
@@ -237,12 +288,13 @@ fun ac_term_ord(tm1,tm2) =
       let val eqn = snd (strip_imp (concl th))
           val isperm = is_var_perm (dest_eq eqn)
           val match_rule = nm ^ "|" ^ Parse.term_to_string (concl th)
+          val match_rule_id = new_match_rule match_rule
           val instth = HO_PART_MATCH (lhs o snd o strip_imp) th
                        handle HOL_ERR _ => ERR("COND_REWR_CONV",
                          "bad theorem argument (not a conditional equation)")
       in
       fn solver => fn stack => fn tm =>
-       (let val _ = note_match_attempt (match_rule, tm)
+       (let val _ = note_match_attempt (match_rule_id, tm)
             val conditional_eqn = instth tm
             val (conditions,eqn) = strip_imp (concl conditional_eqn)
             val _ = if exists (C (op_mem aconv) stack) conditions
