@@ -57,13 +57,10 @@ local
   val rules : (string, rule_stats) Redblackmap.dict ref =
     ref (Redblackmap.mkDict String.compare)
 
-  fun rule_name (nm, th) = nm ^ "|" ^ Parse.term_to_string (concl th)
-
-  fun record (nm, th, tm) =
+  fun record (key, tm) =
     if not (!enabled) then ()
     else
       let
-        val key = rule_name (nm, th)
         val stats =
           case Redblackmap.peek (!rules, key) of
               SOME s => s
@@ -239,12 +236,13 @@ fun ac_term_ord(tm1,tm2) =
    fun COND_REWR_CONV (nm,th) bounded =
       let val eqn = snd (strip_imp (concl th))
           val isperm = is_var_perm (dest_eq eqn)
+          val match_rule = nm ^ "|" ^ Parse.term_to_string (concl th)
           val instth = HO_PART_MATCH (lhs o snd o strip_imp) th
                        handle HOL_ERR _ => ERR("COND_REWR_CONV",
                          "bad theorem argument (not a conditional equation)")
       in
       fn solver => fn stack => fn tm =>
-       (let val _ = note_match_attempt (nm, th, tm)
+       (let val _ = note_match_attempt (match_rule, tm)
             val conditional_eqn = instth tm
             val (conditions,eqn) = strip_imp (concl conditional_eqn)
             val _ = if exists (C (op_mem aconv) stack) conditions
